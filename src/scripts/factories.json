@@ -1,0 +1,12 @@
+[
+  { "code": "50027994", "factoryName": "MP BIRLA", "group": "ADB", "isActive": true },
+  { "code": "1250215023", "factoryName": "DALMIA", "group": "ADB", "isActive": true },
+  { "code": "916003710", "factoryName": "ACC MARATHA", "group": "ADB", "isActive": true },
+  { "code": "916003710", "factoryName": "ACC CHANDA", "group": "ADB", "isActive": true },
+  { "code": "2309775", "factoryName": "MANIGARH", "group": "ADB", "isActive": true },
+  { "code": "2307082", "factoryName": "ULTRATECH", "group": "ADB", "isActive": true },
+  { "code": "5000462", "factoryName": "ORIENT", "group": "ADB", "isActive": true },
+  { "code": "705078", "factoryName": "LATRAITE", "group": "ADB", "isActive": true },
+  { "code": "20061801", "factoryName": "JSW", "group": "ADB", "isActive": true },
+  { "code": "2310278", "factoryName": "PARLI-T", "group": null, "isActive": true }
+]
