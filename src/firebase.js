@@ -1,8 +1,12 @@
-import { initializeApp } from "firebase/app";
-import { getAnalytics } from "firebase/analytics";
-import { getAuth, GoogleAuthProvider } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+// src/firebase.js
 
+// Import the functions you need from the SDKs you need
+import { initializeApp } from "firebase/app";
+import { getFirestore } from "firebase/firestore";
+import { getAuth } from "firebase/auth";
+import { getAnalytics } from "firebase/analytics";
+
+// Your web app's Firebase configuration
 const firebaseConfig = {
   apiKey: "AIzaSyAd1bazB0rvrEhQwXWa-xUOkqLaCFZEjME",
   authDomain: "transport-app-c4674.firebaseapp.com",
@@ -13,15 +17,10 @@ const firebaseConfig = {
   measurementId: "G-2KW1848NFH"
 };
 
+// Initialize Firebase
 const app = initializeApp(firebaseConfig);
+export const analytics = getAnalytics(app);
 
-let analytics;
-if (typeof window !== "undefined") {
-  analytics = getAnalytics(app);
-}
-
-const auth = getAuth(app);
-const googleProvider = new GoogleAuthProvider();
-const db = getFirestore(app);
-
-export { app, auth, googleProvider, db };
+// Export Firestore and Auth for use in your React app
+export const db = getFirestore(app);
+export const auth = getAuth(app);

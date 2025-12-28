@@ -1,42 +1,43 @@
-import React, { useEffect, useState } from "react";
-import { Routes, Route, BrowserRouter, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { onAuthStateChanged } from "firebase/auth";
+
+import { auth } from "./firebaseConfig";
 import Login from "./Login";
 import Home from "./Home";
 import FactoryList from "./pages/FactoryList";
-import { auth } from "./firebaseConfig";
-import { onAuthStateChanged } from "firebase/auth";
 
-const App = () => {
+export default function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    const unsub = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
       setLoading(false);
     });
-    return () => unsubscribe();
+    return () => unsub();
   }, []);
 
   if (loading) {
-    return (
-      <div style={{ textAlign: "center", marginTop: "50px" }}>
-        <p>Loading...</p>
-      </div>
-    );
+    return <p style={{ padding: 20 }}>Loading...</p>;
   }
 
   return (
     <BrowserRouter>
       <Routes>
-        {/* Public route */}
-        <Route path="/login" element={!user ? <Login /> : <Navigate to="/" />} />
+        {/* Public */}
+        <Route
+          path="/login"
+          element={!user ? <Login /> : <Navigate to="/" />}
+        />
 
-        {/* Private routes */}
+        {/* Private */}
         <Route
           path="/"
           element={user ? <Home user={user} /> : <Navigate to="/login" />}
         />
+
         <Route
           path="/factories"
           element={user ? <FactoryList /> : <Navigate to="/login" />}
@@ -44,6 +45,4 @@ const App = () => {
       </Routes>
     </BrowserRouter>
   );
-};
-
-export default App;
+}
