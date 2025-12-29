@@ -3,22 +3,47 @@ import React, { useEffect, useState } from "react";
 import { db } from "../firebaseConfig";
 import { collection, getDocs, deleteDoc, doc, updateDoc } from "firebase/firestore";
 
+const factoryMap = {
+  "10": "JSW",
+  "6": "Manigar",
+  "7": "Ultratech"
+};
+
 const ShowDispatch = () => {
   const [dispatches, setDispatches] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [editId, setEditId] = useState(null);
-  const [editData, setEditData] = useState({ ChallanNo: "", Destination: "", DispatchQuantity: "" });
+  const [editData, setEditData] = useState({
+    ChallanNo: "",
+    Destination: "",
+    DispatchQuantity: "",
+    VehicleNo: ""
+  });
   const [selectedIds, setSelectedIds] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
+  const [filterFactory, setFilterFactory] = useState("");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
   const recordsPerPage = 10;
 
-  // Fetch dispatch data
+  // Fetch and normalize dispatch data
   const fetchDispatches = async () => {
     try {
       const snapshot = await getDocs(collection(db, "TblDispatch"));
       const data = snapshot.docs.map(docSnap => {
         const row = { id: docSnap.id, ...docSnap.data() };
-        if (row.DispatchDate) row.DispatchDate = new Date(row.DispatchDate.seconds ? row.DispatchDate.seconds * 1000 : row.DispatchDate);
+
+        // Normalize DisVid as string for reliable filtering
+        row.DisVid = String(row.DisVid || "").trim();
+
+        // Normalize date
+        if (row.DispatchDate) {
+          row.DispatchDate = new Date(
+            row.DispatchDate.seconds ? row.DispatchDate.seconds * 1000 : row.DispatchDate
+          );
+        }
+
+        row.FactoryName = factoryMap[row.DisVid] || row.FactoryName || "";
         return row;
       });
       setDispatches(data);
@@ -31,7 +56,7 @@ const ShowDispatch = () => {
     fetchDispatches();
   }, []);
 
-  // Delete a dispatch
+  // Delete single record
   const handleDelete = async (id) => {
     if (!window.confirm("Are you sure you want to delete this record?")) return;
     try {
@@ -43,7 +68,7 @@ const ShowDispatch = () => {
     }
   };
 
-  // Delete multiple
+  // Delete selected records
   const handleDeleteSelected = async () => {
     if (!selectedIds.length) return alert("Select at least one record to delete.");
     if (!window.confirm(`Are you sure you want to delete ${selectedIds.length} record(s)?`)) return;
@@ -62,7 +87,12 @@ const ShowDispatch = () => {
   // Start editing
   const handleEdit = (d) => {
     setEditId(d.id);
-    setEditData({ ChallanNo: d.ChallanNo, Destination: d.Destination, DispatchQuantity: d.DispatchQuantity });
+    setEditData({
+      ChallanNo: d.ChallanNo,
+      Destination: d.Destination,
+      DispatchQuantity: d.DispatchQuantity,
+      VehicleNo: d.VehicleNo || ""
+    });
   };
 
   // Save edits
@@ -72,6 +102,7 @@ const ShowDispatch = () => {
         ChallanNo: editData.ChallanNo,
         Destination: editData.Destination,
         DispatchQuantity: Number(editData.DispatchQuantity),
+        VehicleNo: editData.VehicleNo
       });
       setDispatches(dispatches.map(d => d.id === id ? { ...d, ...editData } : d));
       setEditId(null);
@@ -87,12 +118,19 @@ const ShowDispatch = () => {
     );
   };
 
-  // Filtered dispatches
-  const filteredDispatches = dispatches.filter(d =>
-    d.ChallanNo?.toString().includes(searchTerm) ||
-    d.Destination?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    d.VehicleNo?.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  // Filter dispatches
+  const filteredDispatches = dispatches.filter(d => {
+    const matchesSearch = d.ChallanNo?.toString().includes(searchTerm) ||
+      d.Destination?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      d.VehicleNo?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      d.FactoryName?.toLowerCase().includes(searchTerm.toLowerCase());
+
+    const matchesFactory = filterFactory ? d.DisVid === filterFactory : true;
+    const matchesFromDate = fromDate ? new Date(d.DispatchDate) >= new Date(fromDate) : true;
+    const matchesToDate = toDate ? new Date(d.DispatchDate) <= new Date(toDate) : true;
+
+    return matchesSearch && matchesFactory && matchesFromDate && matchesToDate;
+  });
 
   // Pagination
   const totalPages = Math.ceil(filteredDispatches.length / recordsPerPage);
@@ -105,18 +143,44 @@ const ShowDispatch = () => {
     <div style={{ padding: "20px" }}>
       <h2>Dispatch Data</h2>
 
-      <div style={{ marginBottom: "10px" }}>
+      {/* Filters */}
+      <div style={{ display: "flex", gap: "10px", marginBottom: "10px", flexWrap: "wrap" }}>
         <input
           type="text"
-          placeholder="Search by ChallanNo, Destination, VehicleNo..."
+          placeholder="Search by Challan, Dest, Vehicle..."
           value={searchTerm}
           onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
-          style={{ width: "100%", padding: "8px", marginBottom: "10px" }}
+          style={{ padding: "8px", flex: 1 }}
+        />
+        <select
+          value={filterFactory}
+          onChange={(e) => { setFilterFactory(e.target.value); setCurrentPage(1); }}
+          style={{ padding: "8px" }}
+        >
+          <option value="">All Factories</option>
+          <option value="10">JSW</option>
+          <option value="6">Manigar</option>
+          <option value="7">Ultratech</option>
+        </select>
+        <input
+          type="date"
+          value={fromDate}
+          onChange={(e) => { setFromDate(e.target.value); setCurrentPage(1); }}
+          style={{ padding: "8px" }}
+        />
+        <input
+          type="date"
+          value={toDate}
+          onChange={(e) => { setToDate(e.target.value); setCurrentPage(1); }}
+          style={{ padding: "8px" }}
         />
       </div>
 
       {selectedIds.length > 0 && (
-        <button onClick={handleDeleteSelected} style={{ marginBottom: "10px", background: "red", color: "#fff", padding: "5px 10px", border: "none", borderRadius: "5px" }}>
+        <button
+          onClick={handleDeleteSelected}
+          style={{ marginBottom: "10px", background: "red", color: "#fff", padding: "5px 10px", border: "none", borderRadius: "5px" }}
+        >
           Delete Selected ({selectedIds.length})
         </button>
       )}
@@ -133,17 +197,19 @@ const ShowDispatch = () => {
                 checked={paginatedDispatches.every(d => selectedIds.includes(d.id)) && paginatedDispatches.length > 0}
               />
             </th>
-            <th>ChallanNo</th>
-            <th>DispatchDate</th>
-            <th>Destination</th>
-            <th>DispatchQuantity</th>
+            <th>Challan</th>
+            <th>Date</th>
+            <th>Dest</th>
+            <th>Qty</th>
+            <th>TruckNo</th>
+            <th>Factory</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody>
           {paginatedDispatches.length === 0 ? (
             <tr>
-              <td colSpan="6" style={{ textAlign: "center" }}>No data found</td>
+              <td colSpan="8" style={{ textAlign: "center" }}>No data found</td>
             </tr>
           ) : (
             paginatedDispatches.map(d => (
@@ -155,57 +221,53 @@ const ShowDispatch = () => {
                     onChange={() => handleCheckboxChange(d.id)}
                   />
                 </td>
-                <td>
-                  {editId === d.id ? (
+                <td>{editId === d.id ? (
                     <input
                       value={editData.ChallanNo}
                       onChange={(e) => setEditData({ ...editData, ChallanNo: e.target.value })}
                     />
-                  ) : (
-                    d.ChallanNo
-                  )}
-                </td>
+                  ) : d.ChallanNo
+                }</td>
                 <td>{d.DispatchDate ? new Date(d.DispatchDate).toLocaleDateString() : ""}</td>
-                <td>
-                  {editId === d.id ? (
+                <td>{editId === d.id ? (
                     <input
                       value={editData.Destination}
                       onChange={(e) => setEditData({ ...editData, Destination: e.target.value })}
                     />
-                  ) : (
-                    d.Destination
-                  )}
-                </td>
-                <td>
-                  {editId === d.id ? (
+                  ) : d.Destination
+                }</td>
+                <td>{editId === d.id ? (
                     <input
                       value={editData.DispatchQuantity}
                       onChange={(e) => setEditData({ ...editData, DispatchQuantity: e.target.value })}
                     />
-                  ) : (
-                    d.DispatchQuantity
-                  )}
-                </td>
-                <td>
-                  {editId === d.id ? (
-                    <>
-                      <button onClick={() => handleSave(d.id)}>Save</button>{" "}
-                      <button onClick={() => setEditId(null)}>Cancel</button>
-                    </>
-                  ) : (
-                    <>
-                      <button onClick={() => handleEdit(d)}>Edit</button>{" "}
-                      <button onClick={() => handleDelete(d.id)}>Delete</button>
-                    </>
-                  )}
-                </td>
+                  ) : d.DispatchQuantity
+                }</td>
+                <td>{editId === d.id ? (
+                    <input
+                      value={editData.VehicleNo}
+                      onChange={(e) => setEditData({ ...editData, VehicleNo: e.target.value })}
+                    />
+                  ) : d.VehicleNo
+                }</td>
+                <td>{d.FactoryName}</td>
+                <td>{editId === d.id ? (
+                  <>
+                    <button onClick={() => handleSave(d.id)}>Save</button>{" "}
+                    <button onClick={() => setEditId(null)}>Cancel</button>
+                  </>
+                ) : (
+                  <>
+                    <button onClick={() => handleEdit(d)}>Edit</button>{" "}
+                    <button onClick={() => handleDelete(d.id)}>Delete</button>
+                  </>
+                )}</td>
               </tr>
             ))
           )}
         </tbody>
       </table>
 
-      {/* Pagination buttons */}
       {totalPages > 1 && (
         <div style={{ marginTop: "10px" }}>
           {Array.from({ length: totalPages }, (_, i) => (

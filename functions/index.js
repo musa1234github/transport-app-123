@@ -1,5 +1,3 @@
-import UploadDispatch from '/src/pages/UploadDispatch.jsx';
-
 const functions = require("firebase-functions");
 const express = require("express");
 const cors = require("cors");
@@ -8,6 +6,7 @@ const app = express();
 
 // Enable CORS for all routes
 app.use(cors({ origin: true }));
+app.use(express.json()); // to parse JSON POST requests
 
 // Health endpoint
 app.get("/health", (req, res) => {
@@ -29,9 +28,9 @@ app.post("/test", (req, res) => {
   });
 });
 
-// Main upload endpoint (simplified)
-app.post("/", (req, res) => {
-  console.log("Main endpoint called");
+// Main upload endpoint
+app.post("/upload-dispatch", (req, res) => {
+  console.log("Main endpoint called", req.body);
   res.json({ 
     success: true, 
     message: "File upload endpoint is ready!",

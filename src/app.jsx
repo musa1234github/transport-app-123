@@ -7,10 +7,8 @@ import UploadDispatch from "./pages/UploadDispatch.jsx";
 import { auth } from "./firebaseConfig";
 import { onAuthStateChanged } from "firebase/auth";
 import ShowDispatch from "./pages/ShowDispatch.jsx";
-import TestFirebase from "./pages/TestFirebase.jsx";
-
-<Route path="/test-firebase" element={<TestFirebase />} />
-
+// ✅ Removed TestFirebase import
+// import TestFirebase from "./pages/TestFirebase.jsx";
 
 const App = () => {
   const [user, setUser] = useState(null);
@@ -47,7 +45,8 @@ const App = () => {
           <Route path="upload-dispatch" element={<UploadDispatch />} />
           <Route path="factories" element={<FactoryList />} />
           <Route path="show-dispatch" element={<ShowDispatch />} />
-         </Route>
+          {/* If you want, you can add a placeholder TestFirebase route later */}
+        </Route>
 
         {/* Fallback route */}
         <Route path="*" element={<Navigate to={user ? "/" : "/login"} />} />
