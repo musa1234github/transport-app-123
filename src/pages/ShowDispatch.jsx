@@ -1,7 +1,8 @@
 // src/pages/ShowDispatch.jsx
 import React, { useEffect, useState } from "react";
-import { db } from "../firebaseConfig";
+import { db, auth } from "../firebaseConfig";
 import { collection, getDocs, deleteDoc, doc, updateDoc } from "firebase/firestore";
+import * as XLSX from "xlsx";
 
 const factoryMap = {
   "10": "JSW",
@@ -24,19 +25,17 @@ const ShowDispatch = () => {
   const [filterFactory, setFilterFactory] = useState("");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
+  const [isAdmin, setIsAdmin] = useState(false);
   const recordsPerPage = 10;
 
-  // Fetch and normalize dispatch data
+  // Fetch dispatches
   const fetchDispatches = async () => {
     try {
       const snapshot = await getDocs(collection(db, "TblDispatch"));
       const data = snapshot.docs.map(docSnap => {
         const row = { id: docSnap.id, ...docSnap.data() };
-
-        // Normalize DisVid as string for reliable filtering
         row.DisVid = String(row.DisVid || "").trim();
 
-        // Normalize date
         if (row.DispatchDate) {
           row.DispatchDate = new Date(
             row.DispatchDate.seconds ? row.DispatchDate.seconds * 1000 : row.DispatchDate
@@ -46,46 +45,52 @@ const ShowDispatch = () => {
         row.FactoryName = factoryMap[row.DisVid] || row.FactoryName || "";
         return row;
       });
+
       setDispatches(data);
     } catch (err) {
       console.error("Error fetching dispatch data:", err);
     }
   };
 
+  // Check admin role
   useEffect(() => {
+    const checkAdmin = async () => {
+      if (auth.currentUser) {
+        const token = await auth.currentUser.getIdTokenResult();
+        setIsAdmin(!!token.claims.admin);
+      }
+    };
+    checkAdmin();
     fetchDispatches();
   }, []);
 
-  // Delete single record
+  // Delete single
   const handleDelete = async (id) => {
+    if (!isAdmin) return alert("You do not have permission to delete records!");
     if (!window.confirm("Are you sure you want to delete this record?")) return;
-    try {
-      await deleteDoc(doc(db, "TblDispatch", id));
-      setDispatches(dispatches.filter(d => d.id !== id));
-      setSelectedIds(selectedIds.filter(sid => sid !== id));
-    } catch (err) {
-      console.error("Delete failed:", err);
-    }
+
+    await deleteDoc(doc(db, "TblDispatch", id));
+    setDispatches(dispatches.filter(d => d.id !== id));
+    setSelectedIds(selectedIds.filter(sid => sid !== id));
   };
 
-  // Delete selected records
+  // Delete multiple
   const handleDeleteSelected = async () => {
-    if (!selectedIds.length) return alert("Select at least one record to delete.");
-    if (!window.confirm(`Are you sure you want to delete ${selectedIds.length} record(s)?`)) return;
+    if (!isAdmin) return alert("You do not have permission to delete records!");
+    if (!selectedIds.length) return alert("Select records first");
+    if (!window.confirm(`Delete ${selectedIds.length} records?`)) return;
 
-    try {
-      for (let id of selectedIds) {
-        await deleteDoc(doc(db, "TblDispatch", id));
-      }
-      setDispatches(dispatches.filter(d => !selectedIds.includes(d.id)));
-      setSelectedIds([]);
-    } catch (err) {
-      console.error("Delete multiple failed:", err);
+    for (let id of selectedIds) {
+      await deleteDoc(doc(db, "TblDispatch", id));
     }
+
+    setDispatches(dispatches.filter(d => !selectedIds.includes(d.id)));
+    setSelectedIds([]);
   };
 
-  // Start editing
+  // Edit
   const handleEdit = (d) => {
+    if (!isAdmin) return;
     setEditId(d.id);
     setEditData({
       ChallanNo: d.ChallanNo,
@@ -95,32 +100,31 @@ const ShowDispatch = () => {
     });
   };
 
-  // Save edits
+  // Save
   const handleSave = async (id) => {
-    try {
-      await updateDoc(doc(db, "TblDispatch", id), {
-        ChallanNo: editData.ChallanNo,
-        Destination: editData.Destination,
-        DispatchQuantity: Number(editData.DispatchQuantity),
-        VehicleNo: editData.VehicleNo
-      });
-      setDispatches(dispatches.map(d => d.id === id ? { ...d, ...editData } : d));
-      setEditId(null);
-    } catch (err) {
-      console.error("Update failed:", err);
-    }
+    if (!isAdmin) return;
+    await updateDoc(doc(db, "TblDispatch", id), {
+      ChallanNo: editData.ChallanNo,
+      Destination: editData.Destination,
+      DispatchQuantity: Number(editData.DispatchQuantity),
+      VehicleNo: editData.VehicleNo
+    });
+
+    setDispatches(dispatches.map(d => (d.id === id ? { ...d, ...editData } : d)));
+    setEditId(null);
   };
 
-  // Toggle checkbox
+  // Checkbox
   const handleCheckboxChange = (id) => {
     setSelectedIds(prev =>
       prev.includes(id) ? prev.filter(sid => sid !== id) : [...prev, id]
     );
   };
 
-  // Filter dispatches
+  // Filtering
   const filteredDispatches = dispatches.filter(d => {
-    const matchesSearch = d.ChallanNo?.toString().includes(searchTerm) ||
+    const matchesSearch =
+      d.ChallanNo?.toString().includes(searchTerm) ||
       d.Destination?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       d.VehicleNo?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       d.FactoryName?.toLowerCase().includes(searchTerm.toLowerCase());
@@ -131,6 +135,29 @@ const ShowDispatch = () => {
 
     return matchesSearch && matchesFactory && matchesFromDate && matchesToDate;
   });
+
+  // Export to Excel
+  const exportToExcel = () => {
+    if (!filteredDispatches.length) return alert("No data to export");
+
+    const excelData = filteredDispatches.map(d => ({
+      "Challan No": d.ChallanNo,
+      "Dispatch Date": d.DispatchDate ? new Date(d.DispatchDate).toLocaleDateString() : "",
+      "Destination": d.Destination,
+      "Quantity": d.DispatchQuantity,
+      "Vehicle No": d.VehicleNo,
+      "Factory": d.FactoryName
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(excelData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Dispatch");
+
+    XLSX.writeFile(
+      workbook,
+      `Dispatch_Data_${new Date().toISOString().slice(0, 10)}.xlsx`
+    );
+  };
 
   // Pagination
   const totalPages = Math.ceil(filteredDispatches.length / recordsPerPage);
@@ -146,74 +173,53 @@ const ShowDispatch = () => {
       {/* Filters */}
       <div style={{ display: "flex", gap: "10px", marginBottom: "10px", flexWrap: "wrap" }}>
         <input
-          type="text"
-          placeholder="Search by Challan, Dest, Vehicle..."
+          placeholder="Search..."
           value={searchTerm}
-          onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
-          style={{ padding: "8px", flex: 1 }}
+          onChange={e => { setSearchTerm(e.target.value); setCurrentPage(1); }}
         />
+
         <select
           value={filterFactory}
-          onChange={(e) => { setFilterFactory(e.target.value); setCurrentPage(1); }}
-          style={{ padding: "8px" }}
+          onChange={e => { setFilterFactory(e.target.value); setCurrentPage(1); }}
         >
           <option value="">All Factories</option>
           <option value="10">JSW</option>
           <option value="6">Manigar</option>
           <option value="7">Ultratech</option>
         </select>
-        <input
-          type="date"
-          value={fromDate}
-          onChange={(e) => { setFromDate(e.target.value); setCurrentPage(1); }}
-          style={{ padding: "8px" }}
-        />
-        <input
-          type="date"
-          value={toDate}
-          onChange={(e) => { setToDate(e.target.value); setCurrentPage(1); }}
-          style={{ padding: "8px" }}
-        />
+
+        <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} />
+        <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} />
+
+        <button onClick={exportToExcel} style={{ background: "green", color: "#fff" }}>
+          Export Excel
+        </button>
       </div>
 
-      {selectedIds.length > 0 && (
-        <button
-          onClick={handleDeleteSelected}
-          style={{ marginBottom: "10px", background: "red", color: "#fff", padding: "5px 10px", border: "none", borderRadius: "5px" }}
-        >
+      {/* Delete selected button only for admin */}
+      {isAdmin && selectedIds.length > 0 && (
+        <button onClick={handleDeleteSelected} style={{ background: "red", color: "#fff", marginBottom: 10 }}>
           Delete Selected ({selectedIds.length})
         </button>
       )}
 
-      <table border="1" cellPadding="5" style={{ borderCollapse: "collapse", width: "100%" }}>
+      <table border="1" width="100%">
         <thead>
           <tr>
-            <th>
-              <input
-                type="checkbox"
-                onChange={(e) =>
-                  setSelectedIds(e.target.checked ? paginatedDispatches.map(d => d.id) : [])
-                }
-                checked={paginatedDispatches.every(d => selectedIds.includes(d.id)) && paginatedDispatches.length > 0}
-              />
-            </th>
+            {isAdmin && <th></th>}
             <th>Challan</th>
             <th>Date</th>
-            <th>Dest</th>
+            <th>Destination</th>
             <th>Qty</th>
-            <th>TruckNo</th>
+            <th>Vehicle</th>
             <th>Factory</th>
-            <th>Actions</th>
+            {isAdmin && <th>Action</th>}
           </tr>
         </thead>
         <tbody>
-          {paginatedDispatches.length === 0 ? (
-            <tr>
-              <td colSpan="8" style={{ textAlign: "center" }}>No data found</td>
-            </tr>
-          ) : (
-            paginatedDispatches.map(d => (
-              <tr key={d.id}>
+          {paginatedDispatches.map(d => (
+            <tr key={d.id}>
+              {isAdmin && (
                 <td>
                   <input
                     type="checkbox"
@@ -221,72 +227,28 @@ const ShowDispatch = () => {
                     onChange={() => handleCheckboxChange(d.id)}
                   />
                 </td>
-                <td>{editId === d.id ? (
-                    <input
-                      value={editData.ChallanNo}
-                      onChange={(e) => setEditData({ ...editData, ChallanNo: e.target.value })}
-                    />
-                  ) : d.ChallanNo
-                }</td>
-                <td>{d.DispatchDate ? new Date(d.DispatchDate).toLocaleDateString() : ""}</td>
-                <td>{editId === d.id ? (
-                    <input
-                      value={editData.Destination}
-                      onChange={(e) => setEditData({ ...editData, Destination: e.target.value })}
-                    />
-                  ) : d.Destination
-                }</td>
-                <td>{editId === d.id ? (
-                    <input
-                      value={editData.DispatchQuantity}
-                      onChange={(e) => setEditData({ ...editData, DispatchQuantity: e.target.value })}
-                    />
-                  ) : d.DispatchQuantity
-                }</td>
-                <td>{editId === d.id ? (
-                    <input
-                      value={editData.VehicleNo}
-                      onChange={(e) => setEditData({ ...editData, VehicleNo: e.target.value })}
-                    />
-                  ) : d.VehicleNo
-                }</td>
-                <td>{d.FactoryName}</td>
-                <td>{editId === d.id ? (
-                  <>
-                    <button onClick={() => handleSave(d.id)}>Save</button>{" "}
-                    <button onClick={() => setEditId(null)}>Cancel</button>
-                  </>
-                ) : (
-                  <>
-                    <button onClick={() => handleEdit(d)}>Edit</button>{" "}
-                    <button onClick={() => handleDelete(d.id)}>Delete</button>
-                  </>
-                )}</td>
-              </tr>
-            ))
-          )}
+              )}
+              <td>{d.ChallanNo}</td>
+              <td>{d.DispatchDate?.toLocaleDateString()}</td>
+              <td>{d.Destination}</td>
+              <td>{d.DispatchQuantity}</td>
+              <td>{d.VehicleNo}</td>
+              <td>{d.FactoryName}</td>
+              {isAdmin && (
+                <td>
+                  <button onClick={() => handleEdit(d)}>Edit</button>{" "}
+                  <button onClick={() => handleDelete(d.id)}>Delete</button>
+                </td>
+              )}
+            </tr>
+          ))}
         </tbody>
       </table>
 
-      {totalPages > 1 && (
-        <div style={{ marginTop: "10px" }}>
-          {Array.from({ length: totalPages }, (_, i) => (
-            <button
-              key={i}
-              onClick={() => setCurrentPage(i + 1)}
-              style={{
-                marginRight: "5px",
-                background: currentPage === i + 1 ? "blue" : "gray",
-                color: "#fff",
-                border: "none",
-                borderRadius: "3px",
-                padding: "3px 6px"
-              }}
-            >
-              {i + 1}
-            </button>
-          ))}
-        </div>
+      {!isAdmin && (
+        <p style={{ marginTop: 20, color: "red" }}>
+          You are logged in as a normal user. You cannot edit or delete dispatch records.
+        </p>
       )}
     </div>
   );

@@ -4,21 +4,30 @@ import Login from "./Login.jsx";
 import Home from "./pages/Home.jsx";
 import FactoryList from "./pages/FactoryList.jsx";
 import UploadDispatch from "./pages/UploadDispatch.jsx";
-import { auth } from "./firebaseConfig";
+import { auth, isAdminUser } from "./firebaseConfig";
 import { onAuthStateChanged } from "firebase/auth";
 import ShowDispatch from "./pages/ShowDispatch.jsx";
-// ✅ Removed TestFirebase import
-// import TestFirebase from "./pages/TestFirebase.jsx";
 
 const App = () => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false); // NEW: track admin status
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
+
+      // 🔥 NEW: check if user is admin
+      if (currentUser) {
+        const adminStatus = await isAdminUser(currentUser);
+        setIsAdmin(adminStatus);
+      } else {
+        setIsAdmin(false);
+      }
+
       setLoading(false);
     });
+
     return () => unsubscribe();
   }, []);
 
@@ -39,13 +48,12 @@ const App = () => {
         {/* Private routes */}
         <Route
           path="/"
-          element={user ? <Home user={user} /> : <Navigate to="/login" />}
+          element={user ? <Home user={user} isAdmin={isAdmin} /> : <Navigate to="/login" />}
         >
           {/* Nested pages under Home */}
-          <Route path="upload-dispatch" element={<UploadDispatch />} />
-          <Route path="factories" element={<FactoryList />} />
-          <Route path="show-dispatch" element={<ShowDispatch />} />
-          {/* If you want, you can add a placeholder TestFirebase route later */}
+          <Route path="upload-dispatch" element={<UploadDispatch isAdmin={isAdmin} />} />
+          <Route path="factories" element={<FactoryList isAdmin={isAdmin} />} />
+          <Route path="show-dispatch" element={<ShowDispatch isAdmin={isAdmin} />} />
         </Route>
 
         {/* Fallback route */}

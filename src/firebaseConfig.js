@@ -3,6 +3,7 @@ import { getAnalytics } from "firebase/analytics";
 import { getAuth, GoogleAuthProvider } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
+// 🔒 KEEP your existing config intact
 const firebaseConfig = {
   apiKey: "AIzaSyAd1bazB0rvrEhQwXWa-xUOkqLaCFZEjME",
   authDomain: "transport-app-c4674.firebaseapp.com",
@@ -13,15 +14,28 @@ const firebaseConfig = {
   measurementId: "G-2KW1848NFH"
 };
 
+// Initialize Firebase app
 const app = initializeApp(firebaseConfig);
 
+// Initialize analytics only in browser
 let analytics;
 if (typeof window !== "undefined") {
   analytics = getAnalytics(app);
 }
 
+// 🔑 Authentication setup
 const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
+
+// 🔥 Firestore database reference
 const db = getFirestore(app);
 
-export { app, auth, googleProvider, db };
+// ✅ Helper function to check if logged-in user is admin
+const isAdminUser = async (user) => {
+  if (!user) return false;
+  const token = await user.getIdTokenResult();
+  return token.claims.admin === true;
+};
+
+// ✅ Export everything
+export { app, analytics, auth, googleProvider, db, isAdminUser };
