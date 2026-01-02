@@ -9,13 +9,30 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const navigate = useNavigate();
 
+  // List of admin emails
+  const adminEmails = ["79mohammedkhan@gmail.com"];
+
   const handleLogin = async () => {
     try {
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
-      console.log("Logged in:", userCredential.user.email);
-      // Redirect to Dashboard
+      const loggedInEmail = userCredential.user.email;
+      console.log("Logged in:", loggedInEmail);
+
+      // Check if the user is admin
+      const isAdmin = adminEmails.includes(loggedInEmail);
+
+      if (isAdmin) {
+        console.log("Admin user logged in!");
+        // Optionally store admin flag in sessionStorage/localStorage
+        sessionStorage.setItem("isAdmin", "true");
+      } else {
+        sessionStorage.setItem("isAdmin", "false");
+      }
+
+      // Redirect to dashboard
       navigate("/dashboard");
     } catch (error) {
+      console.error("Login error:", error);
       alert(error.message);
     }
   };

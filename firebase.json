@@ -15,10 +15,20 @@
   },
   "emulators": {
     "hosting": {
+      "host": "0.0.0.0",
       "port": 5000
     },
+    "auth": {
+      "host": "0.0.0.0",
+      "port": 9099
+    },
+    "firestore": {
+      "host": "0.0.0.0",
+      "port": 8080
+    },
     "ui": {
-      "enabled": true
+      "enabled": true,
+      "host": "0.0.0.0"
     },
     "singleProjectMode": true
   },
