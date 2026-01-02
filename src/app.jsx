@@ -4,20 +4,20 @@ import Login from "./Login.jsx";
 import Home from "./pages/Home.jsx";
 import FactoryList from "./pages/FactoryList.jsx";
 import UploadDispatch from "./pages/UploadDispatch.jsx";
+import DestinationMaster from "./pages/DestinationMaster.jsx";
+import ShowDispatch from "./pages/ShowDispatch.jsx";
 import { auth, isAdminUser } from "./firebaseConfig";
 import { onAuthStateChanged } from "firebase/auth";
-import ShowDispatch from "./pages/ShowDispatch.jsx";
 
 const App = () => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [isAdmin, setIsAdmin] = useState(false); // NEW: track admin status
+  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
 
-      // 🔥 NEW: check if user is admin
       if (currentUser) {
         const adminStatus = await isAdminUser(currentUser);
         setIsAdmin(adminStatus);
@@ -50,13 +50,13 @@ const App = () => {
           path="/"
           element={user ? <Home user={user} isAdmin={isAdmin} /> : <Navigate to="/login" />}
         >
-          {/* Nested pages under Home */}
           <Route path="upload-dispatch" element={<UploadDispatch isAdmin={isAdmin} />} />
+          <Route path="destination-master" element={<DestinationMaster isAdmin={isAdmin} />} />
           <Route path="factories" element={<FactoryList isAdmin={isAdmin} />} />
           <Route path="show-dispatch" element={<ShowDispatch isAdmin={isAdmin} />} />
         </Route>
 
-        {/* Fallback route */}
+        {/* Fallback */}
         <Route path="*" element={<Navigate to={user ? "/" : "/login"} />} />
       </Routes>
     </BrowserRouter>

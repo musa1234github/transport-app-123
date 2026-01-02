@@ -1,21 +1,9 @@
-import React, { useEffect, useState } from "react";
-import { auth } from "../firebaseConfig";
+import React from "react";
 import { signOut } from "firebase/auth";
 import { Link, Outlet } from "react-router-dom";
+import { auth } from "../firebaseConfig";
 
-const Home = ({ user }) => {
-  const [isAdmin, setIsAdmin] = useState(false);
-
-  useEffect(() => {
-    const checkAdmin = async () => {
-      if (auth.currentUser) {
-        const token = await auth.currentUser.getIdTokenResult();
-        setIsAdmin(!!token.claims.admin);
-      }
-    };
-    checkAdmin();
-  }, []);
-
+const Home = ({ user, isAdmin }) => {
   const handleLogout = async () => {
     try {
       await signOut(auth);
@@ -54,6 +42,19 @@ const Home = ({ user }) => {
           </li>
         )}
 
+        {/* Destination Master → ONLY ADMIN */}
+        {isAdmin && (
+          <li>
+            🗺️{" "}
+            <Link
+              to="/destination-master"
+              style={{ color: "blue", textDecoration: "underline" }}
+            >
+              Destination Master
+            </Link>
+          </li>
+        )}
+
         <li>
           🏭{" "}
           <Link
@@ -77,7 +78,7 @@ const Home = ({ user }) => {
 
       {!isAdmin && (
         <p style={{ marginTop: 10, color: "red" }}>
-          You are logged in as a normal user. Dispatch upload is restricted.
+          You are logged in as a normal user. Restricted actions are hidden.
         </p>
       )}
 
