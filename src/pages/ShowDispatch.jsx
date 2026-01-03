@@ -9,6 +9,19 @@ const factoryMap = {
   "7": "Ultratech"
 };
 
+// ✅ COLUMN SEQUENCE ONLY (THIS IS THE CHANGE)
+const COLUMN_SEQUENCE = [
+  "ChallanNo",
+  "Destination",
+  "VehicleNo",
+  "DispatchDate",
+  "DispatchQuantity",
+  "PartyName",
+  "Advance",
+  "Diesel",
+  "FactoryName"
+];
+
 // 🔹 Helper: short date dd-mm-yyyy
 const formatShortDate = (date) => {
   if (!date) return "";
@@ -110,7 +123,7 @@ const ShowDispatch = () => {
 
     const updatePayload = { ...editData };
     delete updatePayload.id;
-    delete updatePayload.DisVid; // 🔴 never update DisVid
+    delete updatePayload.DisVid;
 
     await updateDoc(doc(db, "TblDispatch", id), updatePayload);
 
@@ -149,21 +162,14 @@ const ShowDispatch = () => {
     return matchesSearch && matchesFactory && matchesFromDate && matchesToDate;
   });
 
-  // 🔹 Export Excel (exclude created + DisVid)
+  // 🔹 Export Excel (ORDER ONLY CHANGED)
   const exportToExcel = () => {
     if (!filteredDispatches.length) return alert("No data");
 
     const excelData = filteredDispatches.map(d => {
       const row = {};
-      Object.keys(d).forEach(k => {
-        if (
-          k !== "id" &&
-          k !== "DisVid" &&
-          k.toLowerCase() !== "createdon" &&
-          k.toLowerCase() !== "created_at"
-        ) {
-          row[k] = d[k] instanceof Date ? formatShortDate(d[k]) : d[k];
-        }
+      COLUMN_SEQUENCE.forEach(k => {
+        row[k] = d[k] instanceof Date ? formatShortDate(d[k]) : d[k];
       });
       return row;
     });
@@ -179,23 +185,13 @@ const ShowDispatch = () => {
   };
 
   // 🔹 Pagination
-  const totalPages = Math.ceil(filteredDispatches.length / recordsPerPage);
   const paginatedDispatches = filteredDispatches.slice(
     (currentPage - 1) * recordsPerPage,
     currentPage * recordsPerPage
   );
 
-  // 🔹 Collect columns (exclude created + DisVid)
-  const columns =
-    dispatches.length > 0
-      ? Object.keys(dispatches[0]).filter(
-          k =>
-            k !== "id" &&
-            k !== "DisVid" &&
-            k.toLowerCase() !== "createdon" &&
-            k.toLowerCase() !== "created_at"
-        )
-      : [];
+  // 🔹 Columns (ORDER ONLY CHANGED)
+  const columns = COLUMN_SEQUENCE;
 
   return (
     <div style={{ padding: 20 }}>
