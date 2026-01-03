@@ -1,6 +1,12 @@
 import React, { useEffect, useState } from "react";
 import { db, auth } from "../firebaseConfig";
-import { collection, getDocs, deleteDoc, doc } from "firebase/firestore";
+import {
+  collection,
+  getDocs,
+  deleteDoc,
+  doc,
+  updateDoc
+} from "firebase/firestore";
 import * as XLSX from "xlsx";
 
 const factoryMap = {
@@ -24,10 +30,9 @@ const COLUMN_SEQUENCE = [
 const formatShortDate = (date) => {
   if (!date) return "";
   const d = new Date(date);
-  const day = String(d.getDate()).padStart(2, "0");
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const year = d.getFullYear();
-  return `${day}-${month}-${year}`;
+  return `${String(d.getDate()).padStart(2, "0")}-${String(
+    d.getMonth() + 1
+  ).padStart(2, "0")}-${d.getFullYear()}`;
 };
 
 const ShowDispatch = () => {
@@ -39,6 +44,10 @@ const ShowDispatch = () => {
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
+
+  /* ✅ Edit only ChallanNo */
+  const [editId, setEditId] = useState(null);
+  const [editChallan, setEditChallan] = useState("");
 
   const recordsPerPage = 10;
 
@@ -52,10 +61,11 @@ const ShowDispatch = () => {
 
     const fetchDispatches = async () => {
       const snapshot = await getDocs(collection(db, "TblDispatch"));
-      const data = snapshot.docs.map(docSnap => {
-        const row = { id: docSnap.id, ...docSnap.data() };
+      const data = snapshot.docs.map(ds => {
+        const row = { id: ds.id, ...ds.data() };
 
-        row.DisVid = String(row.DisVid || ""); // ensure string
+        row.DisVid = String(row.DisVid || "");
+
         if (row.DispatchDate) {
           row.DispatchDate = new Date(
             row.DispatchDate.seconds
@@ -64,8 +74,9 @@ const ShowDispatch = () => {
           );
         }
 
-        // Correct FactoryName mapping
-        row.FactoryName = factoryMap[row.DisVid] || row.FactoryName || "";
+        /* ✅ CRITICAL FIX */
+        row.FactoryName = row.FactoryName || factoryMap[row.DisVid] || "";
+
         return row;
       });
 
@@ -75,6 +86,35 @@ const ShowDispatch = () => {
     checkAdmin();
     fetchDispatches();
   }, []);
+
+  /* ================= EDIT ================= */
+
+  const handleEdit = (row) => {
+    setEditId(row.id);
+    setEditChallan(row.ChallanNo || "");
+  };
+
+  const handleSave = async (id) => {
+    await updateDoc(doc(db, "TblDispatch", id), {
+      ChallanNo: editChallan
+    });
+
+    setDispatches(prev =>
+      prev.map(d =>
+        d.id === id ? { ...d, ChallanNo: editChallan } : d
+      )
+    );
+
+    setEditId(null);
+    setEditChallan("");
+  };
+
+  const handleCancel = () => {
+    setEditId(null);
+    setEditChallan("");
+  };
+
+  /* ================= DELETE ================= */
 
   const handleDelete = async (id) => {
     if (!isAdmin) return;
@@ -97,6 +137,8 @@ const ShowDispatch = () => {
     setSelectedIds([]);
   };
 
+  /* ================= CHECKBOX ================= */
+
   const handleCheckboxChange = (id) => {
     setSelectedIds(prev =>
       prev.includes(id)
@@ -105,19 +147,21 @@ const ShowDispatch = () => {
     );
   };
 
+  /* ================= FILTER ================= */
+
   const filteredDispatches = dispatches.filter(d => {
-    const matchesSearch = Object.values(d).some(val =>
-      val?.toString().toLowerCase().includes(searchTerm.toLowerCase())
+    const matchesSearch = Object.values(d).some(v =>
+      v?.toString().toLowerCase().includes(searchTerm.toLowerCase())
     );
 
     const matchesFactory = filterFactory ? d.DisVid === filterFactory : true;
 
     const matchesFromDate = fromDate
-      ? d.DispatchDate && new Date(d.DispatchDate) >= new Date(fromDate)
+      ? d.DispatchDate && d.DispatchDate >= new Date(fromDate)
       : true;
 
     const matchesToDate = toDate
-      ? d.DispatchDate && new Date(d.DispatchDate) <= new Date(toDate)
+      ? d.DispatchDate && d.DispatchDate <= new Date(toDate)
       : true;
 
     return matchesSearch && matchesFactory && matchesFromDate && matchesToDate;
@@ -145,10 +189,13 @@ const ShowDispatch = () => {
         prev.filter(id => !paginatedDispatches.some(d => d.id === id))
       );
     } else {
-      const pageIds = paginatedDispatches.map(d => d.id);
-      setSelectedIds(prev => Array.from(new Set([...prev, ...pageIds])));
+      setSelectedIds(prev => [
+        ...new Set([...prev, ...paginatedDispatches.map(d => d.id)])
+      ]);
     }
   };
+
+  /* ================= EXCEL ================= */
 
   const exportToExcel = () => {
     if (!filteredDispatches.length) return;
@@ -167,11 +214,13 @@ const ShowDispatch = () => {
     XLSX.writeFile(wb, "Dispatch_Data.xlsx");
   };
 
+  /* ================= UI ================= */
+
   return (
     <div style={{ padding: 20 }}>
       <h2>Dispatch Data</h2>
 
-      <div style={{ display: "flex", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         <input
           placeholder="Search..."
           value={searchTerm}
@@ -201,12 +250,12 @@ const ShowDispatch = () => {
       </div>
 
       {isAdmin && selectedIds.length > 0 && (
-        <button onClick={handleDeleteSelected} style={{ marginBottom: 10 }}>
+        <button onClick={handleDeleteSelected} style={{ marginTop: 10 }}>
           Delete Selected ({selectedIds.length})
         </button>
       )}
 
-      <table border="1" width="100%">
+      <table border="1" width="100%" style={{ marginTop: 10 }}>
         <thead>
           <tr>
             {isAdmin && (
@@ -240,15 +289,32 @@ const ShowDispatch = () => {
 
               {COLUMN_SEQUENCE.map(col => (
                 <td key={col}>
-                  {col === "DispatchDate"
-                    ? formatShortDate(d[col])
-                    : d[col]?.toString()}
+                  {col === "ChallanNo" && editId === d.id ? (
+                    <input
+                      value={editChallan}
+                      onChange={e => setEditChallan(e.target.value)}
+                    />
+                  ) : col === "DispatchDate" ? (
+                    formatShortDate(d[col])
+                  ) : (
+                    d[col]
+                  )}
                 </td>
               ))}
 
               {isAdmin && (
                 <td>
-                  <button onClick={() => handleDelete(d.id)}>Delete</button>
+                  {editId === d.id ? (
+                    <>
+                      <button onClick={() => handleSave(d.id)}>Save</button>
+                      <button onClick={handleCancel}>Cancel</button>
+                    </>
+                  ) : (
+                    <>
+                      <button onClick={() => handleEdit(d)}>Edit</button>
+                      <button onClick={() => handleDelete(d.id)}>Delete</button>
+                    </>
+                  )}
                 </td>
               )}
             </tr>
@@ -262,10 +328,7 @@ const ShowDispatch = () => {
       </div>
 
       <div style={{ marginTop: 10 }}>
-        <button
-          disabled={currentPage === 1}
-          onClick={() => setCurrentPage(p => p - 1)}
-        >
+        <button disabled={currentPage === 1} onClick={() => setCurrentPage(p => p - 1)}>
           Prev
         </button>
 
@@ -273,10 +336,7 @@ const ShowDispatch = () => {
           <button
             key={i}
             onClick={() => setCurrentPage(i + 1)}
-            style={{
-              margin: "0 3px",
-              fontWeight: currentPage === i + 1 ? "bold" : "normal"
-            }}
+            style={{ fontWeight: currentPage === i + 1 ? "bold" : "normal" }}
           >
             {i + 1}
           </button>

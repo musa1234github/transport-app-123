@@ -55,6 +55,19 @@ const Home = ({ user, isAdmin }) => {
           </li>
         )}
 
+        {/* Vehicle Master → ONLY ADMIN */}
+        {isAdmin && (
+          <li>
+            🚛{" "}
+            <Link
+              to="/vehicle-master"
+              style={{ color: "blue", textDecoration: "underline" }}
+            >
+              Vehicle Master
+            </Link>
+          </li>
+        )}
+
         <li>
           🏭{" "}
           <Link

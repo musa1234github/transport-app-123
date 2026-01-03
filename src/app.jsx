@@ -8,6 +8,8 @@ import DestinationMaster from "./pages/DestinationMaster.jsx";
 import ShowDispatch from "./pages/ShowDispatch.jsx";
 import { auth, isAdminUser } from "./firebaseConfig";
 import { onAuthStateChanged } from "firebase/auth";
+import VehicleMaster from "./pages/VehicleMaster";
+
 
 const App = () => {
   const [user, setUser] = useState(null);
@@ -54,6 +56,7 @@ const App = () => {
           <Route path="destination-master" element={<DestinationMaster isAdmin={isAdmin} />} />
           <Route path="factories" element={<FactoryList isAdmin={isAdmin} />} />
           <Route path="show-dispatch" element={<ShowDispatch isAdmin={isAdmin} />} />
+          <Route path="/vehicle-master" element={<VehicleMaster />} />
         </Route>
 
         {/* Fallback */}
