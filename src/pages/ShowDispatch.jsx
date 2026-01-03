@@ -1,4 +1,3 @@
-// src/pages/ShowDispatch.jsx
 import React, { useEffect, useState } from "react";
 import { db, auth } from "../firebaseConfig";
 import { collection, getDocs, deleteDoc, doc, updateDoc } from "firebase/firestore";
@@ -10,35 +9,44 @@ const factoryMap = {
   "7": "Ultratech"
 };
 
+// 🔹 Helper: short date dd-mm-yyyy
+const formatShortDate = (date) => {
+  if (!date) return "";
+  const d = new Date(date);
+  const day = String(d.getDate()).padStart(2, "0");
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const year = d.getFullYear();
+  return `${day}-${month}-${year}`;
+};
+
 const ShowDispatch = () => {
   const [dispatches, setDispatches] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [editId, setEditId] = useState(null);
-  const [editData, setEditData] = useState({
-    ChallanNo: "",
-    Destination: "",
-    DispatchQuantity: "",
-    VehicleNo: ""
-  });
+  const [editData, setEditData] = useState({});
   const [selectedIds, setSelectedIds] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [filterFactory, setFilterFactory] = useState("");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
+
   const recordsPerPage = 10;
 
-  // Fetch dispatches
+  // 🔹 Fetch dispatches
   const fetchDispatches = async () => {
     try {
       const snapshot = await getDocs(collection(db, "TblDispatch"));
       const data = snapshot.docs.map(docSnap => {
         const row = { id: docSnap.id, ...docSnap.data() };
+
         row.DisVid = String(row.DisVid || "").trim();
 
         if (row.DispatchDate) {
           row.DispatchDate = new Date(
-            row.DispatchDate.seconds ? row.DispatchDate.seconds * 1000 : row.DispatchDate
+            row.DispatchDate.seconds
+              ? row.DispatchDate.seconds * 1000
+              : row.DispatchDate
           );
         }
 
@@ -52,7 +60,7 @@ const ShowDispatch = () => {
     }
   };
 
-  // Check admin role
+  // 🔹 Check admin
   useEffect(() => {
     const checkAdmin = async () => {
       if (auth.currentUser) {
@@ -60,23 +68,24 @@ const ShowDispatch = () => {
         setIsAdmin(!!token.claims.admin);
       }
     };
+
     checkAdmin();
     fetchDispatches();
   }, []);
 
-  // Delete single
+  // 🔹 Delete single
   const handleDelete = async (id) => {
-    if (!isAdmin) return alert("You do not have permission to delete records!");
-    if (!window.confirm("Are you sure you want to delete this record?")) return;
+    if (!isAdmin) return alert("No permission");
+    if (!window.confirm("Delete this record?")) return;
 
     await deleteDoc(doc(db, "TblDispatch", id));
-    setDispatches(dispatches.filter(d => d.id !== id));
-    setSelectedIds(selectedIds.filter(sid => sid !== id));
+    setDispatches(prev => prev.filter(d => d.id !== id));
+    setSelectedIds(prev => prev.filter(sid => sid !== id));
   };
 
-  // Delete multiple
+  // 🔹 Delete multiple
   const handleDeleteSelected = async () => {
-    if (!isAdmin) return alert("You do not have permission to delete records!");
+    if (!isAdmin) return alert("No permission");
     if (!selectedIds.length) return alert("Select records first");
     if (!window.confirm(`Delete ${selectedIds.length} records?`)) return;
 
@@ -84,103 +93,131 @@ const ShowDispatch = () => {
       await deleteDoc(doc(db, "TblDispatch", id));
     }
 
-    setDispatches(dispatches.filter(d => !selectedIds.includes(d.id)));
+    setDispatches(prev => prev.filter(d => !selectedIds.includes(d.id)));
     setSelectedIds([]);
   };
 
-  // Edit
+  // 🔹 Edit
   const handleEdit = (d) => {
     if (!isAdmin) return;
     setEditId(d.id);
-    setEditData({
-      ChallanNo: d.ChallanNo,
-      Destination: d.Destination,
-      DispatchQuantity: d.DispatchQuantity,
-      VehicleNo: d.VehicleNo || ""
-    });
+    setEditData({ ...d });
   };
 
-  // Save
+  // 🔹 Save
   const handleSave = async (id) => {
     if (!isAdmin) return;
-    await updateDoc(doc(db, "TblDispatch", id), {
-      ChallanNo: editData.ChallanNo,
-      Destination: editData.Destination,
-      DispatchQuantity: Number(editData.DispatchQuantity),
-      VehicleNo: editData.VehicleNo
-    });
 
-    setDispatches(dispatches.map(d => (d.id === id ? { ...d, ...editData } : d)));
+    const updatePayload = { ...editData };
+    delete updatePayload.id;
+    delete updatePayload.DisVid; // 🔴 never update DisVid
+
+    await updateDoc(doc(db, "TblDispatch", id), updatePayload);
+
+    setDispatches(prev =>
+      prev.map(d => (d.id === id ? { ...d, ...updatePayload } : d))
+    );
+
     setEditId(null);
   };
 
-  // Checkbox
+  // 🔹 Checkbox
   const handleCheckboxChange = (id) => {
     setSelectedIds(prev =>
-      prev.includes(id) ? prev.filter(sid => sid !== id) : [...prev, id]
+      prev.includes(id)
+        ? prev.filter(sid => sid !== id)
+        : [...prev, id]
     );
   };
 
-  // Filtering
+  // 🔹 Filtering
   const filteredDispatches = dispatches.filter(d => {
-    const matchesSearch =
-      d.ChallanNo?.toString().includes(searchTerm) ||
-      d.Destination?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      d.VehicleNo?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      d.FactoryName?.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesSearch = Object.values(d).some(val =>
+      val?.toString().toLowerCase().includes(searchTerm.toLowerCase())
+    );
 
     const matchesFactory = filterFactory ? d.DisVid === filterFactory : true;
-    const matchesFromDate = fromDate ? new Date(d.DispatchDate) >= new Date(fromDate) : true;
-    const matchesToDate = toDate ? new Date(d.DispatchDate) <= new Date(toDate) : true;
+
+    const matchesFromDate = fromDate
+      ? d.DispatchDate && new Date(d.DispatchDate) >= new Date(fromDate)
+      : true;
+
+    const matchesToDate = toDate
+      ? d.DispatchDate && new Date(d.DispatchDate) <= new Date(toDate)
+      : true;
 
     return matchesSearch && matchesFactory && matchesFromDate && matchesToDate;
   });
 
-  // Export to Excel
+  // 🔹 Export Excel (exclude created + DisVid)
   const exportToExcel = () => {
-    if (!filteredDispatches.length) return alert("No data to export");
+    if (!filteredDispatches.length) return alert("No data");
 
-    const excelData = filteredDispatches.map(d => ({
-      "Challan No": d.ChallanNo,
-      "Dispatch Date": d.DispatchDate ? new Date(d.DispatchDate).toLocaleDateString() : "",
-      "Destination": d.Destination,
-      "Quantity": d.DispatchQuantity,
-      "Vehicle No": d.VehicleNo,
-      "Factory": d.FactoryName
-    }));
+    const excelData = filteredDispatches.map(d => {
+      const row = {};
+      Object.keys(d).forEach(k => {
+        if (
+          k !== "id" &&
+          k !== "DisVid" &&
+          k.toLowerCase() !== "createdon" &&
+          k.toLowerCase() !== "created_at"
+        ) {
+          row[k] = d[k] instanceof Date ? formatShortDate(d[k]) : d[k];
+        }
+      });
+      return row;
+    });
 
-    const worksheet = XLSX.utils.json_to_sheet(excelData);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Dispatch");
+    const ws = XLSX.utils.json_to_sheet(excelData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Dispatch");
 
     XLSX.writeFile(
-      workbook,
+      wb,
       `Dispatch_Data_${new Date().toISOString().slice(0, 10)}.xlsx`
     );
   };
 
-  // Pagination
+  // 🔹 Pagination
   const totalPages = Math.ceil(filteredDispatches.length / recordsPerPage);
   const paginatedDispatches = filteredDispatches.slice(
     (currentPage - 1) * recordsPerPage,
     currentPage * recordsPerPage
   );
 
+  // 🔹 Collect columns (exclude created + DisVid)
+  const columns =
+    dispatches.length > 0
+      ? Object.keys(dispatches[0]).filter(
+          k =>
+            k !== "id" &&
+            k !== "DisVid" &&
+            k.toLowerCase() !== "createdon" &&
+            k.toLowerCase() !== "created_at"
+        )
+      : [];
+
   return (
-    <div style={{ padding: "20px" }}>
+    <div style={{ padding: 20 }}>
       <h2>Dispatch Data</h2>
 
-      {/* Filters */}
-      <div style={{ display: "flex", gap: "10px", marginBottom: "10px", flexWrap: "wrap" }}>
+      {/* 🔍 SEARCH + FILTER */}
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
         <input
           placeholder="Search..."
           value={searchTerm}
-          onChange={e => { setSearchTerm(e.target.value); setCurrentPage(1); }}
+          onChange={e => {
+            setSearchTerm(e.target.value);
+            setCurrentPage(1);
+          }}
         />
 
         <select
           value={filterFactory}
-          onChange={e => { setFilterFactory(e.target.value); setCurrentPage(1); }}
+          onChange={e => {
+            setFilterFactory(e.target.value);
+            setCurrentPage(1);
+          }}
         >
           <option value="">All Factories</option>
           <option value="10">JSW</option>
@@ -196,26 +233,27 @@ const ShowDispatch = () => {
         </button>
       </div>
 
-      {/* Delete selected button only for admin */}
       {isAdmin && selectedIds.length > 0 && (
-        <button onClick={handleDeleteSelected} style={{ background: "red", color: "#fff", marginBottom: 10 }}>
+        <button
+          onClick={handleDeleteSelected}
+          style={{ background: "red", color: "#fff", marginBottom: 10 }}
+        >
           Delete Selected ({selectedIds.length})
         </button>
       )}
 
+      {/* 🔹 TABLE */}
       <table border="1" width="100%">
         <thead>
           <tr>
             {isAdmin && <th></th>}
-            <th>Challan</th>
-            <th>Date</th>
-            <th>Destination</th>
-            <th>Qty</th>
-            <th>Vehicle</th>
-            <th>Factory</th>
+            {columns.map(col => (
+              <th key={col}>{col}</th>
+            ))}
             {isAdmin && <th>Action</th>}
           </tr>
         </thead>
+
         <tbody>
           {paginatedDispatches.map(d => (
             <tr key={d.id}>
@@ -228,12 +266,17 @@ const ShowDispatch = () => {
                   />
                 </td>
               )}
-              <td>{d.ChallanNo}</td>
-              <td>{d.DispatchDate?.toLocaleDateString()}</td>
-              <td>{d.Destination}</td>
-              <td>{d.DispatchQuantity}</td>
-              <td>{d.VehicleNo}</td>
-              <td>{d.FactoryName}</td>
+
+              {columns.map(col => (
+                <td key={col}>
+                  {col === "DispatchDate"
+                    ? formatShortDate(d[col])
+                    : d[col]?.seconds
+                    ? formatShortDate(new Date(d[col].seconds * 1000))
+                    : d[col]?.toString()}
+                </td>
+              ))}
+
               {isAdmin && (
                 <td>
                   <button onClick={() => handleEdit(d)}>Edit</button>{" "}
@@ -247,7 +290,7 @@ const ShowDispatch = () => {
 
       {!isAdmin && (
         <p style={{ marginTop: 20, color: "red" }}>
-          You are logged in as a normal user. You cannot edit or delete dispatch records.
+          Normal user — edit/delete disabled
         </p>
       )}
     </div>
