@@ -1,19 +1,59 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { db } from "../firebaseConfig";
-import { collection, addDoc, query, where, getDocs } from "firebase/firestore";
+import { collection, addDoc, getDocs, query, where } from "firebase/firestore";
 import * as XLSX from "xlsx";
 
-/* ------------------ CONSTANTS ------------------ */
+/* ---------------- HELPERS ---------------- */
 
-const DATE_FORMATS = ["dd.mm.yyyy", "dd/mm/yyyy", "mm/dd/yyyy", "yyyy-mm-dd"];
+// Clean vehicle: remove everything except letters & numbers, uppercase
+const cleanVehicle = (v = "") => v.toString().replace(/[^A-Z0-9]/gi, "").toUpperCase();
 
-const FACTORY_NAME_FIXES = {
-  MANIKGARH: "MANIGARH"
+// Extract last 4 digits robustly
+const extractLast4 = (v = "") => {
+  const cleaned = cleanVehicle(v);
+  const match = cleaned.match(/(\d{4})$/);
+  return match ? match[1] : null;
 };
 
-const FACTORY_COLUMN_MAPS = {
-  ORIENT: "dynamic",
-  ULTRATECH: "dynamic",
+// Robust Excel date parser
+const parseExcelDate = (v) => {
+  if (!v) return null;
+
+  // Excel numeric date
+  if (typeof v === "number") {
+    const d = XLSX.SSF.parse_date_code(v);
+    if (d) return new Date(d.y, d.m - 1, d.d);
+    return null;
+  }
+
+  // String date
+  const str = v.toString().trim();
+  let date = new Date(str);
+  if (!isNaN(date.getTime())) return date;
+
+  // Try dd-mm-yyyy or dd/mm/yyyy
+  const parts = str.split(/[-/]/);
+  if (parts.length === 3) {
+    const [d, m, y] = parts.map(Number);
+    if (!isNaN(d) && !isNaN(m) && !isNaN(y)) return new Date(y, m - 1, d);
+  }
+
+  return null; // invalid
+};
+
+/* ---------------- FACTORY MAP ---------------- */
+
+const FACTORY_MAP = {
+  JSW: {
+    VehicleNo: 0,
+    Qty: 1,
+    PartyName: 3,
+    Destination: 4,
+    ChallanNo: 6,
+    DispatchDate: 7,
+    Diesel: 8,
+    Advance: 9
+  },
   MANIGARH: {
     DispatchDate: 5,
     Qty: 3,
@@ -23,26 +63,6 @@ const FACTORY_COLUMN_MAPS = {
     Destination: 2,
     Advance: 10,
     Diesel: 9
-  },
-  ACC: {
-    DispatchDate: 0,
-    Qty: 5,
-    ChallanNo: 2,
-    VehicleNo: 3,
-    PartyName: 4,
-    Destination: 6,
-    Advance: 7,
-    Diesel: 8
-  },
-  "ACC MARATHA": {
-    DispatchDate: 0,
-    Qty: 5,
-    ChallanNo: 2,
-    VehicleNo: 3,
-    PartyName: 4,
-    Destination: 6,
-    Advance: 7,
-    Diesel: 8
   },
   AMBUJA: {
     DispatchDate: 0,
@@ -73,68 +93,32 @@ const FACTORY_COLUMN_MAPS = {
     Destination: 6,
     Advance: 7,
     Diesel: 8
-  },
-  JSW: {
-    VehicleNo: 0,
-    Qty: 1,
-    PartyName: 3,
-    Destination: 4,
-    ChallanNo: 6,
-    DispatchDate: 7,
-    Diesel: 8,
-    Advance: 9
   }
 };
 
-/* ------------------ HELPERS ------------------ */
-
-const parseExcelDate = (value) => {
-  if (!value) return null;
-
-  if (typeof value === "number") {
-    const d = XLSX.SSF.parse_date_code(value);
-    return d ? new Date(d.y, d.m - 1, d.d) : null;
-  }
-
-  const dt = new Date(value);
-  return isNaN(dt.getTime()) ? null : dt;
-};
-
-const normalizeVehicle = (value = "") => {
-  return value.toString().replace(/\s+/g, "").toUpperCase();
-};
-
-const extractLast4Digits = (value = "") => {
-  const match = normalizeVehicle(value).match(/(\d{4})$/);
-  return match ? match[1] : null;
-};
-
-/* ------------------ COMPONENT ------------------ */
+/* ---------------- COMPONENT ---------------- */
 
 const UploadDispatch = () => {
-  const [factory, setFactory] = useState("");
   const [file, setFile] = useState(null);
-  const [message, setMessage] = useState("");
+  const [factory, setFactory] = useState("");
   const [vehicles, setVehicles] = useState([]);
+  const [msg, setMsg] = useState("");
+  const [failedRows, setFailedRows] = useState([]);
 
-  /* ------------------ LOAD VEHICLES ------------------ */
+  // Load VehicleMaster once
   useEffect(() => {
-    const loadVehicles = async () => {
-      try {
-        const snap = await getDocs(collection(db, "VehicleMaster"));
-        const list = snap.docs.map(d => ({
-          id: d.id,
-          VehicleNo: d.data().VehicleNo,
-          last4: extractLast4Digits(d.data().VehicleNo)
-        }));
-        setVehicles(list);
-      } catch (err) {
-        console.error("Failed to load vehicles:", err);
-      }
+    const load = async () => {
+      const snap = await getDocs(collection(db, "VehicleMaster"));
+      const list = snap.docs.map(d => ({
+        id: d.id,
+        VehicleNo: d.data().VehicleNo
+      }));
+      setVehicles(list);
     };
-    loadVehicles();
+    load();
   }, []);
 
+  // Check for duplicate challan
   const isDuplicate = async (challan, factoryName) => {
     const q = query(
       collection(db, "TblDispatch"),
@@ -145,165 +129,138 @@ const UploadDispatch = () => {
     return !snap.empty;
   };
 
-  /* ------------------ MAIN UPLOAD ------------------ */
-  const handleUpload = async (e) => {
-    e.preventDefault();
-    setMessage("");
-
-    if (!file || !factory) {
-      setMessage("❌ File and Factory required");
-      return;
-    }
-
-    let factoryName = factory.toUpperCase().trim();
-    factoryName = FACTORY_NAME_FIXES[factoryName] || factoryName;
-
-    if (!FACTORY_COLUMN_MAPS[factoryName]) {
-      setMessage(`❌ Unknown factory: ${factoryName}`);
-      return;
-    }
-
-    try {
-      const buffer = await file.arrayBuffer();
-      const wb = XLSX.read(buffer);
-      const sheet = wb.Sheets[wb.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-
-      let dataRows = [];
-      let colMap = null;
-
-      /* -------- DYNAMIC FACTORIES -------- */
-      if (FACTORY_COLUMN_MAPS[factoryName] === "dynamic") {
-        const header = rows[1];
-        colMap = {};
-        header.forEach((h, i) => {
-          if (h) colMap[String(h).trim().toUpperCase()] = i;
-        });
-        dataRows = rows.slice(2);
-      } else {
-        colMap = FACTORY_COLUMN_MAPS[factoryName];
-        dataRows = rows;
-      }
-
-      let uploaded = 0;
-      let skippedVehicle = 0;
-
-      for (const row of dataRows) {
-        if (!row || row.every((v) => !v)) continue;
-
-        let rawDate, qty;
-
-        if (factoryName === "ORIENT") {
-          rawDate = row[colMap["DATE"]];
-          qty = Number(row[colMap["QTY"]] || 0);
-        } else if (factoryName === "ULTRATECH") {
-          rawDate = row[colMap["PGI DATE"]];
-          qty = Number(row[colMap["QUANTITY (MT)"]] || 0);
-        } else {
-          rawDate = row[colMap.DispatchDate];
-          qty = Number(row[colMap.Qty] || 0);
-        }
-
-        if (!rawDate || String(rawDate).toUpperCase().includes("TOTAL")) continue;
-        if (qty <= 0) continue;
-
-        const dispatchDate = parseExcelDate(rawDate);
-        if (!dispatchDate) continue;
-
-        const vehicleRaw = factoryName === "ORIENT"
-          ? row[colMap["TRUCK NUMBER"]]
-          : factoryName === "ULTRATECH"
-          ? row[colMap["TRUCK NO"]]
-          : row[colMap.VehicleNo];
-
-        const vehicleLast4 = extractLast4Digits(vehicleRaw);
-        if (!vehicleLast4) {
-          skippedVehicle++;
-          continue;
-        }
-
-        // 🔥 CHECK VEHICLE EXISTS
-        const matchedVehicle = vehicles.find(v => v.last4 === vehicleLast4);
-        if (!matchedVehicle) {
-          skippedVehicle++;
-          continue;
-        }
-
-        const challanNo = factoryName === "ORIENT"
-          ? row[colMap["DELIVERY ORDER 1"]]
-          : factoryName === "ULTRATECH"
-          ? row[colMap["DELIVERY NO"]]
-          : row[colMap.ChallanNo];
-
-        if (!challanNo) continue;
-        if (await isDuplicate(challanNo, factoryName)) continue;
-
-        const dto = {
-          DispatchDate: dispatchDate,
-          ChallanNo: String(challanNo).trim(),
-          VehicleNo: matchedVehicle.VehicleNo,
-          VehicleId: matchedVehicle.id,
-          PartyName: factoryName === "ORIENT"
-            ? row[colMap["SHIP TO PARTY NAME"]]
-            : factoryName === "ULTRATECH"
-            ? row[colMap["SOLD-TO-PARTY NAME"]]
-            : row[colMap.PartyName],
-          Destination: factoryName === "ORIENT"
-            ? row[colMap["DESTINATION"]]
-            : factoryName === "ULTRATECH"
-            ? row[colMap["CITY CODE DESCRIPTION"]]
-            : row[colMap.Destination],
-          DispatchQuantity: qty,
-          Advance: Number(row[colMap.Advance] || 0),
-          Diesel: Number(row[colMap.Diesel] || 0),
-          FactoryName: factoryName,
-          CreatedOn: new Date()
-        };
-
-        await addDoc(collection(db, "TblDispatch"), dto);
-        uploaded++;
-      }
-
-      setMessage(`✅ ${uploaded} rows uploaded, 🚫 ${skippedVehicle} skipped (vehicle not found) for ${factoryName}`);
-      setFile(null);
-    } catch (err) {
-      console.error(err);
-      setMessage("❌ Upload failed");
-    }
+  // Export failed rows to Excel
+  const exportFailed = () => {
+    if (!failedRows.length) return;
+    const ws = XLSX.utils.json_to_sheet(failedRows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "FailedRows");
+    XLSX.writeFile(wb, "FailedDispatch.xlsx");
   };
 
-  /* ------------------ UI ------------------ */
-  return (
-    <div style={{ maxWidth: 600, margin: "20px auto" }}>
-      <h3>Upload Dispatch Excel</h3>
+  // Handle Upload
+  const handleUpload = async (e) => {
+    e.preventDefault();
+    setMsg("");
+    setFailedRows([]);
 
-      {message && <div>{message}</div>}
+    if (!file || !factory) {
+      setMsg("❌ File & Factory required");
+      return;
+    }
+
+    const factoryName = factory.toUpperCase().trim();
+    const map = FACTORY_MAP[factoryName];
+    if (!map) {
+      setMsg("❌ Factory mapping not found");
+      return;
+    }
+
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf);
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+    let uploaded = 0;
+    let failed = [];
+
+    for (let i = 1; i < rows.length; i++) {
+      const r = rows[i];
+      if (!r || r.every(v => !v)) continue;
+
+      const rawVehicle = r[map.VehicleNo];
+      const last4 = extractLast4(rawVehicle);
+
+      if (!last4) {
+        failed.push({ row: i + 1, vehicle: rawVehicle, reason: "Invalid vehicle" });
+        continue;
+      }
+
+      // ✅ Robust VehicleMaster check
+      const exists = vehicles.some(v => extractLast4(v.VehicleNo) === last4);
+      if (!exists) {
+        failed.push({ row: i + 1, vehicle: rawVehicle, reason: "Vehicle not in master" });
+        continue;
+      }
+
+      const date = parseExcelDate(r[map.DispatchDate]);
+      if (!date) {
+        failed.push({ row: i + 1, vehicle: rawVehicle, reason: "Invalid date" });
+        continue;
+      }
+
+      const challan = r[map.ChallanNo];
+      if (!challan) continue;
+
+      if (await isDuplicate(challan, factoryName)) continue;
+
+      await addDoc(collection(db, "TblDispatch"), {
+        DispatchDate: date,
+        ChallanNo: String(challan),
+        VehicleNo: cleanVehicle(rawVehicle),
+        DispatchQuantity: Number(r[map.Qty] || 0),
+        PartyName: r[map.PartyName],
+        Destination: r[map.Destination],
+        Advance: Number(r[map.Advance] || 0),
+        Diesel: Number(r[map.Diesel] || 0),
+        FactoryName: factoryName,
+        CreatedOn: new Date()
+      });
+
+      uploaded++;
+    }
+
+    setFailedRows(failed);
+    setMsg(`✅ ${uploaded} uploaded | ❌ ${failed.length} failed`);
+  };
+
+  return (
+    <div style={{ maxWidth: 700, margin: "auto" }}>
+      <h3>Upload Dispatch</h3>
+
+      {msg && <p>{msg}</p>}
 
       <form onSubmit={handleUpload}>
-        <select value={factory} onChange={(e) => setFactory(e.target.value)} required>
+        <select value={factory} onChange={e => setFactory(e.target.value)} required>
           <option value="">-- Select Factory --</option>
-          <option>ACC MARATHA</option>
-          <option>AMBUJA</option>
-          <option>DALMIA</option>
-          <option>MP BIRLA</option>
-          <option>ORIENT</option>
-          <option>MANIKGARH</option>
-          <option>ULTRATECH</option>
-          <option>JSW</option>
+          {Object.keys(FACTORY_MAP).map(f => (
+            <option key={f}>{f}</option>
+          ))}
         </select>
 
         <br /><br />
 
-        <input
-          type="file"
-          accept=".xlsx,.xls"
-          onChange={(e) => setFile(e.target.files[0])}
-          required
-        />
-
+        <input type="file" accept=".xlsx,.xls" onChange={e => setFile(e.target.files[0])} required />
         <br /><br />
         <button type="submit">Upload</button>
       </form>
+
+      {failedRows.length > 0 && (
+        <div style={{ marginTop: 20 }}>
+          <h4>Failed Rows</h4>
+          <table border={1} cellPadding={5}>
+            <thead>
+              <tr>
+                <th>Row</th>
+                <th>Vehicle</th>
+                <th>Reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              {failedRows.map((f, idx) => (
+                <tr key={idx}>
+                  <td>{f.row}</td>
+                  <td>{f.vehicle}</td>
+                  <td>{f.reason}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <button onClick={exportFailed} style={{ marginTop: 10 }}>
+            Export Failed Rows
+          </button>
+        </div>
+      )}
     </div>
   );
 };

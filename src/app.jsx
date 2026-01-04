@@ -10,6 +10,8 @@ import VehicleMaster from "./pages/VehicleMaster";
 import BillUpload from "./pages/BillUpload.jsx"; // ✅ ADDED
 import { auth, isAdminUser } from "./firebaseConfig";
 import { onAuthStateChanged } from "firebase/auth";
+import ShowBill from "./pages/ShowBill.jsx";
+
 
 const App = () => {
   const [user, setUser] = useState(null);
@@ -63,6 +65,8 @@ const App = () => {
           <Route path="factories" element={<FactoryList isAdmin={isAdmin} />} />
           <Route path="show-dispatch" element={<ShowDispatch isAdmin={isAdmin} />} />
           <Route path="vehicle-master" element={<VehicleMaster />} />
+          <Route path="show-bill" element={<ShowBill />} />
+
         </Route>
 
         {/* Fallback */}

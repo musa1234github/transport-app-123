@@ -48,6 +48,17 @@ const Home = ({ user, isAdmin }) => {
             </Link>
           </li>
         )}
+        {/* Show Bills → ADMIN & NORMAL USER */}
+        <li>
+          🧾{" "}
+          <Link
+            to="/show-bill"
+            style={{ color: "blue", textDecoration: "underline" }}
+          >
+            Show Bills
+          </Link>
+        </li>
+
 
         {/* Destination Master → ONLY ADMIN */}
         {isAdmin && (
@@ -67,6 +78,7 @@ const Home = ({ user, isAdmin }) => {
               Vehicle Master
             </Link>
           </li>
+
         )}
 
         <li>
