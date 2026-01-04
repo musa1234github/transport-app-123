@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { db } from "../firebaseConfig";
 import { collection, addDoc, query, where, getDocs } from "firebase/firestore";
 import * as XLSX from "xlsx";
@@ -14,7 +14,6 @@ const FACTORY_NAME_FIXES = {
 const FACTORY_COLUMN_MAPS = {
   ORIENT: "dynamic",
   ULTRATECH: "dynamic",
-
   MANIGARH: {
     DispatchDate: 5,
     Qty: 3,
@@ -25,7 +24,6 @@ const FACTORY_COLUMN_MAPS = {
     Advance: 10,
     Diesel: 9
   },
-
   ACC: {
     DispatchDate: 0,
     Qty: 5,
@@ -36,7 +34,6 @@ const FACTORY_COLUMN_MAPS = {
     Advance: 7,
     Diesel: 8
   },
-
   "ACC MARATHA": {
     DispatchDate: 0,
     Qty: 5,
@@ -47,7 +44,6 @@ const FACTORY_COLUMN_MAPS = {
     Advance: 7,
     Diesel: 8
   },
-
   AMBUJA: {
     DispatchDate: 0,
     Qty: 5,
@@ -58,7 +54,6 @@ const FACTORY_COLUMN_MAPS = {
     Advance: 7,
     Diesel: 8
   },
-
   DALMIA: {
     DispatchDate: 0,
     Qty: 5,
@@ -69,7 +64,6 @@ const FACTORY_COLUMN_MAPS = {
     Advance: 7,
     Diesel: 8
   },
-
   "MP BIRLA": {
     DispatchDate: 0,
     Qty: 5,
@@ -80,7 +74,6 @@ const FACTORY_COLUMN_MAPS = {
     Advance: 7,
     Diesel: 8
   },
-
   JSW: {
     VehicleNo: 0,
     Qty: 1,
@@ -107,10 +100,40 @@ const parseExcelDate = (value) => {
   return isNaN(dt.getTime()) ? null : dt;
 };
 
+const normalizeVehicle = (value = "") => {
+  return value.toString().replace(/\s+/g, "").toUpperCase();
+};
+
+const extractLast4Digits = (value = "") => {
+  const match = normalizeVehicle(value).match(/(\d{4})$/);
+  return match ? match[1] : null;
+};
+
+/* ------------------ COMPONENT ------------------ */
+
 const UploadDispatch = () => {
   const [factory, setFactory] = useState("");
   const [file, setFile] = useState(null);
   const [message, setMessage] = useState("");
+  const [vehicles, setVehicles] = useState([]);
+
+  /* ------------------ LOAD VEHICLES ------------------ */
+  useEffect(() => {
+    const loadVehicles = async () => {
+      try {
+        const snap = await getDocs(collection(db, "VehicleMaster"));
+        const list = snap.docs.map(d => ({
+          id: d.id,
+          VehicleNo: d.data().VehicleNo,
+          last4: extractLast4Digits(d.data().VehicleNo)
+        }));
+        setVehicles(list);
+      } catch (err) {
+        console.error("Failed to load vehicles:", err);
+      }
+    };
+    loadVehicles();
+  }, []);
 
   const isDuplicate = async (challan, factoryName) => {
     const q = query(
@@ -123,7 +146,6 @@ const UploadDispatch = () => {
   };
 
   /* ------------------ MAIN UPLOAD ------------------ */
-
   const handleUpload = async (e) => {
     e.preventDefault();
     setMessage("");
@@ -164,6 +186,7 @@ const UploadDispatch = () => {
       }
 
       let uploaded = 0;
+      let skippedVehicle = 0;
 
       for (const row of dataRows) {
         if (!row || row.every((v) => !v)) continue;
@@ -187,40 +210,49 @@ const UploadDispatch = () => {
         const dispatchDate = parseExcelDate(rawDate);
         if (!dispatchDate) continue;
 
+        const vehicleRaw = factoryName === "ORIENT"
+          ? row[colMap["TRUCK NUMBER"]]
+          : factoryName === "ULTRATECH"
+          ? row[colMap["TRUCK NO"]]
+          : row[colMap.VehicleNo];
+
+        const vehicleLast4 = extractLast4Digits(vehicleRaw);
+        if (!vehicleLast4) {
+          skippedVehicle++;
+          continue;
+        }
+
+        // 🔥 CHECK VEHICLE EXISTS
+        const matchedVehicle = vehicles.find(v => v.last4 === vehicleLast4);
+        if (!matchedVehicle) {
+          skippedVehicle++;
+          continue;
+        }
+
+        const challanNo = factoryName === "ORIENT"
+          ? row[colMap["DELIVERY ORDER 1"]]
+          : factoryName === "ULTRATECH"
+          ? row[colMap["DELIVERY NO"]]
+          : row[colMap.ChallanNo];
+
+        if (!challanNo) continue;
+        if (await isDuplicate(challanNo, factoryName)) continue;
+
         const dto = {
           DispatchDate: dispatchDate,
-          ChallanNo: String(
-            factoryName === "ORIENT"
-              ? row[colMap["DELIVERY ORDER 1"]]
-              : factoryName === "ULTRATECH"
-              ? row[colMap["DELIVERY NO"]]
-              : row[colMap.ChallanNo]
-          ).trim(),
-
-          VehicleNo: String(
-            factoryName === "ORIENT"
-              ? row[colMap["TRUCK NUMBER"]]
-              : factoryName === "ULTRATECH"
-              ? row[colMap["TRUCK NO"]]
-              : row[colMap.VehicleNo]
-          ).trim(),
-
-          PartyName: String(
-            factoryName === "ORIENT"
-              ? row[colMap["SHIP TO PARTY NAME"]]
-              : factoryName === "ULTRATECH"
-              ? row[colMap["SOLD-TO-PARTY NAME"]]
-              : row[colMap.PartyName]
-          ).trim(),
-
-          Destination: String(
-            factoryName === "ORIENT"
-              ? row[colMap["DESTINATION"]]
-              : factoryName === "ULTRATECH"
-              ? row[colMap["CITY CODE DESCRIPTION"]]
-              : row[colMap.Destination]
-          ).trim(),
-
+          ChallanNo: String(challanNo).trim(),
+          VehicleNo: matchedVehicle.VehicleNo,
+          VehicleId: matchedVehicle.id,
+          PartyName: factoryName === "ORIENT"
+            ? row[colMap["SHIP TO PARTY NAME"]]
+            : factoryName === "ULTRATECH"
+            ? row[colMap["SOLD-TO-PARTY NAME"]]
+            : row[colMap.PartyName],
+          Destination: factoryName === "ORIENT"
+            ? row[colMap["DESTINATION"]]
+            : factoryName === "ULTRATECH"
+            ? row[colMap["CITY CODE DESCRIPTION"]]
+            : row[colMap.Destination],
           DispatchQuantity: qty,
           Advance: Number(row[colMap.Advance] || 0),
           Diesel: Number(row[colMap.Diesel] || 0),
@@ -228,14 +260,11 @@ const UploadDispatch = () => {
           CreatedOn: new Date()
         };
 
-        if (!dto.ChallanNo || !dto.VehicleNo) continue;
-        if (await isDuplicate(dto.ChallanNo, factoryName)) continue;
-
         await addDoc(collection(db, "TblDispatch"), dto);
         uploaded++;
       }
 
-      setMessage(`✅ ${uploaded} rows uploaded for ${factoryName}`);
+      setMessage(`✅ ${uploaded} rows uploaded, 🚫 ${skippedVehicle} skipped (vehicle not found) for ${factoryName}`);
       setFile(null);
     } catch (err) {
       console.error(err);
@@ -244,7 +273,6 @@ const UploadDispatch = () => {
   };
 
   /* ------------------ UI ------------------ */
-
   return (
     <div style={{ maxWidth: 600, margin: "20px auto" }}>
       <h3>Upload Dispatch Excel</h3>
