@@ -6,10 +6,10 @@ import FactoryList from "./pages/FactoryList.jsx";
 import UploadDispatch from "./pages/UploadDispatch.jsx";
 import DestinationMaster from "./pages/DestinationMaster.jsx";
 import ShowDispatch from "./pages/ShowDispatch.jsx";
+import VehicleMaster from "./pages/VehicleMaster";
+import BillUpload from "./pages/BillUpload.jsx"; // ✅ ADDED
 import { auth, isAdminUser } from "./firebaseConfig";
 import { onAuthStateChanged } from "firebase/auth";
-import VehicleMaster from "./pages/VehicleMaster";
-
 
 const App = () => {
   const [user, setUser] = useState(null);
@@ -45,18 +45,24 @@ const App = () => {
     <BrowserRouter>
       <Routes>
         {/* Public route */}
-        <Route path="/login" element={!user ? <Login /> : <Navigate to="/" />} />
+        <Route
+          path="/login"
+          element={!user ? <Login /> : <Navigate to="/" />}
+        />
 
         {/* Private routes */}
         <Route
           path="/"
-          element={user ? <Home user={user} isAdmin={isAdmin} /> : <Navigate to="/login" />}
+          element={
+            user ? <Home user={user} isAdmin={isAdmin} /> : <Navigate to="/login" />
+          }
         >
           <Route path="upload-dispatch" element={<UploadDispatch isAdmin={isAdmin} />} />
+          <Route path="bill-upload" element={<BillUpload isAdmin={isAdmin} />} /> {/* ✅ ADDED */}
           <Route path="destination-master" element={<DestinationMaster isAdmin={isAdmin} />} />
           <Route path="factories" element={<FactoryList isAdmin={isAdmin} />} />
           <Route path="show-dispatch" element={<ShowDispatch isAdmin={isAdmin} />} />
-          <Route path="/vehicle-master" element={<VehicleMaster />} />
+          <Route path="vehicle-master" element={<VehicleMaster />} />
         </Route>
 
         {/* Fallback */}

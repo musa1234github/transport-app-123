@@ -33,11 +33,18 @@ const Home = ({ user, isAdmin }) => {
         {isAdmin && (
           <li>
             🚚{" "}
-            <Link
-              to="/upload-dispatch"
-              style={{ color: "blue", textDecoration: "underline" }}
-            >
+            <Link to="/upload-dispatch" style={{ color: "blue", textDecoration: "underline" }}>
               Dispatch Upload
+            </Link>
+          </li>
+        )}
+
+        {/* Bill Upload → ONLY ADMIN */}
+        {isAdmin && (
+          <li>
+            🧾{" "}
+            <Link to="/bill-upload" style={{ color: "blue", textDecoration: "underline" }}>
+              Bill Upload
             </Link>
           </li>
         )}
@@ -46,10 +53,7 @@ const Home = ({ user, isAdmin }) => {
         {isAdmin && (
           <li>
             🗺️{" "}
-            <Link
-              to="/destination-master"
-              style={{ color: "blue", textDecoration: "underline" }}
-            >
+            <Link to="/destination-master" style={{ color: "blue", textDecoration: "underline" }}>
               Destination Master
             </Link>
           </li>
@@ -59,10 +63,7 @@ const Home = ({ user, isAdmin }) => {
         {isAdmin && (
           <li>
             🚛{" "}
-            <Link
-              to="/vehicle-master"
-              style={{ color: "blue", textDecoration: "underline" }}
-            >
+            <Link to="/vehicle-master" style={{ color: "blue", textDecoration: "underline" }}>
               Vehicle Master
             </Link>
           </li>
@@ -70,20 +71,14 @@ const Home = ({ user, isAdmin }) => {
 
         <li>
           🏭{" "}
-          <Link
-            to="/factories"
-            style={{ color: "blue", textDecoration: "underline" }}
-          >
+          <Link to="/factories" style={{ color: "blue", textDecoration: "underline" }}>
             Factories
           </Link>
         </li>
 
         <li>
           📦{" "}
-          <Link
-            to="/show-dispatch"
-            style={{ color: "blue", textDecoration: "underline" }}
-          >
+          <Link to="/show-dispatch" style={{ color: "blue", textDecoration: "underline" }}>
             Show Dispatch
           </Link>
         </li>
