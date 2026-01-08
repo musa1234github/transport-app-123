@@ -33,7 +33,10 @@ const Home = ({ user, isAdmin }) => {
         {isAdmin && (
           <li>
             🚚{" "}
-            <Link to="/upload-dispatch" style={{ color: "blue", textDecoration: "underline" }}>
+            <Link
+              to="/upload-dispatch"
+              style={{ color: "blue", textDecoration: "underline" }}
+            >
               Dispatch Upload
             </Link>
           </li>
@@ -43,11 +46,15 @@ const Home = ({ user, isAdmin }) => {
         {isAdmin && (
           <li>
             🧾{" "}
-            <Link to="/bill-upload" style={{ color: "blue", textDecoration: "underline" }}>
+            <Link
+              to="/bill-upload"
+              style={{ color: "blue", textDecoration: "underline" }}
+            >
               Bill Upload
             </Link>
           </li>
         )}
+
         {/* Show Bills → ADMIN & NORMAL USER */}
         <li>
           🧾{" "}
@@ -59,12 +66,14 @@ const Home = ({ user, isAdmin }) => {
           </Link>
         </li>
 
-
         {/* Destination Master → ONLY ADMIN */}
         {isAdmin && (
           <li>
             🗺️{" "}
-            <Link to="/destination-master" style={{ color: "blue", textDecoration: "underline" }}>
+            <Link
+              to="/destination-master"
+              style={{ color: "blue", textDecoration: "underline" }}
+            >
               Destination Master
             </Link>
           </li>
@@ -74,26 +83,50 @@ const Home = ({ user, isAdmin }) => {
         {isAdmin && (
           <li>
             🚛{" "}
-            <Link to="/vehicle-master" style={{ color: "blue", textDecoration: "underline" }}>
+            <Link
+              to="/vehicle-master"
+              style={{ color: "blue", textDecoration: "underline" }}
+            >
               Vehicle Master
             </Link>
           </li>
-
         )}
 
+        {/* Factories */}
         <li>
           🏭{" "}
-          <Link to="/factories" style={{ color: "blue", textDecoration: "underline" }}>
+          <Link
+            to="/factories"
+            style={{ color: "blue", textDecoration: "underline" }}
+          >
             Factories
           </Link>
         </li>
 
+        {/* Show Dispatch */}
         <li>
           📦{" "}
-          <Link to="/show-dispatch" style={{ color: "blue", textDecoration: "underline" }}>
+          <Link
+            to="/show-dispatch"
+            style={{ color: "blue", textDecoration: "underline" }}
+          >
             Show Dispatch
           </Link>
         </li>
+
+       
+        {/* Delete Dispatch → ONLY ADMIN */}
+        {isAdmin && (
+          <li>
+            ❌{" "}
+            <Link
+              to="/delete-dispatch"
+              style={{ color: "red", textDecoration: "underline" }}
+            >
+              Delete Dispatch Data
+            </Link>
+          </li>
+        )}
       </ul>
 
       {!isAdmin && (
@@ -105,7 +138,9 @@ const Home = ({ user, isAdmin }) => {
       <hr />
 
       <Outlet />
+
       <br />
+
       <button onClick={handleLogout}>Logout</button>
     </div>
   );

@@ -7,11 +7,11 @@ import UploadDispatch from "./pages/UploadDispatch.jsx";
 import DestinationMaster from "./pages/DestinationMaster.jsx";
 import ShowDispatch from "./pages/ShowDispatch.jsx";
 import VehicleMaster from "./pages/VehicleMaster";
-import BillUpload from "./pages/BillUpload.jsx"; // ✅ ADDED
+import BillUpload from "./pages/BillUpload.jsx";
+import ShowBill from "./pages/ShowBill.jsx";
+import DeleteDispatch from "./pages/DeleteDispatch.jsx";
 import { auth, isAdminUser } from "./firebaseConfig";
 import { onAuthStateChanged } from "firebase/auth";
-import ShowBill from "./pages/ShowBill.jsx";
-
 
 const App = () => {
   const [user, setUser] = useState(null);
@@ -46,30 +46,35 @@ const App = () => {
   return (
     <BrowserRouter>
       <Routes>
-        {/* Public route */}
+        {/* ================= PUBLIC ROUTE ================= */}
         <Route
           path="/login"
           element={!user ? <Login /> : <Navigate to="/" />}
         />
 
-        {/* Private routes */}
+        {/* ================= PRIVATE ROUTES ================= */}
         <Route
           path="/"
           element={
-            user ? <Home user={user} isAdmin={isAdmin} /> : <Navigate to="/login" />
+            user ? (
+              <Home user={user} isAdmin={isAdmin} />
+            ) : (
+              <Navigate to="/login" />
+            )
           }
         >
           <Route path="upload-dispatch" element={<UploadDispatch isAdmin={isAdmin} />} />
-          <Route path="bill-upload" element={<BillUpload isAdmin={isAdmin} />} /> {/* ✅ ADDED */}
+          <Route path="bill-upload" element={<BillUpload isAdmin={isAdmin} />} />
           <Route path="destination-master" element={<DestinationMaster isAdmin={isAdmin} />} />
           <Route path="factories" element={<FactoryList isAdmin={isAdmin} />} />
           <Route path="show-dispatch" element={<ShowDispatch isAdmin={isAdmin} />} />
           <Route path="vehicle-master" element={<VehicleMaster />} />
           <Route path="show-bill" element={<ShowBill />} />
-
+          <Route path="delete-dispatch" element={<DeleteDispatch />} />
+          
         </Route>
 
-        {/* Fallback */}
+        {/* ================= FALLBACK ================= */}
         <Route path="*" element={<Navigate to={user ? "/" : "/login"} />} />
       </Routes>
     </BrowserRouter>

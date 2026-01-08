@@ -1,330 +1,235 @@
 import React, { useEffect, useState } from "react";
-import { db, auth } from "../firebaseConfig";
+import { db } from "../firebaseConfig";
 import {
   collection,
   getDocs,
   deleteDoc,
   updateDoc,
-  doc,
-  query,
-  where
+  doc
 } from "firebase/firestore";
 import * as XLSX from "xlsx";
 
-/* ================= COLUMNS ================= */
-const COLUMN_SEQUENCE = [
-  "FactoryName",
-  "BillNum",
-  "BillDate",
-  "TotalQty"
-];
+/* ===== SAFE DATE ===== */
+const toDate = (v) => {
+  if (!v) return null;
+  if (v.seconds) return new Date(v.seconds * 1000);
+  const d = new Date(v);
+  return isNaN(d.getTime()) ? null : d;
+};
 
-/* ================= DATE FORMAT ================= */
-const formatShortDate = (date) => {
-  if (!date) return "";
-  const d = new Date(date);
-  return `${String(d.getDate()).padStart(2, "0")}-${String(
-    d.getMonth() + 1
-  ).padStart(2, "0")}-${d.getFullYear()}`;
+/* ===== SAFE NUMBER ===== */
+const toNum = (v) => {
+  if (v === null || v === undefined || v === "") return 0;
+  if (typeof v === "string") v = v.replace(/,/g, "");
+  const n = parseFloat(v);
+  return isNaN(n) ? 0 : n;
 };
 
 const ShowBill = () => {
-  const [bills, setBills] = useState([]);
-  const [dispatchMap, setDispatchMap] = useState({});
-  const [expandedBillIds, setExpandedBillIds] = useState([]);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [filterFactory, setFilterFactory] = useState("");
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
-  const [currentPage, setCurrentPage] = useState(1);
-  const [selectedIds, setSelectedIds] = useState([]);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [rows, setRows] = useState([]);
+  const [dispatchRows, setDispatchRows] = useState({});
+  const [selectedBillId, setSelectedBillId] = useState(null);
 
-  const recordsPerPage = 10;
+  const load = async () => {
+    const billSnap = await getDocs(collection(db, "BillTable"));
+    const dispSnap = await getDocs(collection(db, "TblDispatch"));
 
-  /* ================= ADMIN CHECK ================= */
-  useEffect(() => {
-    const checkAdmin = async () => {
-      if (auth.currentUser) {
-        const token = await auth.currentUser.getIdTokenResult();
-        setIsAdmin(!!token.claims.admin);
-      }
-    };
-    checkAdmin();
-  }, []);
+    const billMap = {};
+    billSnap.docs.forEach(b => {
+      billMap[b.id] = b.data();
+    });
 
-  /* ================= FETCH BILLS & DISPATCHES ================= */
-  useEffect(() => {
-    const fetchData = async () => {
-      const billSnap = await getDocs(collection(db, "BillTable"));
-      const dispatchSnap = await getDocs(collection(db, "TblDispatch"));
+    const reportMap = {};
+    const dispatchMap = {};
 
-      const map = {};
-      dispatchSnap.docs.forEach(ds => {
-        const d = ds.data();
-        if (!d.BillID) return;
-        if (!map[d.BillID]) map[d.BillID] = [];
-        map[d.BillID].push({
-          id: ds.id,
-          ChallanNo: d.ChallanNo || "",
-          DispatchDate: d.DispatchDate ? new Date(d.DispatchDate) : null,
-          Qty: d.DispatchQuantity || 0,
-          UnitPrice: d.UnitPrice || 0,
-          Destination: d.Destination || ""
-        });
+    dispSnap.docs.forEach(d => {
+      const r = d.data();
+      if (!r.BillID || !billMap[r.BillID]) return;
+
+      const bill = billMap[r.BillID];
+      const dispatchDate = toDate(r.DispatchDate);
+      const billDate = toDate(bill.BillDate);
+
+      if (!dispatchMap[r.BillID]) dispatchMap[r.BillID] = [];
+
+      dispatchMap[r.BillID].push({
+        id: d.id,
+        ChallanNo: r.ChallanNo || "",
+        DispatchDate: dispatchDate
+          ? dispatchDate.toLocaleDateString("en-GB")
+          : "",
+        Quantity: toNum(r.DispatchQuantity),
+        UnitPrice: toNum(r.UnitPrice),
+        FinalPrice: toNum(r.FinalPrice),
+        VehicleNo: r.VehicleNo || "",
+        LRNo: r.LRNo || "",
+        DeliveryNum: r.DeliveryNum || ""
       });
-      setDispatchMap(map);
 
-      const billsData = billSnap.docs.map(bs => {
-        const b = bs.data();
-        return {
-          id: bs.id,
-          FactoryName: b.FactoryName || "",
-          BillNum: b.BillNum || "",
-          BillDate: b.BillDate?.seconds
-            ? new Date(b.BillDate.seconds * 1000)
-            : b.BillDate
-              ? new Date(b.BillDate)
-              : null,
-          TotalQty: map[bs.id]?.reduce((sum, d) => sum + Number(d.Qty), 0) || 0
+      if (!reportMap[r.BillID]) {
+        reportMap[r.BillID] = {
+          BillID: r.BillID,
+          "Dispatch Month": dispatchDate
+            ? dispatchDate.toLocaleString("en-US", { month: "long" })
+            : "",
+          Factory: bill.FactoryName || r.FactoryName || "",
+          "Bill Num": bill.BillNum || "",
+          "LR Qty": 0,
+          "Bill Qty": 0,
+          "TAXABLE": 0,
+          "Final Price": 0,
+          "Bill Date": billDate
+            ? billDate.toLocaleDateString("en-GB")
+            : "",
+          "Bill Type": bill.BillType || ""
         };
-      });
+      }
 
-      setBills(billsData);
-    };
+      reportMap[r.BillID]["LR Qty"] += 1;
+      reportMap[r.BillID]["Bill Qty"] += toNum(r.DispatchQuantity);
+      reportMap[r.BillID]["TAXABLE"] +=
+        toNum(r.DispatchQuantity) * toNum(r.UnitPrice);
+      reportMap[r.BillID]["Final Price"] += toNum(r.FinalPrice);
+    });
 
-    fetchData();
+    const result = Object.values(reportMap).map(r => {
+      const taxable = r["TAXABLE"];
+      const gst = taxable * 0.18;
+      const tds = taxable * 0.00984;
+      const actAmt = taxable + gst;
+
+      return {
+        ...r,
+        "Bill Qty": r["Bill Qty"].toFixed(2),
+        "TAXABLE": taxable.toFixed(2),
+        "TDS": tds.toFixed(2),
+        "GST": gst.toFixed(2),
+        "Act. Amt": actAmt.toFixed(2),
+        "Final Price": r["Final Price"].toFixed(2)
+      };
+    });
+
+    setRows(result);
+    setDispatchRows(dispatchMap);
+  };
+
+  useEffect(() => {
+    load();
   }, []);
 
-  /* ================= FILTER ================= */
-  const filteredBills = bills.filter(b => {
-    const matchesSearch = Object.values(b).some(v =>
-      v?.toString().toLowerCase().includes(searchTerm.toLowerCase())
-    );
+  /* ===== DELETE BILL (SAFE) ===== */
+  const deleteBill = async (billId, billNum) => {
+    if (!window.confirm(`Delete bill ${billNum} ?`)) return;
 
-    const matchesFactory = filterFactory
-      ? b.FactoryName === filterFactory
-      : true;
-
-    const matchesFromDate = fromDate
-      ? b.BillDate && b.BillDate >= new Date(fromDate)
-      : true;
-
-    const matchesToDate = toDate
-      ? b.BillDate && b.BillDate <= new Date(toDate)
-      : true;
-
-    return matchesSearch && matchesFactory && matchesFromDate && matchesToDate;
-  });
-
-  /* ================= PAGINATION ================= */
-  const filteredCount = filteredBills.length;
-  const totalPages = Math.ceil(filteredCount / recordsPerPage);
-  const startIndex = (currentPage - 1) * recordsPerPage;
-
-  const paginatedBills = filteredBills.slice(
-    startIndex,
-    startIndex + recordsPerPage
-  );
-
-  /* ================= CHECKBOX ================= */
-  const handleCheckboxChange = (id) => {
-    setSelectedIds(prev =>
-      prev.includes(id)
-        ? prev.filter(x => x !== id)
-        : [...prev, id]
-    );
-  };
-
-  const isAllSelected =
-    paginatedBills.length > 0 &&
-    paginatedBills.every(b => selectedIds.includes(b.id));
-
-  const handleSelectAll = () => {
-    if (isAllSelected) {
-      setSelectedIds(prev =>
-        prev.filter(id => !paginatedBills.some(b => b.id === id))
-      );
-    } else {
-      setSelectedIds(prev => [
-        ...new Set([...prev, ...paginatedBills.map(b => b.id)])
-      ]);
+    // 1️⃣ Unlink dispatch rows
+    if (dispatchRows[billId]) {
+      for (const d of dispatchRows[billId]) {
+        await updateDoc(doc(db, "TblDispatch", d.id), {
+          BillID: null,
+          BillNum: null
+        });
+      }
     }
-  };
 
-  /* ================= DELETE ================= */
-  const unlinkDispatches = async (billId) => {
-    const q = query(
-      collection(db, "TblDispatch"),
-      where("BillID", "==", billId)
-    );
-
-    const snap = await getDocs(q);
-    for (let d of snap.docs) {
-      await updateDoc(doc(db, "TblDispatch", d.id), {
-        BillID: "",
-        UnitPrice: 0,
-        FinalPrice: 0
-      });
-    }
-  };
-
-  const handleDelete = async (billId) => {
-    if (!isAdmin) return;
-    if (!window.confirm("Delete this bill?")) return;
-
-    await unlinkDispatches(billId);
+    // 2️⃣ Delete bill
     await deleteDoc(doc(db, "BillTable", billId));
 
-    setBills(prev => prev.filter(b => b.id !== billId));
-    setSelectedIds(prev => prev.filter(id => id !== billId));
+    alert("Bill deleted successfully");
+
+    setSelectedBillId(null);
+    load();
   };
 
-  const handleDeleteSelected = async () => {
-    if (!isAdmin || !selectedIds.length) return;
-    if (!window.confirm(`Delete ${selectedIds.length} bills?`)) return;
+  const visibleBills = selectedBillId
+    ? rows.filter(r => r.BillID === selectedBillId)
+    : rows;
 
-    for (let id of selectedIds) {
-      await unlinkDispatches(id);
-      await deleteDoc(doc(db, "BillTable", id));
-    }
-
-    setBills(prev => prev.filter(b => !selectedIds.includes(b.id)));
-    setSelectedIds([]);
-  };
-
-  /* ================= EXCEL ================= */
-  const exportToExcel = () => {
-    if (!filteredBills.length) return;
-
-    const excelData = filteredBills.map(b => ({
-      FactoryName: b.FactoryName,
-      BillNum: b.BillNum,
-      BillDate: formatShortDate(b.BillDate),
-      TotalQty: b.TotalQty
-    }));
-
-    const ws = XLSX.utils.json_to_sheet(excelData);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Bills");
-    XLSX.writeFile(wb, "Bill_Data.xlsx");
-  };
-
-  /* ================= TOGGLE DISPATCH VIEW ================= */
-  const toggleExpand = (billId) => {
-    setExpandedBillIds(prev =>
-      prev.includes(billId)
-        ? prev.filter(id => id !== billId)
-        : [...prev, billId]
-    );
-  };
-
-  /* ================= UI ================= */
   return (
     <div style={{ padding: 20 }}>
-      <h2>Bill Data</h2>
+      <h2>Bill Report (Final)</h2>
 
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        <input
-          placeholder="Search..."
-          value={searchTerm}
-          onChange={e => {
-            setSearchTerm(e.target.value);
-            setCurrentPage(1);
-          }}
-        />
-
-        <select
-          value={filterFactory}
-          onChange={e => {
-            setFilterFactory(e.target.value);
-            setCurrentPage(1);
-          }}
-        >
-          <option value="">All Factories</option>
-          <option value="JSW">JSW</option>
-          <option value="MANIKGARH">Manikgarh</option>
-          <option value="ULTRATECH">Ultratech</option>
-          <option value="AMBUJA">Ambuja</option>
-          <option value="ACC MARATHA">ACC Maratha</option>
-          <option value="DALMIA">Dalmia</option>
-          <option value="MP BIRLA">MP Birla</option>
-          <option value="ORIENT">Orient</option>
-        </select>
-
-        <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} />
-        <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} />
-
-        <button onClick={exportToExcel}>Export Excel</button>
-      </div>
-
-      {isAdmin && selectedIds.length > 0 && (
-        <button onClick={handleDeleteSelected} style={{ marginTop: 10 }}>
-          Delete Selected ({selectedIds.length})
-        </button>
-      )}
-
-      <table border="1" width="100%" style={{ marginTop: 10, borderCollapse: "collapse" }}>
+      <table border="1" width="100%">
         <thead>
           <tr>
-            {isAdmin && (
-              <th>
-                <input
-                  type="checkbox"
-                  checked={isAllSelected}
-                  onChange={handleSelectAll}
-                />
-              </th>
-            )}
-            {COLUMN_SEQUENCE.map(col => (
-              <th key={col}>{col}</th>
-            ))}
+            <th>Dispatch Month</th>
+            <th>Factory</th>
+            <th>Bill Num</th>
+            <th>LR Qty</th>
+            <th>Bill Qty</th>
+            <th>TAXABLE</th>
+            <th>TDS</th>
+            <th>GST</th>
+            <th>Act. Amt</th>
+            <th>Final Price</th>
+            <th>Bill Date</th>
+            <th>Bill Type</th>
             <th>Action</th>
           </tr>
         </thead>
-
         <tbody>
-          {paginatedBills.map(b => (
-            <React.Fragment key={b.id}>
-              {/* Master row */}
-              <tr style={{ background: "#f9f9f9" }}>
-                {isAdmin && (
-                  <td>
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.includes(b.id)}
-                      onChange={() => handleCheckboxChange(b.id)}
-                    />
-                  </td>
-                )}
-                <td>{b.FactoryName}</td>
-                <td>{b.BillNum}</td>
-                <td>{formatShortDate(b.BillDate)}</td>
-                <td>{b.TotalQty}</td>
-                <td>
-                  <button onClick={() => handleDelete(b.id)}>Delete</button>{" "}
-                  <button onClick={() => toggleExpand(b.id)}>
-                    {expandedBillIds.includes(b.id) ? "Hide" : "View"}
-                  </button>
-                </td>
-              </tr>
-
-              {/* Dispatch rows */}
-              {expandedBillIds.includes(b.id) &&
-                (dispatchMap[b.id] || []).map(ds => (
-                  <tr key={ds.id} style={{ background: "#fff" }}>
-                    <td colSpan={1}></td>
-                    <td>{ds.ChallanNo}</td>
-                    <td>{formatShortDate(ds.DispatchDate)}</td>
-                    <td>{ds.Qty}</td>
-                    <td>{ds.UnitPrice}</td>
-                    <td>{ds.Destination}</td>
-                  </tr>
-                ))}
-            </React.Fragment>
+          {visibleBills.map((r, i) => (
+            <tr key={i}>
+              <td>{r["Dispatch Month"]}</td>
+              <td>{r.Factory}</td>
+              <td>{r["Bill Num"]}</td>
+              <td>{r["LR Qty"]}</td>
+              <td>{r["Bill Qty"]}</td>
+              <td>{r["TAXABLE"]}</td>
+              <td>{r["TDS"]}</td>
+              <td>{r["GST"]}</td>
+              <td>{r["Act. Amt"]}</td>
+              <td>{r["Final Price"]}</td>
+              <td>{r["Bill Date"]}</td>
+              <td>{r["Bill Type"]}</td>
+              <td>
+                <button onClick={() => setSelectedBillId(r.BillID)}>
+                  View
+                </button>{" "}
+                <button
+                  style={{ color: "red" }}
+                  onClick={() => deleteBill(r.BillID, r["Bill Num"])}
+                >
+                  Delete
+                </button>
+              </td>
+            </tr>
           ))}
         </tbody>
       </table>
+
+      {selectedBillId && dispatchRows[selectedBillId] && (
+        <>
+          <h3 style={{ marginTop: 20 }}>Dispatch Details</h3>
+          <table border="1" width="100%">
+            <thead>
+              <tr>
+                <th>Challan No</th>
+                <th>Dispatch Date</th>
+                <th>Vehicle No</th>
+                <th>LR No</th>
+                <th>Quantity</th>
+                <th>Unit Price</th>
+                <th>Final Price</th>
+                <th>Delivery No</th>
+              </tr>
+            </thead>
+            <tbody>
+              {dispatchRows[selectedBillId].map((d, i) => (
+                <tr key={i}>
+                  <td>{d.ChallanNo}</td>
+                  <td>{d.DispatchDate}</td>
+                  <td>{d.VehicleNo}</td>
+                  <td>{d.LRNo}</td>
+                  <td>{d.Quantity}</td>
+                  <td>{d.UnitPrice}</td>
+                  <td>{d.FinalPrice}</td>
+                  <td>{d.DeliveryNum}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
     </div>
   );
 };

@@ -45,7 +45,6 @@ const ShowDispatch = () => {
   const [toDate, setToDate] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
 
-  /* ✅ Edit only ChallanNo */
   const [editId, setEditId] = useState(null);
   const [editChallan, setEditChallan] = useState("");
 
@@ -74,7 +73,6 @@ const ShowDispatch = () => {
           );
         }
 
-        /* ✅ CRITICAL FIX */
         row.FactoryName = row.FactoryName || factoryMap[row.DisVid] || "";
 
         return row;
@@ -147,11 +145,25 @@ const ShowDispatch = () => {
     );
   };
 
-  /* ================= FILTER ================= */
+  /* ================= FILTER (ONLY SEARCH LOGIC CHANGED) ================= */
 
   const filteredDispatches = dispatches.filter(d => {
-    const matchesSearch = Object.values(d).some(v =>
-      v?.toString().toLowerCase().includes(searchTerm.toLowerCase())
+    const terms = searchTerm
+      .toLowerCase()
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+
+    const matchesSearch = terms.every(term =>
+      Object.values(d).some(v => {
+        if (!v) return false;
+
+        if (v instanceof Date) {
+          return formatShortDate(v).toLowerCase().includes(term);
+        }
+
+        return v.toString().toLowerCase().includes(term);
+      })
     );
 
     const matchesFactory = filterFactory ? d.DisVid === filterFactory : true;
