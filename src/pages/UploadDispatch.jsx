@@ -88,23 +88,14 @@ const FACTORY_COLUMN_MAPS = {
 
 /* ------------------ HELPERS ------------------ */
 
-/**
- * ✅ FIXED DATE PARSER
- * - Excel number → exact date
- * - dd-mm-yy stays dd-mm
- * - mm-dd-yy stays mm-dd
- * - NO JS auto swap
- */
 const parseExcelDate = (value) => {
   if (!value) return null;
 
-  // Excel serial date (SAFE)
   if (typeof value === "number") {
     const d = XLSX.SSF.parse_date_code(value);
     return d ? new Date(d.y, d.m - 1, d.d) : null;
   }
 
-  // String date (dd-mm / mm-dd / dd/mm / dd.mm)
   if (typeof value === "string") {
     const parts = value
       .trim()
@@ -114,11 +105,9 @@ const parseExcelDate = (value) => {
 
     if (parts.length === 3) {
       let [a, b, c] = parts.map(Number);
-
       if (c < 100) c += 2000;
 
       let day, month;
-
       if (a > 12) {
         day = a;
         month = b;
@@ -126,7 +115,6 @@ const parseExcelDate = (value) => {
         day = b;
         month = a;
       } else {
-        // system format → DD-MM
         day = a;
         month = b;
       }
@@ -138,14 +126,16 @@ const parseExcelDate = (value) => {
   return null;
 };
 
-const normalizeVehicle = (value = "") => {
-  return value.toString().replace(/\s+/g, "").toUpperCase();
-};
+const normalizeVehicle = (value = "") =>
+  value.toString().replace(/\s+/g, "").toUpperCase();
 
 const extractLast4Digits = (value = "") => {
   const match = normalizeVehicle(value).match(/(\d{4})$/);
   return match ? match[1] : null;
 };
+
+const normalizeChallan = (v) =>
+  String(v || "").trim().toUpperCase();
 
 /* ------------------ COMPONENT ------------------ */
 
@@ -155,20 +145,15 @@ const UploadDispatch = () => {
   const [message, setMessage] = useState("");
   const [vehicles, setVehicles] = useState([]);
 
-  /* ------------------ LOAD VEHICLES ------------------ */
   useEffect(() => {
     const loadVehicles = async () => {
-      try {
-        const snap = await getDocs(collection(db, "VehicleMaster"));
-        const list = snap.docs.map(d => ({
-          id: d.id,
-          VehicleNo: d.data().VehicleNo,
-          last4: extractLast4Digits(d.data().VehicleNo)
-        }));
-        setVehicles(list);
-      } catch (err) {
-        console.error("Failed to load vehicles:", err);
-      }
+      const snap = await getDocs(collection(db, "VehicleMaster"));
+      const list = snap.docs.map(d => ({
+        id: d.id,
+        VehicleNo: d.data().VehicleNo,
+        last4: extractLast4Digits(d.data().VehicleNo)
+      }));
+      setVehicles(list);
     };
     loadVehicles();
   }, []);
@@ -183,7 +168,6 @@ const UploadDispatch = () => {
     return !snap.empty;
   };
 
-  /* ------------------ MAIN UPLOAD ------------------ */
   const handleUpload = async (e) => {
     e.preventDefault();
     setMessage("");
@@ -195,11 +179,6 @@ const UploadDispatch = () => {
 
     let factoryName = factory.toUpperCase().trim();
     factoryName = FACTORY_NAME_FIXES[factoryName] || factoryName;
-
-    if (!FACTORY_COLUMN_MAPS[factoryName]) {
-      setMessage(`❌ Unknown factory: ${factoryName}`);
-      return;
-    }
 
     try {
       const buffer = await file.arrayBuffer();
@@ -222,77 +201,49 @@ const UploadDispatch = () => {
         dataRows = rows;
       }
 
+      const challanSet = new Set();
       let uploaded = 0;
-      let skippedVehicle = 0;
 
       for (const row of dataRows) {
         if (!row || row.every(v => !v)) continue;
 
-        let rawDate, qty;
-
-        if (factoryName === "ORIENT") {
-          rawDate = row[colMap["DATE"]];
-          qty = Number(row[colMap["QTY"]] || 0);
-        } else if (factoryName === "ULTRATECH") {
-          rawDate = row[colMap["PGI DATE"]];
-          qty = Number(row[colMap["QUANTITY (MT)"]] || 0);
-        } else {
-          rawDate = row[colMap.DispatchDate];
-          qty = Number(row[colMap.Qty] || 0);
-        }
-
-        if (!rawDate || String(rawDate).toUpperCase().includes("TOTAL")) continue;
+        const qty = Number(row[colMap.Qty] || 0);
         if (qty <= 0) continue;
 
+        const rawDate = row[colMap.DispatchDate];
         const dispatchDate = parseExcelDate(rawDate);
         if (!dispatchDate) continue;
 
-        const vehicleRaw =
-          factoryName === "ORIENT"
-            ? row[colMap["TRUCK NUMBER"]]
-            : factoryName === "ULTRATECH"
-            ? row[colMap["TRUCK NO"]]
-            : row[colMap.VehicleNo];
-
-        const vehicleLast4 = extractLast4Digits(vehicleRaw);
-        if (!vehicleLast4) {
-          skippedVehicle++;
-          continue;
-        }
+        const vehicleLast4 = extractLast4Digits(row[colMap.VehicleNo]);
+        if (!vehicleLast4) continue;
 
         const matchedVehicle = vehicles.find(v => v.last4 === vehicleLast4);
-        if (!matchedVehicle) {
-          skippedVehicle++;
-          continue;
-        }
+        if (!matchedVehicle) continue;
 
-        const challanNo =
-          factoryName === "ORIENT"
-            ? row[colMap["DELIVERY ORDER 1"]]
-            : factoryName === "ULTRATECH"
-            ? row[colMap["DELIVERY NO"]]
-            : row[colMap.ChallanNo];
-
+        const challanNo = normalizeChallan(row[colMap.ChallanNo]);
         if (!challanNo) continue;
+
+        if (challanSet.has(challanNo)) continue;
         if (await isDuplicate(challanNo, factoryName)) continue;
+        challanSet.add(challanNo);
+
+        /* ✅ PARTY NAME IS OPTIONAL */
+        let partyName = "";
+        if (factoryName === "ORIENT") {
+          partyName = row[colMap["SHIP TO PARTY NAME"]] || "";
+        } else if (factoryName === "ULTRATECH") {
+          partyName = row[colMap["SOLD-TO-PARTY NAME"]] || "";
+        } else {
+          partyName = row[colMap.PartyName] || "";
+        }
 
         const dto = {
           DispatchDate: dispatchDate,
-          ChallanNo: String(challanNo).trim(),
+          ChallanNo: challanNo,
           VehicleNo: matchedVehicle.VehicleNo,
           VehicleId: matchedVehicle.id,
-          PartyName:
-            factoryName === "ORIENT"
-              ? row[colMap["SHIP TO PARTY NAME"]]
-              : factoryName === "ULTRATECH"
-              ? row[colMap["SOLD-TO-PARTY NAME"]]
-              : row[colMap.PartyName],
-          Destination:
-            factoryName === "ORIENT"
-              ? row[colMap["DESTINATION"]]
-              : factoryName === "ULTRATECH"
-              ? row[colMap["CITY CODE DESCRIPTION"]]
-              : row[colMap.Destination],
+          PartyName: String(partyName).trim(), // empty allowed
+          Destination: row[colMap.Destination],
           DispatchQuantity: qty,
           Advance: Number(row[colMap.Advance] || 0),
           Diesel: Number(row[colMap.Diesel] || 0),
@@ -304,23 +255,20 @@ const UploadDispatch = () => {
         uploaded++;
       }
 
-      setMessage(`✅ ${uploaded} rows uploaded, 🚫 ${skippedVehicle} skipped (vehicle not found) for ${factoryName}`);
-      setFile(null);
+      setMessage(`✅ ${uploaded} rows uploaded successfully`);
     } catch (err) {
       console.error(err);
       setMessage("❌ Upload failed");
     }
   };
 
-  /* ------------------ UI ------------------ */
   return (
     <div style={{ maxWidth: 600, margin: "20px auto" }}>
       <h3>Upload Dispatch Excel</h3>
-
       {message && <div>{message}</div>}
 
       <form onSubmit={handleUpload}>
-        <select value={factory} onChange={(e) => setFactory(e.target.value)} required>
+        <select value={factory} onChange={e => setFactory(e.target.value)} required>
           <option value="">-- Select Factory --</option>
           <option>ACC MARATHA</option>
           <option>AMBUJA</option>
@@ -337,7 +285,7 @@ const UploadDispatch = () => {
         <input
           type="file"
           accept=".xlsx,.xls"
-          onChange={(e) => setFile(e.target.files[0])}
+          onChange={e => setFile(e.target.files[0])}
           required
         />
 
