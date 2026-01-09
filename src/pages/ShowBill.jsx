@@ -30,6 +30,12 @@ const ShowBill = () => {
   const [dispatchRows, setDispatchRows] = useState({});
   const [selectedBillId, setSelectedBillId] = useState(null);
 
+  /* ===== FILTER STATES ===== */
+  const [searchBill, setSearchBill] = useState("");
+  const [fromDate, setFromDate] = useState("");
+  const [toDateFilter, setToDateFilter] = useState("");
+  const [factoryFilter, setFactoryFilter] = useState("");
+
   const load = async () => {
     const billSnap = await getDocs(collection(db, "BillTable"));
     const dispSnap = await getDocs(collection(db, "TblDispatch"));
@@ -85,18 +91,35 @@ const ShowBill = () => {
         };
       }
 
+      /* ===== AGGREGATION ===== */
       reportMap[r.BillID]["LR Qty"] += 1;
       reportMap[r.BillID]["Bill Qty"] += toNum(r.DispatchQuantity);
+
       reportMap[r.BillID]["TAXABLE"] +=
         toNum(r.DispatchQuantity) * toNum(r.UnitPrice);
+
       reportMap[r.BillID]["Final Price"] += toNum(r.FinalPrice);
     });
 
+    /* ===== FINAL CALCULATION ===== */
     const result = Object.values(reportMap).map(r => {
       const taxable = r["TAXABLE"];
-      const gst = taxable * 0.18;
-      const tds = taxable * 0.00984;
-      const actAmt = taxable + gst;
+      const finalPrice = r["Final Price"];
+
+      const calculationBase =
+        finalPrice > 0 && finalPrice < taxable
+          ? finalPrice
+          : taxable;
+
+      const gst = calculationBase * 0.18;
+      const tds = calculationBase * 0.00984;
+      const actAmt = calculationBase + gst;
+
+      /* 🔥 DISPLAY RULE ONLY */
+      const displayFinalPrice =
+        finalPrice > 0 && Math.abs(finalPrice - taxable) < 0.01
+          ? 0
+          : finalPrice;
 
       return {
         ...r,
@@ -105,7 +128,7 @@ const ShowBill = () => {
         "TDS": tds.toFixed(2),
         "GST": gst.toFixed(2),
         "Act. Amt": actAmt.toFixed(2),
-        "Final Price": r["Final Price"].toFixed(2)
+        "Final Price": displayFinalPrice.toFixed(2)
       };
     });
 
@@ -117,11 +140,10 @@ const ShowBill = () => {
     load();
   }, []);
 
-  /* ===== DELETE BILL (SAFE) ===== */
+  /* ===== DELETE BILL ===== */
   const deleteBill = async (billId, billNum) => {
     if (!window.confirm(`Delete bill ${billNum} ?`)) return;
 
-    // 1️⃣ Unlink dispatch rows
     if (dispatchRows[billId]) {
       for (const d of dispatchRows[billId]) {
         await updateDoc(doc(db, "TblDispatch", d.id), {
@@ -131,22 +153,46 @@ const ShowBill = () => {
       }
     }
 
-    // 2️⃣ Delete bill
     await deleteDoc(doc(db, "BillTable", billId));
-
     alert("Bill deleted successfully");
-
     setSelectedBillId(null);
     load();
   };
 
+  /* ===== APPLY FILTERS ===== */
+  let filteredRows = rows;
+
+  if (searchBill) {
+    filteredRows = filteredRows.filter(r =>
+      r["Bill Num"].toLowerCase().includes(searchBill.toLowerCase())
+    );
+  }
+
+  if (factoryFilter) {
+    filteredRows = filteredRows.filter(r => r.Factory === factoryFilter);
+  }
+
+  if (fromDate) {
+    filteredRows = filteredRows.filter(r => {
+      const d = new Date(r["Bill Date"].split("/").reverse().join("-"));
+      return d >= new Date(fromDate);
+    });
+  }
+
+  if (toDateFilter) {
+    filteredRows = filteredRows.filter(r => {
+      const d = new Date(r["Bill Date"].split("/").reverse().join("-"));
+      return d <= new Date(toDateFilter);
+    });
+  }
+
   const visibleBills = selectedBillId
-    ? rows.filter(r => r.BillID === selectedBillId)
-    : rows;
+    ? filteredRows.filter(r => r.BillID === selectedBillId)
+    : filteredRows;
 
   return (
     <div style={{ padding: 20 }}>
-      <h2>Bill Report (Final)</h2>
+      <h2>Bill Report</h2>
 
       <table border="1" width="100%">
         <thead>
@@ -182,9 +228,7 @@ const ShowBill = () => {
               <td>{r["Bill Date"]}</td>
               <td>{r["Bill Type"]}</td>
               <td>
-                <button onClick={() => setSelectedBillId(r.BillID)}>
-                  View
-                </button>{" "}
+                <button onClick={() => setSelectedBillId(r.BillID)}>View</button>{" "}
                 <button
                   style={{ color: "red" }}
                   onClick={() => deleteBill(r.BillID, r["Bill Num"])}

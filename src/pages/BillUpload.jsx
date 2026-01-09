@@ -67,16 +67,16 @@ const BillUpload = ({ isAdmin }) => {
         if (!row || row.every(v => v === null || v === "")) continue;
 
         /* ===== EXACT & CORRECT COLUMN MAPPING ===== */
-        const challanNo = String(row[0] || "").trim();
-        const quantity = safeNum(row[4]);
-        const unitPrice = safeNum(row[6]); // may contain commas
+        const challanNo   = String(row[0] || "").trim();
+        const quantity    = safeNum(row[4]);
+        const unitPrice   = safeNum(row[6]);
 
-        // 🔥 FINAL PRICE IS CALCULATED — NOT READ
-        const finalPrice = quantity * unitPrice;
+        // ✅ FINAL PRICE MUST COME FROM EXCEL (DEDUCTION VALUE)
+        const finalPrice  = safeNum(row[7]);   // 🔥 FIXED HERE
 
-        const billNum = String(row[8] || "").trim();
-        const billDate = safeDate(row[9]);
-        const billType = String(row[10] || "").trim();
+        const billNum     = String(row[8] || "").trim();
+        const billDate    = safeDate(row[9]);
+        const billType    = String(row[10] || "").trim();
         const deliveryNum = String(row[11] || "").trim();
 
         if (!challanNo || !billNum || quantity === 0 || unitPrice === 0) {
@@ -98,14 +98,13 @@ const BillUpload = ({ isAdmin }) => {
         }
 
         const dispatchDoc = ds.docs[0];
-        const dispatch = dispatchDoc.data();
 
-        if (dispatch.BillID) {
+        if (dispatchDoc.data().BillID) {
           skipped++;
           continue;
         }
 
-        /* ===== FIND OR CREATE BILL (BillNum + Factory) ===== */
+        /* ===== FIND OR CREATE BILL ===== */
         let billId = null;
 
         const bq = query(
@@ -129,11 +128,14 @@ const BillUpload = ({ isAdmin }) => {
           billId = billRef.id;
         }
 
-        /* ===== UPDATE DISPATCH (CORRECT VALUES) ===== */
+        /* ===== UPDATE DISPATCH (DO NOT TOUCH FINAL PRICE) ===== */
         await updateDoc(doc(db, "TblDispatch", dispatchDoc.id), {
           DispatchQuantity: quantity,
           UnitPrice: unitPrice,
-          FinalPrice: finalPrice, // ✅ REAL VALUE
+
+          // ✅ THIS IS THE NET / FINAL FREIGHT
+          FinalPrice: finalPrice,
+
           DeliveryNum: deliveryNum,
           BillID: billId,
           BillNum: billNum,
