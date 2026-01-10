@@ -13,137 +13,149 @@ const Home = ({ user, isAdmin }) => {
   };
 
   return (
-    <div style={{ padding: "20px" }}>
-      <h2>Transport App Dashboard</h2>
+    <div style={{ minHeight: "100vh", background: "#f5f7fa" }}>
+      {/* ================= TOP NAVBAR ================= */}
+      <div
+        style={{
+          background: "#1f2937",
+          color: "#fff",
+          padding: "15px 30px",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center"
+        }}
+      >
+        <h2 style={{ margin: 0 }}>🚛 Transport App</h2>
 
-      {user ? (
-        <p>
-          Logged in as: <b>{user.email}</b>{" "}
-          {!isAdmin && <span style={{ color: "red" }}>(Normal User)</span>}
-          {isAdmin && <span style={{ color: "green" }}>(Admin)</span>}
-        </p>
-      ) : (
-        <p>Loading user info...</p>
-      )}
+        {user && (
+          <div style={{ fontSize: "14px" }}>
+            {user.email}{" "}
+            {isAdmin ? (
+              <span style={{ color: "#22c55e" }}>(Admin)</span>
+            ) : (
+              <span style={{ color: "#f87171" }}>(User)</span>
+            )}
+          </div>
+        )}
+      </div>
 
-      <hr />
+      {/* ================= MENU BAR ================= */}
+      <nav
+        style={{
+          background: "#ffffff",
+          padding: "12px 30px",
+          boxShadow: "0 2px 6px rgba(0,0,0,0.1)"
+        }}
+      >
+        <ul
+          style={{
+            listStyle: "none",
+            display: "flex",
+            gap: "25px",
+            margin: 0,
+            padding: 0,
+            alignItems: "center",
+            flexWrap: "wrap"
+          }}
+        >
+          {isAdmin && (
+            <li>
+              <Link to="/upload-dispatch" style={menuLink}>
+                🚚 Dispatch Upload
+              </Link>
+            </li>
+          )}
 
-      <ul style={{ listStyle: "none", padding: 0 }}>
-        {/* Upload Dispatch → ONLY ADMIN */}
-        {isAdmin && (
+          {isAdmin && (
+            <li>
+              <Link to="/bill-upload" style={menuLink}>
+                🧾 Bill Upload
+              </Link>
+            </li>
+          )}
+
           <li>
-            🚚{" "}
-            <Link
-              to="/upload-dispatch"
-              style={{ color: "blue", textDecoration: "underline" }}
-            >
-              Dispatch Upload
+            <Link to="/show-bill" style={menuLink}>
+              📑 Show Bills
             </Link>
           </li>
-        )}
 
-        {/* Bill Upload → ONLY ADMIN */}
-        {isAdmin && (
+          {isAdmin && (
+            <li>
+              <Link to="/destination-master" style={menuLink}>
+                🗺️ Destination Master
+              </Link>
+            </li>
+          )}
+
+          {isAdmin && (
+            <li>
+              <Link to="/vehicle-master" style={menuLink}>
+                🚛 Vehicle Master
+              </Link>
+            </li>
+          )}
+
           <li>
-            🧾{" "}
-            <Link
-              to="/bill-upload"
-              style={{ color: "blue", textDecoration: "underline" }}
-            >
-              Bill Upload
+            <Link to="/factories" style={menuLink}>
+              🏭 Factories
             </Link>
           </li>
-        )}
 
-        {/* Show Bills → ADMIN & NORMAL USER */}
-        <li>
-          🧾{" "}
-          <Link
-            to="/show-bill"
-            style={{ color: "blue", textDecoration: "underline" }}
-          >
-            Show Bills
-          </Link>
-        </li>
-
-        {/* Destination Master → ONLY ADMIN */}
-        {isAdmin && (
           <li>
-            🗺️{" "}
-            <Link
-              to="/destination-master"
-              style={{ color: "blue", textDecoration: "underline" }}
-            >
-              Destination Master
+            <Link to="/show-dispatch" style={menuLink}>
+              📦 Show Dispatch
             </Link>
           </li>
+
+          {isAdmin && (
+            <li>
+              <Link to="/delete-dispatch" style={{ ...menuLink, color: "red" }}>
+                ❌ Delete Dispatch
+              </Link>
+            </li>
+          )}
+        </ul>
+      </nav>
+
+      {/* ================= CONTENT AREA ================= */}
+      <div style={{ padding: "25px" }}>
+        {!isAdmin && (
+          <p style={{ color: "red", marginBottom: "10px" }}>
+            You are logged in as a normal user. Restricted actions are hidden.
+          </p>
         )}
 
-        {/* Vehicle Master → ONLY ADMIN */}
-        {isAdmin && (
-          <li>
-            🚛{" "}
-            <Link
-              to="/vehicle-master"
-              style={{ color: "blue", textDecoration: "underline" }}
-            >
-              Vehicle Master
-            </Link>
-          </li>
-        )}
+        <Outlet />
 
-        {/* Factories */}
-        <li>
-          🏭{" "}
-          <Link
-            to="/factories"
-            style={{ color: "blue", textDecoration: "underline" }}
-          >
-            Factories
-          </Link>
-        </li>
+        <br />
 
-        {/* Show Dispatch */}
-        <li>
-          📦{" "}
-          <Link
-            to="/show-dispatch"
-            style={{ color: "blue", textDecoration: "underline" }}
-          >
-            Show Dispatch
-          </Link>
-        </li>
-
-       
-        {/* Delete Dispatch → ONLY ADMIN */}
-        {isAdmin && (
-          <li>
-            ❌{" "}
-            <Link
-              to="/delete-dispatch"
-              style={{ color: "red", textDecoration: "underline" }}
-            >
-              Delete Dispatch Data
-            </Link>
-          </li>
-        )}
-      </ul>
-
-      {!isAdmin && (
-        <p style={{ marginTop: 10, color: "red" }}>
-          You are logged in as a normal user. Restricted actions are hidden.
-        </p>
-      )}
-
-      <hr />
-
-      <Outlet />
-
-      <br />
-
-      <button onClick={handleLogout}>Logout</button>
+        <button
+          onClick={handleLogout}
+          style={{
+            padding: "8px 16px",
+            background: "#ef4444",
+            color: "#fff",
+            border: "none",
+            borderRadius: "4px",
+            cursor: "pointer"
+          }}
+        >
+          Logout
+        </button>
+      </div>
     </div>
   );
+};
+
+/* ================= MENU LINK STYLE ================= */
+const menuLink = {
+  textDecoration: "none",
+  color: "#1f2937",
+  fontWeight: "500",
+  padding: "6px 10px",
+  borderRadius: "4px",
+  transition: "background 0.2s",
 };
 
 export default Home;

@@ -18,7 +18,7 @@ const toNum = (v) => {
   return isNaN(n) ? 0 : n;
 };
 
-/* ===== DATE FORMAT HELPERS (dd-MM-yyyy) ===== */
+/* ===== DATE HELPERS ===== */
 const formatDDMMYYYY = (date) => {
   if (!date) return "";
   const dd = String(date.getDate()).padStart(2, "0");
@@ -74,7 +74,6 @@ const ShowBill = () => {
       const bill = billMap[r.BillID];
       const dispatchDate = toDate(r.DispatchDate);
       const billDate = toDate(bill.BillDate);
-
       const billDateStr = billDate ? formatDDMMYYYY(billDate) : "";
 
       if (!dispatchMap[r.BillID]) dispatchMap[r.BillID] = [];
@@ -82,9 +81,7 @@ const ShowBill = () => {
       dispatchMap[r.BillID].push({
         id: d.id,
         ChallanNo: r.ChallanNo || "",
-        DispatchDate: dispatchDate
-          ? formatDDMMYYYY(dispatchDate)
-          : "",
+        DispatchDate: dispatchDate ? formatDDMMYYYY(dispatchDate) : "",
         Quantity: toNum(r.DispatchQuantity),
         UnitPrice: toNum(r.UnitPrice),
         FinalPrice: toNum(r.FinalPrice),
@@ -104,32 +101,44 @@ const ShowBill = () => {
           "Bill Qty": 0,
           TAXABLE: 0,
           FINAL_RAW: 0,
+          HAS_ZERO_FINAL: false,
           "Bill Type": bill.BillType || ""
         };
       }
 
       reportMap[r.BillID]["LR Qty"] += 1;
       reportMap[r.BillID]["Bill Qty"] += toNum(r.DispatchQuantity);
-      reportMap[r.BillID].TAXABLE +=
-        toNum(r.DispatchQuantity) * toNum(r.UnitPrice);
-      reportMap[r.BillID].FINAL_RAW += toNum(r.FinalPrice);
+
+      const taxable = toNum(r.DispatchQuantity) * toNum(r.UnitPrice);
+      const finalPrice = toNum(r.FinalPrice);
+
+      reportMap[r.BillID].TAXABLE += taxable;
+      reportMap[r.BillID].FINAL_RAW += finalPrice;
+
+      if (finalPrice === 0) {
+        reportMap[r.BillID].HAS_ZERO_FINAL = true;
+      }
     });
 
     const result = Object.values(reportMap).map(r => {
-      const taxable = r.TAXABLE;
-      const finalRaw = r.FINAL_RAW;
+      const totalTaxable = r.TAXABLE;
+      const totalFinal = r.FINAL_RAW;
 
-      const hasDeduction = finalRaw > 0 && finalRaw < taxable;
-      const base = hasDeduction ? finalRaw : taxable;
+      const useFinal =
+        !r.HAS_ZERO_FINAL &&
+        totalFinal > 0 &&
+        totalFinal < totalTaxable;
+
+      const base = useFinal ? totalFinal : totalTaxable;
 
       return {
         ...r,
         "Bill Qty": r["Bill Qty"].toFixed(2),
-        TAXABLE: taxable.toFixed(2),
+        TAXABLE: totalTaxable.toFixed(2),
         TDS: (base * 0.00984).toFixed(2),
         GST: (base * 0.18).toFixed(2),
-        "Act. Amt": (base * 1.18).toFixed(2),
-        "Final Price": hasDeduction ? finalRaw.toFixed(2) : "0.00"
+        "Act. Amt": (base + base * 0.18).toFixed(2),
+        "Final Price": useFinal ? totalFinal.toFixed(2) : "0.00"
       };
     });
 
@@ -166,20 +175,17 @@ const ShowBill = () => {
         if (to && r.BillDateObj > to) return false;
         return true;
       });
+    }
 
-      if (factoryFilter) {
-        data = data.filter(
-          r =>
-            (r.Factory || "").toLowerCase() ===
-            factoryFilter.toLowerCase()
-        );
-      }
+    if (factoryFilter) {
+      data = data.filter(
+        r => (r.Factory || "").toLowerCase() === factoryFilter.toLowerCase()
+      );
     }
 
     return data;
   }, [rows, searchBill, fromDate, toDateFilter, factoryFilter]);
 
-  /* 🔥 VIEW LOGIC (ONLY SELECTED BILL SHOWN) */
   const displayRows = selectedBillId
     ? filteredRows.filter(r => r.BillID === selectedBillId)
     : filteredRows;
@@ -188,7 +194,7 @@ const ShowBill = () => {
     <div style={{ padding: 20 }}>
       <h2>Bill Report</h2>
 
-      {/* ===== FILTER BAR ===== */}
+      {/* ===== FILTER BAR (RESTORED) ===== */}
       <div style={{ marginBottom: 15 }}>
         <input
           type="text"
@@ -284,11 +290,9 @@ const ShowBill = () => {
                 <th>Challan No</th>
                 <th>Dispatch Date</th>
                 <th>Vehicle No</th>
-                <th>LR No</th>
                 <th>Quantity</th>
                 <th>Unit Price</th>
                 <th>Final Price</th>
-                <th>Delivery No</th>
               </tr>
             </thead>
             <tbody>
@@ -297,11 +301,9 @@ const ShowBill = () => {
                   <td>{d.ChallanNo}</td>
                   <td>{d.DispatchDate}</td>
                   <td>{d.VehicleNo}</td>
-                  <td>{d.LRNo}</td>
                   <td>{d.Quantity}</td>
                   <td>{d.UnitPrice}</td>
                   <td>{d.FinalPrice}</td>
-                  <td>{d.DeliveryNum}</td>
                 </tr>
               ))}
             </tbody>
