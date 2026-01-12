@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { db } from "../firebaseConfig";
 import { collection, addDoc, query, where, getDocs } from "firebase/firestore";
 import * as XLSX from "xlsx";
+import "./UploadDispatch.css";
 
 /* ------------------ CONSTANTS ------------------ */
 
@@ -144,6 +145,7 @@ const UploadDispatch = () => {
   const [file, setFile] = useState(null);
   const [message, setMessage] = useState("");
   const [vehicles, setVehicles] = useState([]);
+  const [isUploading, setIsUploading] = useState(false);
 
   useEffect(() => {
     const loadVehicles = async () => {
@@ -170,10 +172,12 @@ const UploadDispatch = () => {
 
   const handleUpload = async (e) => {
     e.preventDefault();
+    setIsUploading(true);
     setMessage("");
 
     if (!file || !factory) {
       setMessage("❌ File and Factory required");
+      setIsUploading(false);
       return;
     }
 
@@ -259,39 +263,96 @@ const UploadDispatch = () => {
     } catch (err) {
       console.error(err);
       setMessage("❌ Upload failed");
+    } finally {
+      setIsUploading(false);
     }
   };
 
+  const getMessageType = (msg) => {
+    if (msg.includes("✅")) return "success";
+    if (msg.includes("❌")) return "error";
+    return "";
+  };
+
   return (
-    <div style={{ maxWidth: 600, margin: "20px auto" }}>
-      <h3>Upload Dispatch Excel</h3>
-      {message && <div>{message}</div>}
+    <div className="upload-container">
+      <div className="upload-header">
+        <h3>Upload Dispatch Data</h3>
+      </div>
 
-      <form onSubmit={handleUpload}>
-        <select value={factory} onChange={e => setFactory(e.target.value)} required>
-          <option value="">-- Select Factory --</option>
-          <option>ACC MARATHA</option>
-          <option>AMBUJA</option>
-          <option>DALMIA</option>
-          <option>MP BIRLA</option>
-          <option>ORIENT</option>
-          <option>MANIKGARH</option>
-          <option>ULTRATECH</option>
-          <option>JSW</option>
-        </select>
+      {message && (
+        <div className={`message ${getMessageType(message)}`}>
+          {message}
+        </div>
+      )}
 
-        <br /><br />
+      <form className="upload-form" onSubmit={handleUpload}>
+        <div className="form-group">
+          <label className="form-label">Factory Name</label>
+          <select 
+            className="form-select"
+            value={factory} 
+            onChange={e => setFactory(e.target.value)} 
+            required
+            disabled={isUploading}
+          >
+            <option value="">-- Select Factory --</option>
+            <option>ACC MARATHA</option>
+            <option>AMBUJA</option>
+            <option>DALMIA</option>
+            <option>MP BIRLA</option>
+            <option>ORIENT</option>
+            <option>MANIKGARH</option>
+            <option>ULTRATECH</option>
+            <option>JSW</option>
+          </select>
+        </div>
 
-        <input
-          type="file"
-          accept=".xlsx,.xls"
-          onChange={e => setFile(e.target.files[0])}
-          required
-        />
+        <div className="form-group">
+          <label className="form-label">Excel File</label>
+          <div className="form-file">
+            <label className="file-label">
+              <span>{file ? "Change File" : "Choose Excel file"}</span>
+              <input
+                type="file"
+                accept=".xlsx,.xls"
+                onChange={e => setFile(e.target.files[0])}
+                required
+                disabled={isUploading}
+              />
+              <div className="file-name">
+                {file ? file.name : "No file chosen"}
+              </div>
+            </label>
+          </div>
+        </div>
 
-        <br /><br />
-        <button type="submit">Upload</button>
+        <button 
+          type="submit" 
+          className="upload-button"
+          disabled={isUploading}
+        >
+          {isUploading ? (
+            <>
+              <span className="loading-spinner"></span>
+              Uploading...
+            </>
+          ) : (
+            'Upload Data'
+          )}
+        </button>
       </form>
+
+      <div className="instructions">
+        <h4>Instructions:</h4>
+        <ul>
+          <li>Select the factory name from the dropdown</li>
+          <li>Choose an Excel file (.xlsx or .xls format)</li>
+          <li>System will automatically map columns based on factory format</li>
+          <li>Duplicate challan numbers will be skipped</li>
+          <li>Only vehicles registered in the system will be processed</li>
+        </ul>
+      </div>
     </div>
   );
 };
