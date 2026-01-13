@@ -208,22 +208,18 @@ const ShowDispatch = () => {
   /* ================= FILTER (APPLIED ONLY ON BUTTON CLICK) ================= */
 
   const filteredDispatches = dispatches.filter(d => {
-    const liveSearch = String(searchTerm ?? "");   // 🔥 LIVE SEARCH
-    const { filterFactory, fromDate, toDate } = appliedFilters;
+    const { searchTerm, filterFactory, fromDate, toDate } = appliedFilters;
 
-
+    // ✅ MVC BEHAVIOR: if no filter selected, return all
     if (!searchTerm && !filterFactory && !fromDate && !toDate) {
       return true;
     }
 
-
-
-    const terms = liveSearch
+    const terms = searchTerm
       .toLowerCase()
       .trim()
       .split(/\s+/)
       .filter(Boolean);
-
 
     const matchesSearch =
       terms.length === 0
@@ -309,10 +305,6 @@ const ShowDispatch = () => {
   };
 
   /* ================= UI ================= */
-  const availableFactories = Array.from(
-  new Set(dispatches.map(d => d.DisVid).filter(Boolean))
-);
-
 
   return (
     <div style={{ padding: 20 }}>
@@ -326,19 +318,16 @@ const ShowDispatch = () => {
           style={{ padding: 8, border: "1px solid #ccc", borderRadius: 4 }}
         />
 
-        {availableFactories.length > 1 && (
-          <select
-            value={filterFactory}
-            onChange={e => setFilterFactory(e.target.value)}
-            style={{ padding: 8, border: "1px solid #ccc", borderRadius: 4 }}
-          >
-            <option value="">All Factories</option>
-            <option value="10">JSW</option>
-            <option value="6">Manigar</option>
-            <option value="7">Ultratech</option>
-          </select>
-        )}
-
+        <select
+          value={filterFactory}
+          onChange={e => setFilterFactory(e.target.value)}
+          style={{ padding: 8, border: "1px solid #ccc", borderRadius: 4 }}
+        >
+          <option value="">All Factories</option>
+          <option value="10">JSW</option>
+          <option value="6">Manigar</option>
+          <option value="7">Ultratech</option>
+        </select>
 
         <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
           <label>From:</label>
@@ -380,21 +369,21 @@ const ShowDispatch = () => {
           />
         </div>
 
-        <button
+        <button 
           onClick={applyFilters}
           style={{ padding: "8px 16px", backgroundColor: "#007bff", color: "white", border: "none", borderRadius: 4, cursor: "pointer" }}
         >
           Apply Filters
         </button>
-
-        <button
+        
+        <button 
           onClick={clearFilters}
           style={{ padding: "8px 16px", backgroundColor: "#6c757d", color: "white", border: "none", borderRadius: 4, cursor: "pointer" }}
         >
           Clear Filters
         </button>
-
-        <button
+        
+        <button 
           onClick={exportToExcel}
           style={{ padding: "8px 16px", backgroundColor: "#28a745", color: "white", border: "none", borderRadius: 4, cursor: "pointer" }}
         >
@@ -403,16 +392,16 @@ const ShowDispatch = () => {
       </div>
 
       {isAdmin && selectedIds.length > 0 && (
-        <button
-          onClick={handleDeleteSelected}
-          style={{
-            marginTop: 10,
-            padding: "8px 16px",
-            backgroundColor: "#dc3545",
-            color: "white",
-            border: "none",
-            borderRadius: 4,
-            cursor: "pointer"
+        <button 
+          onClick={handleDeleteSelected} 
+          style={{ 
+            marginTop: 10, 
+            padding: "8px 16px", 
+            backgroundColor: "#dc3545", 
+            color: "white", 
+            border: "none", 
+            borderRadius: 4, 
+            cursor: "pointer" 
           }}
         >
           Delete Selected ({selectedIds.length})
@@ -473,13 +462,13 @@ const ShowDispatch = () => {
                     <td style={{ padding: 10 }}>
                       {editId === d.id ? (
                         <>
-                          <button
+                          <button 
                             onClick={() => handleSave(d.id)}
                             style={{ marginRight: 5, padding: "5px 10px", backgroundColor: "#28a745", color: "white", border: "none", borderRadius: 3, cursor: "pointer" }}
                           >
                             Save
                           </button>
-                          <button
+                          <button 
                             onClick={handleCancel}
                             style={{ padding: "5px 10px", backgroundColor: "#6c757d", color: "white", border: "none", borderRadius: 3, cursor: "pointer" }}
                           >
@@ -488,13 +477,13 @@ const ShowDispatch = () => {
                         </>
                       ) : (
                         <>
-                          <button
+                          <button 
                             onClick={() => handleEdit(d)}
                             style={{ marginRight: 5, padding: "5px 10px", backgroundColor: "#007bff", color: "white", border: "none", borderRadius: 3, cursor: "pointer" }}
                           >
                             Edit
                           </button>
-                          <button
+                          <button 
                             onClick={() => handleDelete(d.id)}
                             style={{ padding: "5px 10px", backgroundColor: "#dc3545", color: "white", border: "none", borderRadius: 3, cursor: "pointer" }}
                           >
@@ -508,8 +497,8 @@ const ShowDispatch = () => {
               ))
             ) : (
               <tr>
-                <td
-                  colSpan={isAdmin ? COLUMN_SEQUENCE.length + 2 : COLUMN_SEQUENCE.length}
+                <td 
+                  colSpan={isAdmin ? COLUMN_SEQUENCE.length + 2 : COLUMN_SEQUENCE.length} 
                   style={{ padding: 20, textAlign: "center" }}
                 >
                   No records found
@@ -527,16 +516,16 @@ const ShowDispatch = () => {
 
       {totalPages > 1 && (
         <div style={{ marginTop: 20, display: "flex", alignItems: "center", gap: 5 }}>
-          <button
-            disabled={currentPage === 1}
+          <button 
+            disabled={currentPage === 1} 
             onClick={() => setCurrentPage(p => p - 1)}
-            style={{
-              padding: "8px 12px",
-              backgroundColor: currentPage === 1 ? "#e9ecef" : "#007bff",
-              color: currentPage === 1 ? "#6c757d" : "white",
-              border: "none",
-              borderRadius: 4,
-              cursor: currentPage === 1 ? "not-allowed" : "pointer"
+            style={{ 
+              padding: "8px 12px", 
+              backgroundColor: currentPage === 1 ? "#e9ecef" : "#007bff", 
+              color: currentPage === 1 ? "#6c757d" : "white", 
+              border: "none", 
+              borderRadius: 4, 
+              cursor: currentPage === 1 ? "not-allowed" : "pointer" 
             }}
           >
             Prev
@@ -546,14 +535,14 @@ const ShowDispatch = () => {
             <button
               key={i}
               onClick={() => setCurrentPage(i + 1)}
-              style={{
-                padding: "8px 12px",
-                backgroundColor: currentPage === i + 1 ? "#0056b3" : "#007bff",
-                color: "white",
-                border: "none",
-                borderRadius: 4,
+              style={{ 
+                padding: "8px 12px", 
+                backgroundColor: currentPage === i + 1 ? "#0056b3" : "#007bff", 
+                color: "white", 
+                border: "none", 
+                borderRadius: 4, 
                 cursor: "pointer",
-                fontWeight: currentPage === i + 1 ? "bold" : "normal"
+                fontWeight: currentPage === i + 1 ? "bold" : "normal" 
               }}
             >
               {i + 1}
@@ -563,13 +552,13 @@ const ShowDispatch = () => {
           <button
             disabled={currentPage === totalPages}
             onClick={() => setCurrentPage(p => p + 1)}
-            style={{
-              padding: "8px 12px",
-              backgroundColor: currentPage === totalPages ? "#e9ecef" : "#007bff",
-              color: currentPage === totalPages ? "#6c757d" : "white",
-              border: "none",
-              borderRadius: 4,
-              cursor: currentPage === totalPages ? "not-allowed" : "pointer"
+            style={{ 
+              padding: "8px 12px", 
+              backgroundColor: currentPage === totalPages ? "#e9ecef" : "#007bff", 
+              color: currentPage === totalPages ? "#6c757d" : "white", 
+              border: "none", 
+              borderRadius: 4, 
+              cursor: currentPage === totalPages ? "not-allowed" : "pointer" 
             }}
           >
             Next

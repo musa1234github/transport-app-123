@@ -14,6 +14,9 @@ import { auth, isAdminUser } from "./firebaseConfig";
 import { onAuthStateChanged } from "firebase/auth";
 import DeleteDuplicateChallan from "./pages/DelDuplicateChallan.jsx";
 import ShoBilledChallan from "./pages/ShoBilledChallan.jsx";
+import ShowQtyByMonth from "./pages/ShowQtyByMonth.jsx";
+import ShowDayQty from "./pages/ShowDayQty.jsx";
+
 
 const App = () => {
   const [user, setUser] = useState(null);
@@ -72,9 +75,11 @@ const App = () => {
           <Route path="show-dispatch" element={<ShowDispatch isAdmin={isAdmin} />} />
           <Route path="vehicle-master" element={<VehicleMaster />} />
           <Route path="show-bill" element={<ShowBill />} />
-           <Route path="show-billed-challan" element={<ShoBilledChallan />} />
+          <Route path="show-billed-challan" element={<ShoBilledChallan />} />
+          <Route path="monthly-qty-report" element={<ShowQtyByMonth />} />
+          <Route path="daily-qty-report" element={<ShowDayQty />} />
           <Route path="delete-dispatch" element={<DeleteDispatch />} />
-         <Route path="delete-duplicate-challan" element={<DeleteDuplicateChallan />} />
+          <Route path="delete-duplicate-challan" element={<DeleteDuplicateChallan />} />
 
 
         </Route>

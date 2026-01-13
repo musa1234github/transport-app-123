@@ -102,6 +102,22 @@ const Home = ({ user, isAdmin }) => {
               </Link>
             </li>
           )}
+          {isAdmin && ( // Add this block
+            <li>
+              <Link to="/monthly-qty-report" style={menuLink}>
+                📊 Monthly Quantity Report
+              </Link>
+            </li>
+          )}
+          
+          {isAdmin && (
+            <li>
+              <Link to="/daily-qty-report" style={menuLink}>
+                📊 Day Quantity Report
+              </Link>
+            </li>
+          )}
+
 
           <li>
             <Link to="/factories" style={menuLink}>
