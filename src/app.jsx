@@ -16,6 +16,7 @@ import DeleteDuplicateChallan from "./pages/DelDuplicateChallan.jsx";
 import ShoBilledChallan from "./pages/ShoBilledChallan.jsx";
 import ShowQtyByMonth from "./pages/ShowQtyByMonth.jsx";
 import ShowDayQty from "./pages/ShowDayQty.jsx";
+import PaymentUpload from "./pages/PaymentUpload.jsx";
 
 
 const App = () => {
@@ -80,6 +81,7 @@ const App = () => {
           <Route path="daily-qty-report" element={<ShowDayQty />} />
           <Route path="delete-dispatch" element={<DeleteDispatch />} />
           <Route path="delete-duplicate-challan" element={<DeleteDuplicateChallan />} />
+          <Route path="payment-upload" element={<PaymentUpload isAdmin={isAdmin} />} />
 
 
         </Route>

@@ -74,6 +74,16 @@ const Home = ({ user, isAdmin }) => {
             </li>
           )}
 
+           {isAdmin && (
+            <li>
+              <Link to="/payment-upload" style={menuLink}>
+                🧾 Payment Upload
+              </Link>
+            </li>
+          )}
+
+
+           
           <li>
             <Link to="/show-bill" style={menuLink}>
               📑 Show Bills
