@@ -9,32 +9,89 @@ const ShowDayQty = () => {
   const [selectedDate, setSelectedDate] = useState("");
   const [selectedFactory, setSelectedFactory] = useState("");
   const [allFactories, setAllFactories] = useState([]);
+  const [error, setError] = useState(null);
+  const [rawData, setRawData] = useState([]); // Store raw data for debugging
+
+  // Debug function to see what's happening
+  const logDebugInfo = () => {
+    console.log("=== DEBUG INFO ===");
+    console.log("Loading:", loading);
+    console.log("Error:", error);
+    console.log("All factories:", allFactories);
+    console.log("Raw data count:", rawData.length);
+    console.log("Raw data sample:", rawData.slice(0, 3));
+    console.log("Daily data count:", dailyData.length);
+    console.log("Daily data sample:", dailyData.slice(0, 3));
+    console.log("Filtered data count:", filteredData.length);
+    console.log("Selected date:", selectedDate);
+    console.log("Selected factory:", selectedFactory);
+    console.log("===================");
+  };
+
+  // Simple date parsing function
+  const parseDate = (dateValue) => {
+    if (!dateValue) return null;
+    
+    try {
+      // If it's a Firebase timestamp
+      if (dateValue.seconds) {
+        return new Date(dateValue.seconds * 1000);
+      }
+      
+      // If it's already a Date object
+      if (dateValue instanceof Date) {
+        return dateValue;
+      }
+      
+      // If it's a string, try to parse it
+      if (typeof dateValue === 'string') {
+        // Remove any time portion if present
+        const dateStr = dateValue.split('T')[0];
+        return new Date(dateStr);
+      }
+      
+      return null;
+    } catch (err) {
+      console.error("Error parsing date:", dateValue, err);
+      return null;
+    }
+  };
 
   useEffect(() => {
     const fetchData = async () => {
       try {
         setLoading(true);
+        setError(null);
         
-        // Fetch dispatch data from TblDispatch
+        console.log("Starting data fetch...");
+        
         const dispatchSnapshot = await getDocs(collection(db, "TblDispatch"));
         
-        // Collect unique factory names
-        const factoryNamesSet = new Set();
+        console.log("Firebase query result:", {
+          size: dispatchSnapshot.size,
+          empty: dispatchSnapshot.empty
+        });
         
-        const dispatchData = dispatchSnapshot.docs.map(doc => {
+        if (dispatchSnapshot.empty) {
+          console.log("No documents found in TblDispatch collection");
+          setError("No dispatch records found in the database.");
+          return;
+        }
+        
+        const factoryNamesSet = new Set();
+        const rawDataArray = [];
+        
+        dispatchSnapshot.docs.forEach((doc, index) => {
           const data = doc.data();
+          rawDataArray.push(data);
           
-          // Get dispatch date
-          let dispatchDate = null;
-          if (data.DispatchDate?.seconds) {
-            dispatchDate = new Date(data.DispatchDate.seconds * 1000);
-          } else if (data.DispatchDate) {
-            dispatchDate = new Date(data.DispatchDate);
-          }
-          
-          // Parse quantities
-          const dispatchQuantity = parseFloat(data.DispatchQuantity) || 0;
-          const unitPrice = parseFloat(data.UnitPrice) || parseFloat(data.Rate) || 0;
+          console.log(`Document ${index}:`, {
+            id: doc.id,
+            data: data,
+            hasDispatchDate: !!data.DispatchDate,
+            hasFactoryName: !!data.FactoryName,
+            hasDisVid: !!data.DisVid
+          });
           
           // Get factory name
           let factoryName = "Unknown";
@@ -55,170 +112,141 @@ const ShowDayQty = () => {
           if (factoryName !== "Unknown") {
             factoryNamesSet.add(factoryName);
           }
-          
-          return {
-            id: doc.id,
-            ...data,
-            DispatchDate: dispatchDate,
-            DispatchQuantity: dispatchQuantity,
-            UnitPrice: unitPrice,
-            FactoryName: factoryName,
-            FactoryId: data.DisVid,
-            // Add formatted date strings for easier filtering
-            DateISO: dispatchDate ? dispatchDate.toISOString().split('T')[0] : null,
-            DateDDMMYYYY: dispatchDate ? 
-              `${String(dispatchDate.getDate()).padStart(2, '0')}/${String(dispatchDate.getMonth() + 1).padStart(2, '0')}/${dispatchDate.getFullYear()}` : null
-          };
         });
-
+        
+        setRawData(rawDataArray);
+        
         const factoryNamesArray = Array.from(factoryNamesSet).sort();
+        console.log("Unique factories found:", factoryNamesArray);
         setAllFactories(factoryNamesArray);
         
-        // Process all data initially
-        processDailyData(dispatchData);
+        // Process data for display
+        processDisplayData(dispatchSnapshot.docs);
+        
       } catch (error) {
         console.error("Error fetching data:", error);
+        setError(`Failed to fetch data: ${error.message}`);
       } finally {
         setLoading(false);
+        logDebugInfo();
       }
     };
 
     fetchData();
   }, []);
 
-  // Filter data when selectedDate or selectedFactory changes
-  useEffect(() => {
-    if (dailyData.length === 0) return;
-    
-    let filtered = [...dailyData];
-    
-    // Filter by date if date is entered
-    if (selectedDate.trim()) {
-      const parsedDate = parseDateInput(selectedDate);
-      if (parsedDate) {
-        filtered = filtered.filter(item => {
-          if (!item.DispatchDate) return false;
-          return isSameDay(item.DispatchDate, parsedDate);
-        });
-      }
-    }
-    
-    // Filter by factory if factory is selected
-    if (selectedFactory) {
-      filtered = filtered.filter(item => item.FactoryName === selectedFactory);
-    }
-    
-    setFilteredData(filtered);
-  }, [selectedDate, selectedFactory, dailyData]);
-
-  const processDailyData = (dispatchData) => {
+  const processDisplayData = (docs) => {
     const groupedData = {};
     
-    dispatchData.forEach(item => {
-      if (!item.DispatchDate) return;
+    docs.forEach(doc => {
+      const data = doc.data();
+      const dispatchDate = parseDate(data.DispatchDate);
       
-      const factoryName = item.FactoryName;
-      const dateKey = item.DateDDMMYYYY;
-      const key = `${factoryName}-${dateKey}`;
+      if (!dispatchDate || isNaN(dispatchDate.getTime())) {
+        console.log("Skipping document with invalid date:", doc.id, data);
+        return;
+      }
       
-      if (!groupedData[key]) {
-        groupedData[key] = {
+      // Get factory name
+      let factoryName = "Unknown";
+      if (data.FactoryName) {
+        factoryName = data.FactoryName;
+      } else if (data.Factory) {
+        factoryName = data.Factory;
+      } else if (data.DisVid === "10") {
+        factoryName = "JSW";
+      } else if (data.DisVid === "6") {
+        factoryName = "Manigar";
+      } else if (data.DisVid === "7") {
+        factoryName = "Ultratech";
+      } else if (data.DisVid) {
+        factoryName = `Factory ${data.DisVid}`;
+      }
+      
+      const dispatchQuantity = parseFloat(data.DispatchQuantity) || 0;
+      const unitPrice = parseFloat(data.UnitPrice) || parseFloat(data.Rate) || 0;
+      const isBilled = unitPrice > 0 || 
+                      data.BillStatus === true || 
+                      data.IsBilled === true ||
+                      data.Billed === true;
+      
+      // Create a unique key for grouping
+      const dateKey = `${factoryName}_${dispatchDate.toISOString().split('T')[0]}`;
+      
+      if (!groupedData[dateKey]) {
+        groupedData[dateKey] = {
           Factory: factoryName,
-          Date: item.DispatchDate,
-          FormattedDate: item.DateDDMMYYYY,
-          Day: item.DispatchDate.getDate(),
+          Date: dispatchDate,
+          FormattedDate: `${String(dispatchDate.getDate()).padStart(2, '0')}/${String(dispatchDate.getMonth() + 1).padStart(2, '0')}/${dispatchDate.getFullYear()}`,
           totalQty: 0,
           BillQty: 0,
           Balance: 0
         };
       }
       
-      groupedData[key].totalQty += item.DispatchQuantity;
-      
-      const isBilled = item.UnitPrice > 0 || 
-                      item.BillStatus === true || 
-                      item.IsBilled === true ||
-                      item.Billed === true;
-      
+      groupedData[dateKey].totalQty += dispatchQuantity;
       if (isBilled) {
-        groupedData[key].BillQty += item.DispatchQuantity;
+        groupedData[dateKey].BillQty += dispatchQuantity;
       }
     });
     
-    const result = Object.values(groupedData).map(item => {
+    // Convert to array and calculate balances
+    const resultArray = Object.values(groupedData).map(item => {
       item.Balance = item.totalQty - item.BillQty;
       return item;
     });
     
-    // Sort by factory name, then by date
-    result.sort((a, b) => {
+    // Sort by factory and date
+    resultArray.sort((a, b) => {
       if (a.Factory === b.Factory) {
         return b.Date - a.Date; // Newest first
       }
       return a.Factory.localeCompare(b.Factory);
     });
     
-    setDailyData(result);
-    setFilteredData(result);
+    console.log("Processed display data:", resultArray);
+    setDailyData(resultArray);
+    setFilteredData(resultArray);
   };
 
-  // Parse date input in DD/MM/YYYY format - FIXED VERSION
-  const parseDateInput = (dateString) => {
-    const trimmed = dateString.trim();
-    if (!trimmed) return null;
+  useEffect(() => {
+    if (dailyData.length === 0) return;
     
-    // Define date patterns
-    const patterns = [
-      { regex: /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/, hasYear: true }, // DD/MM/YYYY
-      { regex: /^(\d{1,2})\/(\d{1,2})$/, hasYear: false }, // DD/MM
-      { regex: /^(\d{1,2})-(\d{1,2})-(\d{4})$/, hasYear: true }, // DD-MM-YYYY
-      { regex: /^(\d{1,2})-(\d{1,2})$/, hasYear: false }, // DD-MM
-      { regex: /^(\d{4})-(\d{1,2})-(\d{1,2})$/, hasYear: true, isYYYYMMDD: true }, // YYYY-MM-DD
-    ];
+    let filtered = [...dailyData];
     
-    for (const pattern of patterns) {
-      const match = trimmed.match(pattern.regex);
-      if (match) {
-        let day, month, year;
-        
-        if (pattern.isYYYYMMDD) {
-          // YYYY-MM-DD format
-          year = parseInt(match[1], 10);
-          month = parseInt(match[2], 10) - 1;
-          day = parseInt(match[3], 10);
-        } else if (!pattern.hasYear) {
-          // DD/MM or DD-MM format (no year)
-          day = parseInt(match[1], 10);
-          month = parseInt(match[2], 10) - 1;
-          year = new Date().getFullYear();
-        } else {
-          // DD/MM/YYYY or DD-MM-YYYY format
-          day = parseInt(match[1], 10);
-          month = parseInt(match[2], 10) - 1;
-          year = parseInt(match[3], 10);
+    // Filter by date
+    if (selectedDate.trim()) {
+      try {
+        // Parse the input date (assuming DD/MM/YYYY format)
+        const parts = selectedDate.split('/');
+        if (parts.length === 3) {
+          const day = parseInt(parts[0], 10);
+          const month = parseInt(parts[1], 10) - 1; // Month is 0-indexed
+          const year = parseInt(parts[2], 10);
+          
+          const filterDate = new Date(year, month, day);
+          
+          if (!isNaN(filterDate.getTime())) {
+            filtered = filtered.filter(item => {
+              const itemDate = item.Date;
+              return itemDate.getDate() === filterDate.getDate() &&
+                     itemDate.getMonth() === filterDate.getMonth() &&
+                     itemDate.getFullYear() === filterDate.getFullYear();
+            });
+          }
         }
-        
-        // Validate date
-        const date = new Date(year, month, day);
-        if (
-          date.getDate() === day &&
-          date.getMonth() === month &&
-          date.getFullYear() === year
-        ) {
-          return date;
-        }
+      } catch (err) {
+        console.error("Error filtering by date:", err);
       }
     }
     
-    return null;
-  };
-
-  // Check if two dates are the same day
-  const isSameDay = (date1, date2) => {
-    return date1.getDate() === date2.getDate() &&
-           date1.getMonth() === date2.getMonth() &&
-           date1.getFullYear() === date2.getFullYear();
-  };
+    // Filter by factory
+    if (selectedFactory) {
+      filtered = filtered.filter(item => item.Factory === selectedFactory);
+    }
+    
+    setFilteredData(filtered);
+  }, [selectedDate, selectedFactory, dailyData]);
 
   const calculateTotals = () => {
     return filteredData.reduce((totals, item) => {
@@ -229,21 +257,65 @@ const ShowDayQty = () => {
     }, { totalQty: 0, BillQty: 0, Balance: 0 });
   };
 
-  const formatDateForDisplay = (date) => {
-    if (!date) return 'N/A';
-    const dateObj = date instanceof Date ? date : new Date(date);
-    return `${String(dateObj.getDate()).padStart(2, '0')}/${String(dateObj.getMonth() + 1).padStart(2, '0')}/${dateObj.getFullYear()}`;
-  };
-
   const clearFilters = () => {
     setSelectedDate("");
     setSelectedFactory("");
   };
 
+  // Call logDebugInfo when component mounts and when data changes
+  useEffect(() => {
+    if (!loading) {
+      logDebugInfo();
+    }
+  }, [loading, dailyData, filteredData]);
+
   if (loading) {
     return (
-      <div style={{ padding: 20, textAlign: "center" }}>
-        <h3>Loading daily quantity report...</h3>
+      <div style={{ 
+        padding: 40, 
+        textAlign: "center",
+        minHeight: "300px",
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "center",
+        alignItems: "center"
+      }}>
+        <h3 style={{ marginBottom: 20 }}>Loading daily quantity report...</h3>
+        <div style={{ width: "50px", height: "50px", border: "5px solid #f3f3f3", borderTop: "5px solid #3498db", borderRadius: "50%", animation: "spin 1s linear infinite" }}></div>
+        <style>{`
+          @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+          }
+        `}</style>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div style={{ 
+        padding: 40, 
+        textAlign: "center",
+        backgroundColor: "#ffe6e6",
+        borderRadius: "8px",
+        margin: "20px"
+      }}>
+        <h3 style={{ color: "#c00", marginBottom: 15 }}>Error Loading Data</h3>
+        <p style={{ marginBottom: 20 }}>{error}</p>
+        <button 
+          onClick={() => window.location.reload()}
+          style={{
+            padding: "10px 20px",
+            backgroundColor: "#3498db",
+            color: "white",
+            border: "none",
+            borderRadius: "4px",
+            cursor: "pointer"
+          }}
+        >
+          Retry
+        </button>
       </div>
     );
   }
@@ -256,29 +328,52 @@ const ShowDayQty = () => {
         Daily Quantity Report
       </h1>
       
+      {/* Debug Info Panel (visible only during development) */}
+      <div style={{ 
+        backgroundColor: "#f0f8ff", 
+        padding: 15, 
+        marginBottom: 20, 
+        borderRadius: 8,
+        border: "1px dashed #3498db",
+        fontSize: "14px"
+      }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <strong>Data Status:</strong> 
+            <span style={{ color: dailyData.length > 0 ? "#27ae60" : "#e74c3c", marginLeft: 10 }}>
+              {dailyData.length} records loaded
+            </span>
+            <span style={{ marginLeft: 20 }}>
+              <strong>Factories:</strong> {allFactories.length} found
+            </span>
+          </div>
+          <button 
+            onClick={logDebugInfo}
+            style={{
+              padding: "5px 10px",
+              backgroundColor: "#3498db",
+              color: "white",
+              border: "none",
+              borderRadius: "4px",
+              cursor: "pointer",
+              fontSize: "12px"
+            }}
+          >
+            Show Console Logs
+          </button>
+        </div>
+      </div>
+      
       {/* Controls Section */}
       <div style={{ 
         backgroundColor: "#f8f9fa", 
         padding: "20px",
         borderRadius: "8px",
-        marginBottom: "30px",
-        boxShadow: "0 2px 4px rgba(0,0,0,0.1)"
+        marginBottom: "30px"
       }}>
-        <div style={{ 
-          display: "grid", 
-          gridTemplateColumns: "1fr 1fr", 
-          gap: "20px",
-          marginBottom: "20px"
-        }}>
-          {/* Factory Dropdown */}
-          <div>
-            <label style={{ 
-              display: "block", 
-              marginBottom: "8px", 
-              fontWeight: "bold",
-              fontSize: "16px",
-              color: "#555"
-            }}>
+        <div style={{ display: "flex", gap: 20, marginBottom: 20, flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: "200px" }}>
+            <label style={{ display: "block", marginBottom: 8, fontWeight: "bold" }}>
               Select Factory:
             </label>
             <select
@@ -286,12 +381,9 @@ const ShowDayQty = () => {
               onChange={(e) => setSelectedFactory(e.target.value)}
               style={{ 
                 width: "100%",
-                padding: "10px 12px", 
+                padding: "10px", 
                 border: "1px solid #ddd", 
-                borderRadius: "6px",
-                fontSize: "16px",
-                backgroundColor: "white",
-                cursor: "pointer"
+                borderRadius: "6px"
               }}
             >
               <option value="">All Factories</option>
@@ -303,48 +395,26 @@ const ShowDayQty = () => {
             </select>
           </div>
           
-          {/* Manual Date Input */}
-          <div>
-            <label style={{ 
-              display: "block", 
-              marginBottom: "8px", 
-              fontWeight: "bold",
-              fontSize: "16px",
-              color: "#555"
-            }}>
-              Enter Date:
+          <div style={{ flex: 1, minWidth: "200px" }}>
+            <label style={{ display: "block", marginBottom: 8, fontWeight: "bold" }}>
+              Enter Date (DD/MM/YYYY):
             </label>
             <input
               type="text"
               value={selectedDate}
               onChange={(e) => setSelectedDate(e.target.value)}
-              placeholder="DD/MM/YYYY or DD/MM"
+              placeholder="DD/MM/YYYY"
               style={{ 
                 width: "100%",
-                padding: "10px 12px", 
+                padding: "10px", 
                 border: "1px solid #ddd", 
-                borderRadius: "6px",
-                fontSize: "16px",
-                backgroundColor: "white"
+                borderRadius: "6px"
               }}
             />
-            <div style={{ 
-              marginTop: "5px", 
-              fontSize: "14px", 
-              color: "#666",
-              fontStyle: "italic"
-            }}>
-              Format: DD/MM/YYYY or DD/MM
-            </div>
           </div>
         </div>
         
-        {/* Action Buttons */}
-        <div style={{ 
-          display: "flex", 
-          gap: "15px",
-          justifyContent: "center"
-        }}>
+        <div style={{ display: "flex", gap: 15, justifyContent: "center" }}>
           <button
             onClick={() => {
               const today = new Date();
@@ -357,10 +427,7 @@ const ShowDayQty = () => {
               color: "white",
               border: "none",
               borderRadius: "6px",
-              cursor: "pointer",
-              fontSize: "16px",
-              fontWeight: "bold",
-              minWidth: "150px"
+              cursor: "pointer"
             }}
           >
             Today's Date
@@ -374,10 +441,7 @@ const ShowDayQty = () => {
               color: "white",
               border: "none",
               borderRadius: "6px",
-              cursor: "pointer",
-              fontSize: "16px",
-              fontWeight: "bold",
-              minWidth: "150px"
+              cursor: "pointer"
             }}
           >
             Clear Filters
@@ -385,270 +449,102 @@ const ShowDayQty = () => {
         </div>
       </div>
       
-      {/* Results Summary */}
-      {(selectedDate || selectedFactory) && (
-        <div style={{ 
-          marginBottom: "20px", 
-          padding: "15px",
-          backgroundColor: "#e7f3ff",
-          borderRadius: "6px",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center"
-        }}>
-          <span style={{ fontSize: "16px" }}>
-            <strong>Filters Applied:</strong> 
-            {selectedDate && ` Date: ${selectedDate}`}
-            {selectedFactory && ` Factory: ${selectedFactory}`}
-          </span>
-          <span style={{ fontSize: "16px", fontWeight: "bold" }}>
-            Showing {filteredData.length} record(s)
-          </span>
-        </div>
-      )}
-      
+      {/* Results Section */}
       {filteredData.length === 0 ? (
         <div style={{ 
           padding: "60px 40px", 
           textAlign: "center", 
           backgroundColor: "#f8f9fa", 
-          borderRadius: "8px",
-          border: "2px dashed #ddd"
+          borderRadius: "8px"
         }}>
           <h3 style={{ color: "#666", marginBottom: "15px" }}>
-            No data found
+            {dailyData.length === 0 ? "No data available" : "No matching records found"}
           </h3>
           <p style={{ color: "#777", marginBottom: "20px" }}>
-            {selectedDate || selectedFactory 
-              ? "Try different filters or clear all filters to see all data."
-              : "No dispatch records available."}
+            {dailyData.length === 0 
+              ? "There are no dispatch records in the database."
+              : "Try different filters or clear all filters to see all data."}
           </p>
-          <button 
-            onClick={clearFilters}
-            style={{
-              padding: "10px 25px",
-              backgroundColor: "#007bff",
-              color: "white",
-              border: "none",
-              borderRadius: "6px",
-              cursor: "pointer",
-              fontSize: "16px",
-              fontWeight: "bold"
-            }}
-          >
-            {selectedDate || selectedFactory ? "Clear Filters" : "Refresh Data"}
-          </button>
+          
+          {/* Show raw data info if available */}
+          {rawData.length > 0 && dailyData.length === 0 && (
+            <div style={{ 
+              marginTop: 20, 
+              padding: 15, 
+              backgroundColor: "#fff3cd", 
+              borderRadius: 4,
+              textAlign: "left"
+            }}>
+              <p><strong>Debug Info:</strong> Found {rawData.length} raw records but couldn't process them.</p>
+              <p>This usually means dates are not in the expected format.</p>
+              <button 
+                onClick={() => console.log("Raw data:", rawData)}
+                style={{
+                  marginTop: 10,
+                  padding: "8px 15px",
+                  backgroundColor: "#f39c12",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "4px",
+                  cursor: "pointer"
+                }}
+              >
+                View Raw Data in Console
+              </button>
+            </div>
+          )}
         </div>
       ) : (
         <>
           {/* Data Table */}
-          <div style={{ 
-            overflowX: "auto", 
-            marginBottom: "30px",
-            borderRadius: "8px",
-            boxShadow: "0 2px 4px rgba(0,0,0,0.1)"
-          }}>
-            <table style={{ 
-              width: "100%", 
-              borderCollapse: "collapse",
-              backgroundColor: "white"
-            }}>
+          <div style={{ overflowX: "auto", marginBottom: 30 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
-                <tr style={{ 
-                  backgroundColor: "#2c3e50",
-                  color: "white"
-                }}>
-                  <th style={{ 
-                    padding: "15px", 
-                    border: "1px solid #34495e", 
-                    textAlign: "left",
-                    fontSize: "16px"
-                  }}>
-                    Factory
-                  </th>
-                  <th style={{ 
-                    padding: "15px", 
-                    border: "1px solid #34495e", 
-                    textAlign: "left",
-                    fontSize: "16px"
-                  }}>
-                    Date
-                  </th>
-                  <th style={{ 
-                    padding: "15px", 
-                    border: "1px solid #34495e", 
-                    textAlign: "right",
-                    fontSize: "16px"
-                  }}>
-                    Total Quantity
-                  </th>
-                  <th style={{ 
-                    padding: "15px", 
-                    border: "1px solid #34495e", 
-                    textAlign: "right",
-                    fontSize: "16px"
-                  }}>
-                    Bill Quantity
-                  </th>
-                  <th style={{ 
-                    padding: "15px", 
-                    border: "1px solid #34495e", 
-                    textAlign: "right",
-                    fontSize: "16px"
-                  }}>
-                    Balance
-                  </th>
+                <tr style={{ backgroundColor: "#2c3e50", color: "white" }}>
+                  <th style={{ padding: "12px", border: "1px solid #34495e", textAlign: "left" }}>Factory</th>
+                  <th style={{ padding: "12px", border: "1px solid #34495e", textAlign: "left" }}>Date</th>
+                  <th style={{ padding: "12px", border: "1px solid #34495e", textAlign: "right" }}>Total Quantity</th>
+                  <th style={{ padding: "12px", border: "1px solid #34495e", textAlign: "right" }}>Bill Quantity</th>
+                  <th style={{ padding: "12px", border: "1px solid #34495e", textAlign: "right" }}>Balance</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredData.map((item, index) => (
-                  <tr 
-                    key={`${item.Factory}-${item.FormattedDate}-${index}`}
-                    style={{ 
-                      borderBottom: "1px solid #eee",
-                      backgroundColor: index % 2 === 0 ? "#ffffff" : "#f9f9f9"
-                    }}
-                  >
-                    <td style={{ 
-                      padding: "15px", 
-                      border: "1px solid #eee",
-                      fontWeight: "bold",
-                      color: "#2c3e50"
-                    }}>
-                      {item.Factory}
-                    </td>
-                    <td style={{ 
-                      padding: "15px", 
-                      border: "1px solid #eee",
-                      color: "#555"
-                    }}>
-                      {item.FormattedDate}
-                    </td>
-                    <td style={{ 
-                      padding: "15px", 
-                      border: "1px solid #eee", 
-                      textAlign: "right",
-                      fontWeight: "bold",
-                      color: "#2c3e50"
-                    }}>
+                  <tr key={index} style={{ borderBottom: "1px solid #eee" }}>
+                    <td style={{ padding: "12px", border: "1px solid #eee" }}>{item.Factory}</td>
+                    <td style={{ padding: "12px", border: "1px solid #eee" }}>{item.FormattedDate}</td>
+                    <td style={{ padding: "12px", border: "1px solid #eee", textAlign: "right" }}>
                       {Math.round(item.totalQty * 100) / 100}
                     </td>
-                    <td style={{ 
-                      padding: "15px", 
-                      border: "1px solid #eee", 
-                      textAlign: "right",
-                      color: "#28a745"
-                    }}>
+                    <td style={{ padding: "12px", border: "1px solid #eee", textAlign: "right" }}>
                       {Math.round(item.BillQty * 100) / 100}
                     </td>
-                    <td style={{ 
-                      padding: "15px", 
-                      border: "1px solid #eee", 
-                      textAlign: "right",
-                      fontWeight: "bold",
-                      color: item.Balance >= 0 ? "#28a745" : "#dc3545"
-                    }}>
+                    <td style={{ padding: "12px", border: "1px solid #eee", textAlign: "right" }}>
                       {Math.round(item.Balance * 100) / 100}
                     </td>
                   </tr>
                 ))}
-                
-                {/* Total Row */}
-                {filteredData.length > 0 && (
-                  <tr style={{ 
-                    backgroundColor: "#34495e",
-                    color: "white",
-                    fontWeight: "bold"
-                  }}>
-                    <td style={{ 
-                      padding: "15px", 
-                      border: "1px solid #2c3e50"
-                    }} colSpan="2">
-                      TOTAL
-                    </td>
-                    <td style={{ 
-                      padding: "15px", 
-                      border: "1px solid #2c3e50", 
-                      textAlign: "right"
-                    }}>
-                      {Math.round(totals.totalQty * 100) / 100}
-                    </td>
-                    <td style={{ 
-                      padding: "15px", 
-                      border: "1px solid #2c3e50", 
-                      textAlign: "right"
-                    }}>
-                      {Math.round(totals.BillQty * 100) / 100}
-                    </td>
-                    <td style={{ 
-                      padding: "15px", 
-                      border: "1px solid #2c3e50", 
-                      textAlign: "right",
-                      color: totals.Balance >= 0 ? "#28a745" : "#dc3545"
-                    }}>
-                      {Math.round(totals.Balance * 100) / 100}
-                    </td>
-                  </tr>
-                )}
               </tbody>
             </table>
           </div>
           
-          {/* Summary Cards */}
+          {/* Summary */}
           <div style={{ 
-            display: "grid", 
-            gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", 
-            gap: "20px",
-            marginTop: "30px"
+            padding: 20, 
+            backgroundColor: "#f8f9fa", 
+            borderRadius: 8,
+            marginTop: 20
           }}>
-            <div style={{
-              backgroundColor: "#3498db",
-              color: "white",
-              padding: "25px",
-              borderRadius: "8px",
-              textAlign: "center",
-              boxShadow: "0 4px 6px rgba(0,0,0,0.1)"
-            }}>
-              <h3 style={{ marginBottom: "10px", fontSize: "20px" }}>Total Dispatch</h3>
-              <div style={{ fontSize: "32px", fontWeight: "bold", marginBottom: "5px" }}>
-                {Math.round(totals.totalQty * 100) / 100}
+            <h3 style={{ marginBottom: 15 }}>Summary</h3>
+            <div style={{ display: "flex", gap: 20 }}>
+              <div>
+                <strong>Total Dispatch:</strong> {Math.round(totals.totalQty * 100) / 100}
               </div>
-              <div style={{ fontSize: "14px", opacity: 0.9 }}>
-                All Filtered Records
+              <div>
+                <strong>Total Billed:</strong> {Math.round(totals.BillQty * 100) / 100}
               </div>
-            </div>
-            
-            <div style={{
-              backgroundColor: "#2ecc71",
-              color: "white",
-              padding: "25px",
-              borderRadius: "8px",
-              textAlign: "center",
-              boxShadow: "0 4px 6px rgba(0,0,0,0.1)"
-            }}>
-              <h3 style={{ marginBottom: "10px", fontSize: "20px" }}>Total Billed</h3>
-              <div style={{ fontSize: "32px", fontWeight: "bold", marginBottom: "5px" }}>
-                {Math.round(totals.BillQty * 100) / 100}
-              </div>
-              <div style={{ fontSize: "14px", opacity: 0.9 }}>
-                All Filtered Records
-              </div>
-            </div>
-            
-            <div style={{
-              backgroundColor: totals.Balance >= 0 ? "#9b59b6" : "#e74c3c",
-              color: "white",
-              padding: "25px",
-              borderRadius: "8px",
-              textAlign: "center",
-              boxShadow: "0 4px 6px rgba(0,0,0,0.1)"
-            }}>
-              <h3 style={{ marginBottom: "10px", fontSize: "20px" }}>Total Balance</h3>
-              <div style={{ fontSize: "32px", fontWeight: "bold", marginBottom: "5px" }}>
-                {Math.round(totals.Balance * 100) / 100}
-              </div>
-              <div style={{ fontSize: "14px", opacity: 0.9 }}>
-                All Filtered Records
+              <div>
+                <strong>Balance:</strong> {Math.round(totals.Balance * 100) / 100}
               </div>
             </div>
           </div>
