@@ -32,11 +32,7 @@ const googleProvider = new GoogleAuthProvider();
 const db = getFirestore(app);
 
 // ✅ Helper function to check if logged-in user is admin
-const isAdminUser = async (user) => {
-  if (!user) return false;
-  const token = await user.getIdTokenResult();
-  return token.claims.admin === true;
-};
+
 
 // ✅ Export everything
 export { app, analytics, auth, googleProvider, db, isAdminUser };
