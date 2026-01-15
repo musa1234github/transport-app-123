@@ -2,9 +2,10 @@ import React, { useState, useEffect } from "react";
 import { db } from "../firebaseConfig";
 import { collection, addDoc, query, where, getDocs } from "firebase/firestore";
 import * as XLSX from "xlsx";
-import "./UploadDispatch.css";
 
 /* ------------------ CONSTANTS ------------------ */
+
+const DATE_FORMATS = ["dd.mm.yyyy", "dd/mm/yyyy", "mm/dd/yyyy", "yyyy-mm-dd"];
 
 const FACTORY_NAME_FIXES = {
   MANIKGARH: "MANIGARH"
@@ -106,8 +107,17 @@ const parseExcelDate = (value) => {
       let [a, b, c] = parts.map(Number);
       if (c < 100) c += 2000;
 
-      const day = a > 12 ? a : b;
-      const month = a > 12 ? b : a;
+      let day, month;
+      if (a > 12) {
+        day = a;
+        month = b;
+      } else if (b > 12) {
+        day = b;
+        month = a;
+      } else {
+        day = a;
+        month = b;
+      }
 
       return new Date(c, month - 1, day);
     }
@@ -116,9 +126,12 @@ const parseExcelDate = (value) => {
   return null;
 };
 
+const normalizeVehicle = (value = "") =>
+  value.toString().replace(/\s+/g, "").toUpperCase();
+
 const extractLast4Digits = (value = "") => {
-  const m = value.toString().replace(/\s+/g, "").match(/(\d{4})$/);
-  return m ? m[1] : null;
+  const match = normalizeVehicle(value).match(/(\d{4})$/);
+  return match ? match[1] : null;
 };
 
 const normalizeChallan = (v) =>
@@ -131,7 +144,6 @@ const UploadDispatch = () => {
   const [file, setFile] = useState(null);
   const [message, setMessage] = useState("");
   const [vehicles, setVehicles] = useState([]);
-  const [isUploading, setIsUploading] = useState(false);
 
   useEffect(() => {
     const loadVehicles = async () => {
@@ -158,12 +170,10 @@ const UploadDispatch = () => {
 
   const handleUpload = async (e) => {
     e.preventDefault();
-    setIsUploading(true);
     setMessage("");
 
     if (!file || !factory) {
       setMessage("❌ File and Factory required");
-      setIsUploading(false);
       return;
     }
 
@@ -179,28 +189,13 @@ const UploadDispatch = () => {
       let dataRows = [];
       let colMap = null;
 
-      /* 🔥 FIXED DYNAMIC LOGIC */
       if (FACTORY_COLUMN_MAPS[factoryName] === "dynamic") {
-
-        const headerRowIndex = rows.findIndex(r =>
-          r && r.some(c =>
-            String(c).toUpperCase().includes("SOLD-TO")
-          )
-        );
-
-        if (headerRowIndex === -1) {
-          throw new Error("Header row not found");
-        }
-
-        const header = rows[headerRowIndex];
+        const header = rows[1];
         colMap = {};
-
         header.forEach((h, i) => {
           if (h) colMap[String(h).trim().toUpperCase()] = i;
         });
-
-        dataRows = rows.slice(headerRowIndex + 1);
-
+        dataRows = rows.slice(2);
       } else {
         colMap = FACTORY_COLUMN_MAPS[factoryName];
         dataRows = rows;
@@ -215,41 +210,48 @@ const UploadDispatch = () => {
         const qty = Number(row[colMap.Qty] || 0);
         if (qty <= 0) continue;
 
-        const dispatchDate = parseExcelDate(row[colMap.DispatchDate]);
+        const rawDate = row[colMap.DispatchDate];
+        const dispatchDate = parseExcelDate(rawDate);
         if (!dispatchDate) continue;
 
         const vehicleLast4 = extractLast4Digits(row[colMap.VehicleNo]);
+        if (!vehicleLast4) continue;
+
         const matchedVehicle = vehicles.find(v => v.last4 === vehicleLast4);
         if (!matchedVehicle) continue;
 
         const challanNo = normalizeChallan(row[colMap.ChallanNo]);
-        if (!challanNo || challanSet.has(challanNo)) continue;
+        if (!challanNo) continue;
+
+        if (challanSet.has(challanNo)) continue;
         if (await isDuplicate(challanNo, factoryName)) continue;
         challanSet.add(challanNo);
 
+        /* ✅ PARTY NAME IS OPTIONAL */
         let partyName = "";
-        if (factoryName === "ULTRATECH") {
-          partyName = row[colMap["SOLD-TO-PARTY NAME"]] || "";
-        } else if (factoryName === "ORIENT") {
+        if (factoryName === "ORIENT") {
           partyName = row[colMap["SHIP TO PARTY NAME"]] || "";
+        } else if (factoryName === "ULTRATECH") {
+          partyName = row[colMap["SOLD-TO-PARTY NAME"]] || "";
         } else {
           partyName = row[colMap.PartyName] || "";
         }
 
-        await addDoc(collection(db, "TblDispatch"), {
+        const dto = {
           DispatchDate: dispatchDate,
           ChallanNo: challanNo,
           VehicleNo: matchedVehicle.VehicleNo,
           VehicleId: matchedVehicle.id,
-          PartyName: String(partyName).trim(),
+          PartyName: String(partyName).trim(), // empty allowed
           Destination: row[colMap.Destination],
           DispatchQuantity: qty,
           Advance: Number(row[colMap.Advance] || 0),
           Diesel: Number(row[colMap.Diesel] || 0),
           FactoryName: factoryName,
           CreatedOn: new Date()
-        });
+        };
 
+        await addDoc(collection(db, "TblDispatch"), dto);
         uploaded++;
       }
 
@@ -257,16 +259,13 @@ const UploadDispatch = () => {
     } catch (err) {
       console.error(err);
       setMessage("❌ Upload failed");
-    } finally {
-      setIsUploading(false);
     }
   };
 
   return (
-    <div className="upload-container">
-      <h3>Upload Dispatch Data</h3>
-
-      {message && <div className="message">{message}</div>}
+    <div style={{ maxWidth: 600, margin: "20px auto" }}>
+      <h3>Upload Dispatch Excel</h3>
+      {message && <div>{message}</div>}
 
       <form onSubmit={handleUpload}>
         <select value={factory} onChange={e => setFactory(e.target.value)} required>
@@ -281,6 +280,8 @@ const UploadDispatch = () => {
           <option>JSW</option>
         </select>
 
+        <br /><br />
+
         <input
           type="file"
           accept=".xlsx,.xls"
@@ -288,9 +289,8 @@ const UploadDispatch = () => {
           required
         />
 
-        <button type="submit" disabled={isUploading}>
-          {isUploading ? "Uploading..." : "Upload"}
-        </button>
+        <br /><br />
+        <button type="submit">Upload</button>
       </form>
     </div>
   );
