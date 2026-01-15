@@ -65,7 +65,7 @@ const App = () => {
           element={!user ? <Login /> : <Navigate to="/" />}
         />
 
-        {/* ================= PRIVATE ROUTES ================= */}
+        {/* ================= HOME (LAYOUT) ================= */}
         <Route
           path="/"
           element={
@@ -75,28 +75,97 @@ const App = () => {
               <Navigate to="/login" />
             )
           }
-        >
-          <Route path="upload-dispatch" element={<UploadDispatch isAdmin={isAdmin} />} />
-          <Route path="bill-upload" element={<BillUpload isAdmin={isAdmin} />} />
-          <Route path="destination-master" element={<DestinationMaster isAdmin={isAdmin} />} />
-          <Route path="factories" element={<FactoryList isAdmin={isAdmin} />} />
-          <Route path="show-dispatch" element={<ShowDispatch isAdmin={isAdmin} />} />
-          <Route path="vehicle-master" element={<VehicleMaster />} />
-          <Route path="show-bill" element={<ShowBill />} />
-          <Route path="show-billed-challan" element={<ShoBilledChallan />} />
-          <Route path="monthly-qty-report" element={<ShowQtyByMonth />} />
-          <Route path="daily-qty-report" element={<ShowDayQty />} />
-          <Route path="delete-dispatch" element={<DeleteDispatch />} />
-          <Route path="delete-duplicate-challan" element={<DeleteDuplicateChallan />} />
-          <Route path="payment-upload" element={<PaymentUpload isAdmin={isAdmin} />} />
+        />
 
+        {/* ================= PRIVATE ROUTES ================= */}
+        <Route
+          path="/upload-dispatch"
+          element={
+            user ? (
+              <UploadDispatch isAdmin={isAdmin} />
+            ) : (
+              <Navigate to="/login" />
+            )
+          }
+        />
 
-        </Route>
+        <Route
+          path="/bill-upload"
+          element={
+            user ? (
+              <BillUpload isAdmin={isAdmin} />
+            ) : (
+              <Navigate to="/login" />
+            )
+          }
+        />
+
+        <Route
+          path="/payment-upload"
+          element={
+            user ? (
+              <PaymentUpload isAdmin={isAdmin} />
+            ) : (
+              <Navigate to="/login" />
+            )
+          }
+        />
+
+        <Route
+          path="/destination-master"
+          element={user ? <DestinationMaster isAdmin={isAdmin} /> : <Navigate to="/login" />}
+        />
+
+        <Route
+          path="/factories"
+          element={user ? <FactoryList isAdmin={isAdmin} /> : <Navigate to="/login" />}
+        />
+
+        <Route
+          path="/show-dispatch"
+          element={user ? <ShowDispatch isAdmin={isAdmin} /> : <Navigate to="/login" />}
+        />
+
+        <Route
+          path="/vehicle-master"
+          element={user ? <VehicleMaster /> : <Navigate to="/login" />}
+        />
+
+        <Route
+          path="/show-bill"
+          element={user ? <ShowBill /> : <Navigate to="/login" />}
+        />
+
+        <Route
+          path="/show-billed-challan"
+          element={user ? <ShoBilledChallan /> : <Navigate to="/login" />}
+        />
+
+        <Route
+          path="/monthly-qty-report"
+          element={user ? <ShowQtyByMonth /> : <Navigate to="/login" />}
+        />
+
+        <Route
+          path="/daily-qty-report"
+          element={user ? <ShowDayQty /> : <Navigate to="/login" />}
+        />
+
+        <Route
+          path="/delete-dispatch"
+          element={user ? <DeleteDispatch /> : <Navigate to="/login" />}
+        />
+
+        <Route
+          path="/delete-duplicate-challan"
+          element={user ? <DeleteDuplicateChallan /> : <Navigate to="/login" />}
+        />
 
         {/* ================= FALLBACK ================= */}
         <Route path="*" element={<Navigate to={user ? "/" : "/login"} />} />
       </Routes>
     </BrowserRouter>
+
   );
 };
 

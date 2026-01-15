@@ -61,7 +61,7 @@ const Home = ({ user, isAdmin }) => {
           {isAdmin && (
             <li>
               
-              <Link to="upload-dispatch" style={menuLink}>
+              <Link to="/upload-dispatch" style={menuLink}>
 
                 🚚 Dispatch Upload
               </Link>
