@@ -1,10 +1,10 @@
 import { initializeApp } from "firebase/app";
 import { getAnalytics } from "firebase/analytics";
 import { getAuth, GoogleAuthProvider } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import { getFirestore, doc, getDoc } from "firebase/firestore";
 import "./utils/migrateDates";
 
-// 🔒 KEEP your existing config intact
+/* 🔒 Firebase config */
 const firebaseConfig = {
   apiKey: "AIzaSyAd1bazB0rvrEhQwXWa-xUOkqLaCFZEjME",
   authDomain: "transport-app-c4674.firebaseapp.com",
@@ -15,24 +15,31 @@ const firebaseConfig = {
   measurementId: "G-2KW1848NFH"
 };
 
-// Initialize Firebase app
+/* 🔥 Init Firebase */
 const app = initializeApp(firebaseConfig);
 
-// Initialize analytics only in browser
+/* 📊 Analytics (browser only) */
 let analytics;
 if (typeof window !== "undefined") {
   analytics = getAnalytics(app);
 }
 
-// 🔑 Authentication setup
+/* 🔑 Auth */
 const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
 
-// 🔥 Firestore database reference
+/* 🗄️ Firestore */
 const db = getFirestore(app);
 
-// ✅ Helper function to check if logged-in user is admin
+/* ✅ ADMIN CHECK — SPARK SAFE */
+const isAdminUser = async (user) => {
+  if (!user) return false;
 
+  const snap = await getDoc(doc(db, "Users", user.uid));
+  if (!snap.exists()) return false;
 
-// ✅ Export everything
+  return snap.data().role === "admin";
+};
+
+/* ✅ EXPORTS */
 export { app, analytics, auth, googleProvider, db, isAdminUser };
