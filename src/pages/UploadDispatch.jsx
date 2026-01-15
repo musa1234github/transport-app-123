@@ -6,8 +6,6 @@ import "./UploadDispatch.css";
 
 /* ------------------ CONSTANTS ------------------ */
 
-const DATE_FORMATS = ["dd.mm.yyyy", "dd/mm/yyyy", "mm/dd/yyyy", "yyyy-mm-dd"];
-
 const FACTORY_NAME_FIXES = {
   MANIKGARH: "MANIGARH"
 };
@@ -108,17 +106,8 @@ const parseExcelDate = (value) => {
       let [a, b, c] = parts.map(Number);
       if (c < 100) c += 2000;
 
-      let day, month;
-      if (a > 12) {
-        day = a;
-        month = b;
-      } else if (b > 12) {
-        day = b;
-        month = a;
-      } else {
-        day = a;
-        month = b;
-      }
+      const day = a > 12 ? a : b;
+      const month = a > 12 ? b : a;
 
       return new Date(c, month - 1, day);
     }
@@ -127,12 +116,9 @@ const parseExcelDate = (value) => {
   return null;
 };
 
-const normalizeVehicle = (value = "") =>
-  value.toString().replace(/\s+/g, "").toUpperCase();
-
 const extractLast4Digits = (value = "") => {
-  const match = normalizeVehicle(value).match(/(\d{4})$/);
-  return match ? match[1] : null;
+  const m = value.toString().replace(/\s+/g, "").match(/(\d{4})$/);
+  return m ? m[1] : null;
 };
 
 const normalizeChallan = (v) =>
@@ -193,13 +179,28 @@ const UploadDispatch = () => {
       let dataRows = [];
       let colMap = null;
 
+      /* 🔥 FIXED DYNAMIC LOGIC */
       if (FACTORY_COLUMN_MAPS[factoryName] === "dynamic") {
-        const header = rows[1];
+
+        const headerRowIndex = rows.findIndex(r =>
+          r && r.some(c =>
+            String(c).toUpperCase().includes("SOLD-TO")
+          )
+        );
+
+        if (headerRowIndex === -1) {
+          throw new Error("Header row not found");
+        }
+
+        const header = rows[headerRowIndex];
         colMap = {};
+
         header.forEach((h, i) => {
           if (h) colMap[String(h).trim().toUpperCase()] = i;
         });
-        dataRows = rows.slice(2);
+
+        dataRows = rows.slice(headerRowIndex + 1);
+
       } else {
         colMap = FACTORY_COLUMN_MAPS[factoryName];
         dataRows = rows;
@@ -214,48 +215,41 @@ const UploadDispatch = () => {
         const qty = Number(row[colMap.Qty] || 0);
         if (qty <= 0) continue;
 
-        const rawDate = row[colMap.DispatchDate];
-        const dispatchDate = parseExcelDate(rawDate);
+        const dispatchDate = parseExcelDate(row[colMap.DispatchDate]);
         if (!dispatchDate) continue;
 
         const vehicleLast4 = extractLast4Digits(row[colMap.VehicleNo]);
-        if (!vehicleLast4) continue;
-
         const matchedVehicle = vehicles.find(v => v.last4 === vehicleLast4);
         if (!matchedVehicle) continue;
 
         const challanNo = normalizeChallan(row[colMap.ChallanNo]);
-        if (!challanNo) continue;
-
-        if (challanSet.has(challanNo)) continue;
+        if (!challanNo || challanSet.has(challanNo)) continue;
         if (await isDuplicate(challanNo, factoryName)) continue;
         challanSet.add(challanNo);
 
-        /* ✅ PARTY NAME IS OPTIONAL */
         let partyName = "";
-        if (factoryName === "ORIENT") {
-          partyName = row[colMap["SHIP TO PARTY NAME"]] || "";
-        } else if (factoryName === "ULTRATECH") {
+        if (factoryName === "ULTRATECH") {
           partyName = row[colMap["SOLD-TO-PARTY NAME"]] || "";
+        } else if (factoryName === "ORIENT") {
+          partyName = row[colMap["SHIP TO PARTY NAME"]] || "";
         } else {
           partyName = row[colMap.PartyName] || "";
         }
 
-        const dto = {
+        await addDoc(collection(db, "TblDispatch"), {
           DispatchDate: dispatchDate,
           ChallanNo: challanNo,
           VehicleNo: matchedVehicle.VehicleNo,
           VehicleId: matchedVehicle.id,
-          PartyName: String(partyName).trim(), // empty allowed
+          PartyName: String(partyName).trim(),
           Destination: row[colMap.Destination],
           DispatchQuantity: qty,
           Advance: Number(row[colMap.Advance] || 0),
           Diesel: Number(row[colMap.Diesel] || 0),
           FactoryName: factoryName,
           CreatedOn: new Date()
-        };
+        });
 
-        await addDoc(collection(db, "TblDispatch"), dto);
         uploaded++;
       }
 
@@ -268,91 +262,36 @@ const UploadDispatch = () => {
     }
   };
 
-  const getMessageType = (msg) => {
-    if (msg.includes("✅")) return "success";
-    if (msg.includes("❌")) return "error";
-    return "";
-  };
-
   return (
     <div className="upload-container">
-      <div className="upload-header">
-        <h3>Upload Dispatch Data</h3>
-      </div>
+      <h3>Upload Dispatch Data</h3>
 
-      {message && (
-        <div className={`message ${getMessageType(message)}`}>
-          {message}
-        </div>
-      )}
+      {message && <div className="message">{message}</div>}
 
-      <form className="upload-form" onSubmit={handleUpload}>
-        <div className="form-group">
-          <label className="form-label">Factory Name</label>
-          <select 
-            className="form-select"
-            value={factory} 
-            onChange={e => setFactory(e.target.value)} 
-            required
-            disabled={isUploading}
-          >
-            <option value="">-- Select Factory --</option>
-            <option>ACC MARATHA</option>
-            <option>AMBUJA</option>
-            <option>DALMIA</option>
-            <option>MP BIRLA</option>
-            <option>ORIENT</option>
-            <option>MANIKGARH</option>
-            <option>ULTRATECH</option>
-            <option>JSW</option>
-          </select>
-        </div>
+      <form onSubmit={handleUpload}>
+        <select value={factory} onChange={e => setFactory(e.target.value)} required>
+          <option value="">-- Select Factory --</option>
+          <option>ACC MARATHA</option>
+          <option>AMBUJA</option>
+          <option>DALMIA</option>
+          <option>MP BIRLA</option>
+          <option>ORIENT</option>
+          <option>MANIKGARH</option>
+          <option>ULTRATECH</option>
+          <option>JSW</option>
+        </select>
 
-        <div className="form-group">
-          <label className="form-label">Excel File</label>
-          <div className="form-file">
-            <label className="file-label">
-              <span>{file ? "Change File" : "Choose Excel file"}</span>
-              <input
-                type="file"
-                accept=".xlsx,.xls"
-                onChange={e => setFile(e.target.files[0])}
-                required
-                disabled={isUploading}
-              />
-              <div className="file-name">
-                {file ? file.name : "No file chosen"}
-              </div>
-            </label>
-          </div>
-        </div>
+        <input
+          type="file"
+          accept=".xlsx,.xls"
+          onChange={e => setFile(e.target.files[0])}
+          required
+        />
 
-        <button 
-          type="submit" 
-          className="upload-button"
-          disabled={isUploading}
-        >
-          {isUploading ? (
-            <>
-              <span className="loading-spinner"></span>
-              Uploading...
-            </>
-          ) : (
-            'Upload Data'
-          )}
+        <button type="submit" disabled={isUploading}>
+          {isUploading ? "Uploading..." : "Upload"}
         </button>
       </form>
-
-      <div className="instructions">
-        <h4>Instructions:</h4>
-        <ul>
-          <li>Select the factory name from the dropdown</li>
-          <li>Choose an Excel file (.xlsx or .xls format)</li>
-          <li>System will automatically map columns based on factory format</li>
-          <li>Duplicate challan numbers will be skipped</li>
-          <li>Only vehicles registered in the system will be processed</li>
-        </ul>
-      </div>
     </div>
   );
 };
