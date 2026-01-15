@@ -5,8 +5,6 @@ import * as XLSX from "xlsx";
 
 /* ------------------ CONSTANTS ------------------ */
 
-const DATE_FORMATS = ["dd.mm.yyyy", "dd/mm/yyyy", "mm/dd/yyyy", "yyyy-mm-dd"];
-
 const FACTORY_NAME_FIXES = {
   MANIKGARH: "MANIGARH"
 };
@@ -14,7 +12,7 @@ const FACTORY_NAME_FIXES = {
 const FACTORY_COLUMN_MAPS = {
   ORIENT: "dynamic",
   ULTRATECH: "dynamic",
-  MANIGARH: {
+  MANIKGARH: {
     DispatchDate: 5,
     Qty: 3,
     ChallanNo: 8,
@@ -106,19 +104,8 @@ const parseExcelDate = (value) => {
     if (parts.length === 3) {
       let [a, b, c] = parts.map(Number);
       if (c < 100) c += 2000;
-
-      let day, month;
-      if (a > 12) {
-        day = a;
-        month = b;
-      } else if (b > 12) {
-        day = b;
-        month = a;
-      } else {
-        day = a;
-        month = b;
-      }
-
+      const day = a > 12 ? a : b;
+      const month = a > 12 ? b : a;
       return new Date(c, month - 1, day);
     }
   }
@@ -126,12 +113,9 @@ const parseExcelDate = (value) => {
   return null;
 };
 
-const normalizeVehicle = (value = "") =>
-  value.toString().replace(/\s+/g, "").toUpperCase();
-
 const extractLast4Digits = (value = "") => {
-  const match = normalizeVehicle(value).match(/(\d{4})$/);
-  return match ? match[1] : null;
+  const m = value.toString().replace(/\s+/g, "").match(/(\d{4})$/);
+  return m ? m[1] : null;
 };
 
 const normalizeChallan = (v) =>
@@ -148,12 +132,13 @@ const UploadDispatch = () => {
   useEffect(() => {
     const loadVehicles = async () => {
       const snap = await getDocs(collection(db, "VehicleMaster"));
-      const list = snap.docs.map(d => ({
-        id: d.id,
-        VehicleNo: d.data().VehicleNo,
-        last4: extractLast4Digits(d.data().VehicleNo)
-      }));
-      setVehicles(list);
+      setVehicles(
+        snap.docs.map(d => ({
+          id: d.id,
+          VehicleNo: d.data().VehicleNo,
+          last4: extractLast4Digits(d.data().VehicleNo)
+        }))
+      );
     };
     loadVehicles();
   }, []);
@@ -189,20 +174,36 @@ const UploadDispatch = () => {
       let dataRows = [];
       let colMap = null;
 
+      /* 🔥 SAFE DYNAMIC HEADER DETECTION */
       if (FACTORY_COLUMN_MAPS[factoryName] === "dynamic") {
-        const header = rows[1];
+        const headerRowIndex = rows.findIndex(r =>
+          r && r.some(c =>
+            String(c).toUpperCase().includes("SOLD-TO")
+          )
+        );
+
+        if (headerRowIndex === -1) {
+          setMessage("❌ Header row not found in Excel");
+          return;
+        }
+
         colMap = {};
-        header.forEach((h, i) => {
+        rows[headerRowIndex].forEach((h, i) => {
           if (h) colMap[String(h).trim().toUpperCase()] = i;
         });
-        dataRows = rows.slice(2);
+
+        dataRows = rows.slice(headerRowIndex + 1);
       } else {
         colMap = FACTORY_COLUMN_MAPS[factoryName];
         dataRows = rows;
       }
 
-      const challanSet = new Set();
       let uploaded = 0;
+      let skippedVehicle = 0;
+      let skippedDate = 0;
+      let skippedDuplicate = 0;
+
+      const challanSet = new Set();
 
       for (const row of dataRows) {
         if (!row || row.every(v => !v)) continue;
@@ -210,52 +211,62 @@ const UploadDispatch = () => {
         const qty = Number(row[colMap.Qty] || 0);
         if (qty <= 0) continue;
 
-        const rawDate = row[colMap.DispatchDate];
-        const dispatchDate = parseExcelDate(rawDate);
-        if (!dispatchDate) continue;
+        const dispatchDate = parseExcelDate(row[colMap.DispatchDate]);
+        if (!dispatchDate) {
+          skippedDate++;
+          continue;
+        }
 
         const vehicleLast4 = extractLast4Digits(row[colMap.VehicleNo]);
-        if (!vehicleLast4) continue;
-
         const matchedVehicle = vehicles.find(v => v.last4 === vehicleLast4);
-        if (!matchedVehicle) continue;
+        if (!matchedVehicle) {
+          skippedVehicle++;
+          continue;
+        }
 
         const challanNo = normalizeChallan(row[colMap.ChallanNo]);
-        if (!challanNo) continue;
+        if (!challanNo || challanSet.has(challanNo)) continue;
 
-        if (challanSet.has(challanNo)) continue;
-        if (await isDuplicate(challanNo, factoryName)) continue;
+        if (await isDuplicate(challanNo, factoryName)) {
+          skippedDuplicate++;
+          continue;
+        }
+
         challanSet.add(challanNo);
 
-        /* ✅ PARTY NAME IS OPTIONAL */
         let partyName = "";
-        if (factoryName === "ORIENT") {
-          partyName = row[colMap["SHIP TO PARTY NAME"]] || "";
-        } else if (factoryName === "ULTRATECH") {
+        if (factoryName === "ULTRATECH") {
           partyName = row[colMap["SOLD-TO-PARTY NAME"]] || "";
+        } else if (factoryName === "ORIENT") {
+          partyName = row[colMap["SHIP TO PARTY NAME"]] || "";
         } else {
           partyName = row[colMap.PartyName] || "";
         }
 
-        const dto = {
+        await addDoc(collection(db, "TblDispatch"), {
           DispatchDate: dispatchDate,
           ChallanNo: challanNo,
           VehicleNo: matchedVehicle.VehicleNo,
           VehicleId: matchedVehicle.id,
-          PartyName: String(partyName).trim(), // empty allowed
+          PartyName: String(partyName).trim(),
           Destination: row[colMap.Destination],
           DispatchQuantity: qty,
           Advance: Number(row[colMap.Advance] || 0),
           Diesel: Number(row[colMap.Diesel] || 0),
           FactoryName: factoryName,
           CreatedOn: new Date()
-        };
+        });
 
-        await addDoc(collection(db, "TblDispatch"), dto);
         uploaded++;
       }
 
-      setMessage(`✅ ${uploaded} rows uploaded successfully`);
+      setMessage(
+        `✅ Uploaded: ${uploaded}
+⚠️ Vehicle not found: ${skippedVehicle}
+⚠️ Invalid date: ${skippedDate}
+⚠️ Duplicate challan: ${skippedDuplicate}`
+      );
+
     } catch (err) {
       console.error(err);
       setMessage("❌ Upload failed");
@@ -265,7 +276,7 @@ const UploadDispatch = () => {
   return (
     <div style={{ maxWidth: 600, margin: "20px auto" }}>
       <h3>Upload Dispatch Excel</h3>
-      {message && <div>{message}</div>}
+      {message && <pre>{message}</pre>}
 
       <form onSubmit={handleUpload}>
         <select value={factory} onChange={e => setFactory(e.target.value)} required>
