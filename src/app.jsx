@@ -24,6 +24,13 @@ const App = () => {
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
 
+  // This goes in your React components (App.jsx, etc.)
+  useEffect(() => {
+    if (user) {
+      loadData();
+    }
+  }, [user]);
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);

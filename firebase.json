@@ -11,6 +11,26 @@
         "source": "**",
         "destination": "/index.html"
       }
+    ],
+    "headers": [
+      {
+        "source": "**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "max-age=3600"
+          }
+        ]
+      },
+      {
+        "source": "**/*.@(js|css)",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "max-age=31536000"
+          }
+        ]
+      }
     ]
   },
   "emulators": {
@@ -22,28 +42,50 @@
       "host": "0.0.0.0",
       "port": 9099
     },
+    "functions": {
+      "host": "0.0.0.0",
+      "port": 5001
+    },
     "firestore": {
       "host": "0.0.0.0",
       "port": 8080
     },
     "ui": {
       "enabled": true,
-      "host": "0.0.0.0"
+      "host": "0.0.0.0",
+      "port": 4000
     },
     "singleProjectMode": true
   },
-  "functions": [
-    {
-      "source": "functions",
-      "codebase": "default",
-      "disallowLegacyRuntimeConfig": true,
-      "ignore": [
-        "node_modules",
-        ".git",
-        "firebase-debug.log",
-        "firebase-debug.*.log",
-        "*.local"
-      ]
-    }
-  ]
+  "functions": {
+    "source": "functions",
+    "codebase": "default",
+    "runtime": "nodejs18",
+    "timeoutSeconds": 30,
+    "availableMemoryMb": 256,
+    "maxInstances": 3,
+    "minInstances": 0,
+    "ingressSettings": "ALLOW_ALL",
+    "disallowLegacyRuntimeConfig": true,
+    "ignore": [
+      "node_modules",
+      ".git",
+      "firebase-debug.log",
+      "firebase-debug.*.log",
+      "*.local",
+      "*.map",
+      ".env",
+      ".env.*",
+      "coverage",
+      "test",
+      "__tests__"
+    ]
+  },
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  }
 }
