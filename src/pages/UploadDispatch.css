@@ -1,0 +1,49 @@
+/* UploadDispatch.css */
+
+.upload-container {
+  max-width: 600px;
+  margin: 20px auto;
+  padding: 20px;
+  background-color: #f8f9fa;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+.upload-form {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.factory-select, .file-input {
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 16px;
+}
+
+.upload-button {
+  background-color: #007bff;
+  color: white;
+  padding: 12px 24px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 16px;
+  transition: background-color 0.3s;
+}
+
+.upload-button:hover {
+  background-color: #0056b3;
+}
+
+.message-display {
+  background-color: #e9ecef;
+  padding: 15px;
+  border-radius: 4px;
+  white-space: pre-wrap;
+  font-family: monospace;
+  margin-bottom: 20px;
+}
+
+/* You can add more styles as needed */

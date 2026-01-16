@@ -2,7 +2,7 @@
 import { db } from "../firebaseConfig";
 import { collection, addDoc, query, where, getDocs } from "firebase/firestore";
 import * as XLSX from "xlsx";
-/*// import "./UploadDispatch.css";*/
+import "./UploadDispatch.css";
 
 /* ================= CONSTANTS ================= */
 
