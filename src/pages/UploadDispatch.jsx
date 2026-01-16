@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { db } from "../firebaseConfig";
 import { collection, addDoc, query, where, getDocs } from "firebase/firestore";
 import * as XLSX from "xlsx";
-import "./UploadDispatch.css"; // Add this import at the top
+import "./UploadDispatch.css";
 
 /* ================= CONSTANTS ================= */
 
@@ -14,7 +14,7 @@ const FACTORY_COLUMN_MAPS = {
   ORIENT: "dynamic",
   ULTRATECH: {
     DispatchDate: 2,      // PGI Date (3rd column, index 2)
-    Qty: 11,              // Quantity (MT) - index 11
+    Qty: 12,              // Quantity (MT) - CHANGED from 11 to 12
     ChallanNo: 1,         // Delivery No - index 1
     VehicleNo: 20,        // Truck No - index 20
     PartyName: 7,         // Sold-to-Party Name - index 7
@@ -99,59 +99,68 @@ const FACTORY_COLUMN_MAPS = {
 const parseExcelDate = (value) => {
   if (!value) return null;
 
+  // Handle Excel serial numbers
   if (typeof value === "number") {
     const d = XLSX.SSF.parse_date_code(value);
     return d ? new Date(d.y, d.m - 1, d.d) : null;
   }
 
   if (typeof value === "string") {
-    const v = value.trim().replace(/\./g, "-").replace(/\//g, "-");
-    const parts = v.split("-");
+    const v = value.trim();
     
-    if (parts.length === 3) {
-      let [a, b, c] = parts.map(Number);
-      
-      // Handle 2-digit year
-      if (c < 100) c += 2000;
-      
-      // Check for DD-MM-YYYY format (common in Indian dates)
-      if (a > 31 && a <= 99) {
-        // a might be Excel serial date
-        return null;
-      }
-      
-      // Try to determine format
-      if (a > 12 && a <= 31) {
-        // DD-MM-YYYY
-        return new Date(c, b - 1, a);
-      } else if (b > 12 && b <= 31) {
-        // MM-DD-YYYY
-        return new Date(c, a - 1, b);
-      } else {
-        // Ambiguous, try both
-        try {
-          // Try DD-MM-YYYY first (more common for Indian dates)
-          const date1 = new Date(c, b - 1, a);
-          // Try MM-DD-YYYY second
-          const date2 = new Date(c, a - 1, b);
-          
-          // Check which date is valid
-          if (date1.getDate() === a && date1.getMonth() === b - 1) {
-            return date1;
-          } else if (date2.getDate() === b && date2.getMonth() === a - 1) {
-            return date2;
-          }
-          
-          // If neither matches exactly, return the first valid date
-          if (date1 instanceof Date && !isNaN(date1)) return date1;
-          if (date2 instanceof Date && !isNaN(date2)) return date2;
-        } catch (e) {
-          return null;
-        }
-      }
+    // Try different date formats
+    let date = null;
+    
+    // Format 1: DD.MM.YYYY (with dots) - ULTRATECH format
+    if (v.match(/^\d{2}\.\d{2}\.\d{4}$/)) {
+      const [day, month, year] = v.split('.').map(Number);
+      return new Date(year, month - 1, day);
+    }
+    // Format 2: DD-MM-YYYY (with dashes)
+    else if (v.match(/^\d{2}-\d{2}-\d{4}$/)) {
+      const [day, month, year] = v.split('-').map(Number);
+      return new Date(year, month - 1, day);
+    }
+    // Format 3: DD/MM/YYYY (with slashes)
+    else if (v.match(/^\d{2}\/\d{2}\/\d{4}$/)) {
+      const [day, month, year] = v.split('/').map(Number);
+      return new Date(year, month - 1, day);
+    }
+    // Format 4: YYYY-MM-DD
+    else if (v.match(/^\d{4}-\d{2}-\d{2}$/)) {
+      const [year, month, day] = v.split('-').map(Number);
+      return new Date(year, month - 1, day);
     }
   }
+  
   return null;
+};
+
+const parseQuantity = (value) => {
+  if (value === null || value === undefined) {
+    return 0;
+  }
+  
+  // If it's already a number, return it
+  if (typeof value === 'number') {
+    return value;
+  }
+  
+  // Convert to string and clean
+  const str = String(value).trim();
+  
+  if (str === "") {
+    return 0;
+  }
+  
+  // Parse the number
+  const num = parseFloat(str);
+  
+  if (isNaN(num)) {
+    return 0;
+  }
+  
+  return num;
 };
 
 const normalizeVehicle = (v = "") =>
@@ -212,13 +221,19 @@ const UploadDispatch = () => {
     let vehicleMiss = 0;
     let dateMiss = 0;
     let dupMiss = 0;
+    let qtyMiss = 0;
     let skippedRows = 0;
 
     try {
       const buffer = await file.arrayBuffer();
       const wb = XLSX.read(buffer);
       const sheet = wb.Sheets[wb.SheetNames[0]];
+      
+      // Read the entire sheet as arrays
       const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+      
+      console.log(`=== Processing ${factoryName} file ===`);
+      console.log(`Total rows: ${rows.length}`);
 
       let colMap = {};
       let dataRows = [];
@@ -235,7 +250,7 @@ const UploadDispatch = () => {
         ];
 
         const headerRowIndex = rows.findIndex(row =>
-          row.some(cell =>
+          Array.isArray(row) && row.some(cell =>
             HEADER_KEYWORDS.some(key =>
               String(cell || "").toUpperCase().includes(key)
             )
@@ -253,64 +268,158 @@ const UploadDispatch = () => {
 
         dataRows = rows.slice(headerRowIndex + 1);
       } else {
-        colMap = FACTORY_COLUMN_MAPS[factoryName];
-        // Skip header rows for all fixed-mapping factories
-        dataRows = rows.slice(1);
+        // For ULTRATECH, we need to handle differently
+        if (factoryName === "ULTRATECH") {
+          // ULTRATECH files have a specific structure:
+          // Row 0: Title "09.01.2026 ULTRATECH"
+          // Row 1: Headers starting with "PGI Date"
+          // Row 2+: Data rows
+          
+          // Find the header row (should contain "PGI Date")
+          const headerRowIndex = rows.findIndex(row => 
+            Array.isArray(row) && row.some(cell => 
+              String(cell || "").includes("PGI Date")
+            )
+          );
+          
+          if (headerRowIndex !== -1) {
+            console.log(`Found ULTRATECH header at row ${headerRowIndex}`);
+            dataRows = rows.slice(headerRowIndex + 1);
+          } else {
+            // Fallback: skip first 2 rows
+            console.log("Header not found, using fallback (skip 2 rows)");
+            dataRows = rows.slice(2);
+          }
+          
+          // Use the predefined column map
+          colMap = FACTORY_COLUMN_MAPS[factoryName];
+          
+          // Log the expected columns for debugging
+          console.log("ULTRATECH column mapping:", colMap);
+        } else {
+          // For other factories
+          colMap = FACTORY_COLUMN_MAPS[factoryName];
+          dataRows = rows.slice(1);
+        }
+      }
+
+      console.log(`Processing ${dataRows.length} data rows`);
+      
+      // Debug: Show first data row
+      if (dataRows.length > 0) {
+        const firstRow = dataRows[0];
+        console.log("First data row - key columns:");
+        console.log(`  DispatchDate [${colMap.DispatchDate}]:`, firstRow[colMap.DispatchDate]);
+        console.log(`  Qty [${colMap.Qty}]:`, firstRow[colMap.Qty], `type:`, typeof firstRow[colMap.Qty]);
+        console.log(`  ChallanNo [${colMap.ChallanNo}]:`, firstRow[colMap.ChallanNo]);
+        console.log(`  VehicleNo [${colMap.VehicleNo}]:`, firstRow[colMap.VehicleNo]);
       }
 
       const challanSet = new Set();
 
-      for (const row of dataRows) {
-        if (!row || row.every(v => v === null || String(v).trim() === "")) {
+      for (let i = 0; i < dataRows.length; i++) {
+        const row = dataRows[i];
+        
+        // Check if row is empty or not an array
+        if (!row || !Array.isArray(row)) {
+          skippedRows++;
+          continue;
+        }
+        
+        // Check if all values in the row are empty
+        const isEmptyRow = row.every(v => 
+          v === null || 
+          v === undefined || 
+          v === "" ||
+          (typeof v === 'string' && v.trim() === '')
+        );
+        
+        if (isEmptyRow) {
           skippedRows++;
           continue;
         }
 
-        const qty = Number(row[colMap.Qty] || 0);
+        // Get and validate quantity
+        const rawQty = row[colMap.Qty];
+        const qty = parseQuantity(rawQty);
+        
         if (qty <= 0) {
-          skippedRows++;
+          console.log(`Row ${i}: Invalid quantity. Raw: "${rawQty}", Parsed: ${qty}`);
+          qtyMiss++;
           continue;
         }
 
-        const dispatchDate = parseExcelDate(row[colMap.DispatchDate]);
+        // Get and validate date
+        const rawDate = row[colMap.DispatchDate];
+        const dispatchDate = parseExcelDate(rawDate);
+        
         if (!dispatchDate) {
+          console.log(`Row ${i}: Invalid date: "${rawDate}"`);
           dateMiss++;
           continue;
         }
 
-        const last4 = extractLast4Digits(row[colMap.VehicleNo]);
+        // Get and validate vehicle
+        const rawVehicle = row[colMap.VehicleNo];
+        const last4 = extractLast4Digits(rawVehicle);
+        
+        if (!last4) {
+          console.log(`Row ${i}: Could not extract last 4 digits from vehicle: "${rawVehicle}"`);
+          vehicleMiss++;
+          continue;
+        }
+        
         const matchedVehicle = vehicles.find(v => v.last4 === last4);
         if (!matchedVehicle) {
+          console.log(`Row ${i}: Vehicle not found in master. Last4: ${last4}, Raw: "${rawVehicle}"`);
           vehicleMiss++;
           continue;
         }
 
-        const challanNo = normalizeChallan(row[colMap.ChallanNo]);
+        // Get and validate challan
+        const rawChallan = row[colMap.ChallanNo];
+        const challanNo = normalizeChallan(rawChallan);
+        
         if (!challanNo) {
           skippedRows++;
           continue;
         }
 
-        if (challanSet.has(challanNo) || await isDuplicate(challanNo, factoryName)) {
+        // Check for duplicates
+        if (challanSet.has(challanNo)) {
+          dupMiss++;
+          continue;
+        }
+
+        const isDupInDb = await isDuplicate(challanNo, factoryName);
+        if (isDupInDb) {
           dupMiss++;
           continue;
         }
 
         challanSet.add(challanNo);
 
+        // Get other fields
+        const partyName = row[colMap.PartyName] ? String(row[colMap.PartyName]).trim() : "";
+        const destination = row[colMap.Destination] ? String(row[colMap.Destination]).trim() : "";
+        const advance = parseQuantity(row[colMap.Advance]);
+        const diesel = parseQuantity(row[colMap.Diesel]);
+
         const dto = {
           DispatchDate: dispatchDate,
           ChallanNo: challanNo,
           VehicleNo: matchedVehicle.VehicleNo,
           VehicleId: matchedVehicle.id,
-          PartyName: row[colMap.PartyName] || "",
-          Destination: row[colMap.Destination] || "",
+          PartyName: partyName,
+          Destination: destination,
           DispatchQuantity: qty,
-          Advance: Number(row[colMap.Advance] || 0),
-          Diesel: Number(row[colMap.Diesel] || 0),
+          Advance: advance,
+          Diesel: diesel,
           FactoryName: factoryName,
           CreatedOn: new Date()
         };
+
+        console.log(`Row ${i}: Success - Uploading: Challan: ${challanNo}, Vehicle: ${matchedVehicle.VehicleNo}, Qty: ${qty}`);
 
         await addDoc(collection(db, "TblDispatch"), dto);
         uploaded++;
@@ -320,22 +429,23 @@ const UploadDispatch = () => {
         `✅ Uploaded: ${uploaded}
 ⚠️ Vehicle not found: ${vehicleMiss}
 ⚠️ Invalid date: ${dateMiss}
+⚠️ Invalid quantity: ${qtyMiss}
 ⚠️ Duplicate challan: ${dupMiss}
 ⚠️ Skipped rows: ${skippedRows}`
       );
 
     } catch (err) {
-      console.error(err);
+      console.error("Upload error:", err);
       setMessage(`❌ Upload failed: ${err.message}`);
     }
   };
 
   return (
-    <div className="upload-container"> {/* Change from style to className */}
+    <div className="upload-container">
       <h3>Upload Dispatch Excel</h3>
-      <pre className="message-display">{message}</pre> {/* Add className */}
+      <pre className="message-display">{message}</pre>
 
-      <form onSubmit={handleUpload} className="upload-form"> {/* Add className */}
+      <form onSubmit={handleUpload} className="upload-form">
         <select 
           value={factory} 
           onChange={e => setFactory(e.target.value)} 

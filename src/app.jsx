@@ -24,16 +24,28 @@ const App = () => {
   const [user, setUser] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [userUid, setUserUid] = useState(""); // NEW: Store user UID
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
 
       if (currentUser) {
+        // LOG USER UID TO CONSOLE - IMPORTANT FOR FIREBASE RULES
+        console.log("🔥 User UID (Copy this for Firestore rules):", currentUser.uid);
+        console.log("📧 User Email:", currentUser.email);
+        setUserUid(currentUser.uid);
+        
         const adminStatus = await isAdminUser(currentUser);
         setIsAdmin(adminStatus);
+        
+        // Temporary: Display UID on screen for easy copying (remove in production)
+        if (process.env.NODE_ENV === "development") {
+          alert(`Development Mode: Your UID is ${currentUser.uid}\n\nCopy this UID and replace "YOUR_ADMIN_UID_HERE" in firestore.rules`);
+        }
       } else {
         setIsAdmin(false);
+        setUserUid("");
       }
 
       setLoading(false);
@@ -52,8 +64,22 @@ const App = () => {
 
   return (
     <BrowserRouter>
+      {/* DEVELOPMENT BANNER - Shows UID for easy copying */}
+      {process.env.NODE_ENV === "development" && userUid && (
+        <div style={{
+          backgroundColor: "#ffeb3b",
+          padding: "5px 10px",
+          fontSize: "12px",
+          textAlign: "center",
+          borderBottom: "1px solid #ccc",
+          fontFamily: "monospace",
+          wordBreak: "break-all"
+        }}>
+          🔥 DEV: Your UID: <strong>{userUid}</strong> - Copy this for Firestore rules
+        </div>
+      )}
+      
       <Routes>
-
         {/* ================= PUBLIC ================= */}
         <Route
           path="/login"
@@ -91,7 +117,6 @@ const App = () => {
 
         {/* ================= FALLBACK ================= */}
         <Route path="*" element={<Navigate to={user ? "/" : "/login"} />} />
-
       </Routes>
     </BrowserRouter>
   );
