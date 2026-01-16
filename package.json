@@ -6,7 +6,7 @@
   "homepage": "https://musa1234github.github.io/transport-app-123",
   "scripts": {
     "dev": "vite",
-    "build": "vite build --outDir netlify/functions",
+    "build": "vite build",
     "preview": "vite preview",
     "predeploy": "npm run build",
     "deploy": "gh-pages -d dist",
@@ -25,4 +25,5 @@
     "vite": "^5.0.0"
   }
 }
+
 
