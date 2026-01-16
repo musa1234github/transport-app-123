@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useState } from "react";
 import { db, auth } from "../firebaseConfig";
 import {
   collection,
@@ -64,7 +64,7 @@ const ShowDispatch = () => {
   const [toDate, setToDate] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
 
-  /* ✅ MVC-style applied filters */
+  /* âœ… MVC-style applied filters */
   const [appliedFilters, setAppliedFilters] = useState({
     searchTerm: "",
     filterFactory: "",
@@ -97,7 +97,7 @@ const ShowDispatch = () => {
             ? new Date(row.DispatchDate.seconds * 1000)
             : new Date(row.DispatchDate);
 
-          // 🔥 FORCE LOCAL DATE (MVC STYLE)
+          // ðŸ”¥ FORCE LOCAL DATE (MVC STYLE)
           row.DispatchDate = new Date(
             d.getFullYear(),
             d.getMonth(),
@@ -210,7 +210,7 @@ const ShowDispatch = () => {
   const filteredDispatches = dispatches.filter(d => {
     const { searchTerm, filterFactory, fromDate, toDate } = appliedFilters;
 
-    // ✅ MVC BEHAVIOR: if no filter selected, return all
+    // âœ… MVC BEHAVIOR: if no filter selected, return all
     if (!searchTerm && !filterFactory && !fromDate && !toDate) {
       return true;
     }
@@ -510,7 +510,7 @@ const ShowDispatch = () => {
       </div>
 
       <div style={{ marginTop: 20, fontWeight: "bold", color: "#333" }}>
-        Showing {filteredCount === 0 ? 0 : startIndex + 1}–{endIndex} of{" "}
+        Showing {filteredCount === 0 ? 0 : startIndex + 1}â€“{endIndex} of{" "}
         {filteredCount} filtered records (Total in DB: {totalRecords})
       </div>
 

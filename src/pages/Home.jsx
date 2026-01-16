@@ -1,4 +1,4 @@
-import React from "react";
+﻿import React from "react";
 import { signOut } from "firebase/auth";
 import { Link, Outlet } from "react-router-dom";
 import { auth } from "../firebaseConfig";
@@ -25,7 +25,7 @@ const Home = ({ user, isAdmin }) => {
           alignItems: "center"
         }}
       >
-         <h2 style={{ margin: 0 }}>🚛 Transport App</h2>
+         <h2 style={{ margin: 0 }}>ðŸš› Transport App</h2>
 
         {user && (
           <div style={{ fontSize: "14px" }}>
@@ -63,7 +63,7 @@ const Home = ({ user, isAdmin }) => {
               
               <Link to="/upload-dispatch" style={menuLink}>
 
-                🚚 Dispatch Upload
+                ðŸšš Dispatch Upload
               </Link>
             </li>
           )}
@@ -71,7 +71,7 @@ const Home = ({ user, isAdmin }) => {
           {isAdmin && (
             <li>
               <Link to="/bill-upload" style={menuLink}>
-                🧾 Bill Upload
+                ðŸ§¾ Bill Upload
               </Link>
             </li>
           )}
@@ -79,7 +79,7 @@ const Home = ({ user, isAdmin }) => {
            {isAdmin && (
             <li>
               <Link to="/payment-upload" style={menuLink}>
-                🧾 Payment Upload
+                ðŸ§¾ Payment Upload
               </Link>
             </li>
           )}
@@ -88,26 +88,26 @@ const Home = ({ user, isAdmin }) => {
            
           <li>
             <Link to="/show-bill" style={menuLink}>
-              📑 Show Bills
+              ðŸ“‘ Show Bills
             </Link>
           </li>
            <li>
             <Link to="/show-payment" style={menuLink}>
-              📑 Show Payments
+              ðŸ“‘ Show Payments
             </Link>
           </li>
 
           {isAdmin && (
             <li>
               <Link to="/destination-master" style={menuLink}>
-                🗺️ Destination Master
+                ðŸ—ºï¸ Destination Master
               </Link>
             </li>
           )}
           {isAdmin && (
             <li>
               <Link to="/show-billed-challan" style={menuLink}>
-                🗺️ Show Billed Challan
+                ðŸ—ºï¸ Show Billed Challan
               </Link>
             </li>
           )}
@@ -115,14 +115,14 @@ const Home = ({ user, isAdmin }) => {
           {isAdmin && (
             <li>
               <Link to="/vehicle-master" style={menuLink}>
-                🚛 Vehicle Master
+                ðŸš› Vehicle Master
               </Link>
             </li>
           )}
           {isAdmin && ( // Add this block
             <li>
               <Link to="/monthly-qty-report" style={menuLink}>
-                📊 Monthly Quantity Report
+                ðŸ“Š Monthly Quantity Report
               </Link>
             </li>
           )}
@@ -130,7 +130,7 @@ const Home = ({ user, isAdmin }) => {
           {isAdmin && (
             <li>
               <Link to="/daily-qty-report" style={menuLink}>
-                📊 Day Quantity Report
+                ðŸ“Š Day Quantity Report
               </Link>
             </li>
           )}
@@ -138,20 +138,20 @@ const Home = ({ user, isAdmin }) => {
 
           <li>
             <Link to="/factories" style={menuLink}>
-              🏭 Factories
+              ðŸ­ Factories
             </Link>
           </li>
 
           <li>
             <Link to="/show-dispatch" style={menuLink}>
-              📦 Show Dispatch
+              ðŸ“¦ Show Dispatch
             </Link>
           </li>
 
           {isAdmin && (
             <li>
               <Link to="/delete-dispatch" style={{ ...menuLink, color: "red" }}>
-                ❌ Delete Dispatch
+                âŒ Delete Dispatch
               </Link>
             </li>
 
@@ -159,7 +159,7 @@ const Home = ({ user, isAdmin }) => {
           {isAdmin && (
             <li>
               <Link to="/delete-duplicate-challan" style={{ ...menuLink, color: "red" }}>
-                ❌ Delete Duplicate Dispatch
+                âŒ Delete Duplicate Dispatch
               </Link>
             </li>
           )}

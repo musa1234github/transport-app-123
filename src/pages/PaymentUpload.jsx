@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+﻿import React, { useState, useEffect } from "react";
 import * as XLSX from "xlsx";
 import {
   collection,
@@ -19,7 +19,7 @@ const safeNum = (v) => {
   if (v === null || v === undefined || v === "") return 0;
   if (typeof v === "string") {
     // Remove commas and handle negative signs/dashes
-    v = v.replace(/,/g, "").replace(/^[-–]/g, "").trim();
+    v = v.replace(/,/g, "").replace(/^[-â€“]/g, "").trim();
   }
   const n = parseFloat(v);
   return isNaN(n) ? 0 : n;
@@ -165,7 +165,7 @@ const PaymentUpload = ({ isAdmin }) => {
           const shortageStr = String(row[7] || "").trim();
           
           // Clean shortage string (remove dashes)
-          const shortageCleaned = shortageStr.replace(/[-–]/g, "").trim();
+          const shortageCleaned = shortageStr.replace(/[-â€“]/g, "").trim();
           const shortage = safeNum(shortageCleaned);
 
           addLog(`Processing row ${i}: Bill ${billNumber}, Payment ${paymentNumber}`, "info");

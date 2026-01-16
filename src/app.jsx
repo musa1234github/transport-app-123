@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useState } from "react";
 import { Routes, Route, BrowserRouter, Navigate } from "react-router-dom";
 import { onAuthStateChanged } from "firebase/auth";
 import Login from "./Login.jsx";
@@ -31,8 +31,8 @@ const App = () => {
 
       if (currentUser) {
         // LOG USER UID TO CONSOLE - IMPORTANT FOR FIREBASE RULES
-        console.log("🔥 User UID (Copy this for Firestore rules):", currentUser.uid);
-        console.log("📧 User Email:", currentUser.email);
+        console.log("ðŸ”¥ User UID (Copy this for Firestore rules):", currentUser.uid);
+        console.log("ðŸ“§ User Email:", currentUser.email);
         setUserUid(currentUser.uid);
         
         const adminStatus = await isAdminUser(currentUser);
@@ -74,7 +74,7 @@ const App = () => {
           fontFamily: "monospace",
           wordBreak: "break-all"
         }}>
-          🔥 DEV: Your UID: <strong>{userUid}</strong> - Copy this for Firestore rules
+          ðŸ”¥ DEV: Your UID: <strong>{userUid}</strong> - Copy this for Firestore rules
         </div>
       )}
       

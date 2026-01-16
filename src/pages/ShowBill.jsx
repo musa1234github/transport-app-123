@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from "react";
+﻿import React, { useEffect, useState, useMemo } from "react";
 import { db } from "../firebaseConfig";
 import {
   collection,
@@ -1024,7 +1024,7 @@ const ShowBill = () => {
               }}
               title="First Page"
             >
-              ««
+              Â«Â«
             </button>
             
             <button
@@ -1040,7 +1040,7 @@ const ShowBill = () => {
               }}
               title="Previous Page"
             >
-              «
+              Â«
             </button>
             
             {/* Page number buttons */}
@@ -1134,7 +1134,7 @@ const ShowBill = () => {
               }}
               title="Next Page"
             >
-              »
+              Â»
             </button>
             
             <button
@@ -1151,7 +1151,7 @@ const ShowBill = () => {
               }}
               title="Last Page"
             >
-              »»
+              Â»Â»
             </button>
           </div>
           

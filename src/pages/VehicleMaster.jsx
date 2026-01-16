@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useState } from "react";
 import { db } from "../firebaseConfig";
 import { collection, addDoc, getDocs, query, where } from "firebase/firestore";
 import * as XLSX from "xlsx";
@@ -53,7 +53,7 @@ const VehicleMaster = () => {
 
     setVehicleNo("");
     setOwnerName("");
-    setMessage("✅ Vehicle added successfully");
+    setMessage("âœ… Vehicle added successfully");
     fetchVehicles();
   };
 
@@ -117,7 +117,7 @@ const VehicleMaster = () => {
         }
 
         setMessage(
-          `✅ Excel upload completed. Added ${added} vehicles, Skipped ${skipped} duplicates.`
+          `âœ… Excel upload completed. Added ${added} vehicles, Skipped ${skipped} duplicates.`
         );
 
         fetchVehicles();
@@ -133,7 +133,7 @@ const VehicleMaster = () => {
     reader.readAsArrayBuffer(excelFile);
   };
 
-  // 🔹 Export to Excel
+  // ðŸ”¹ Export to Excel
   const handleExportExcel = () => {
     if (!vehicles.length) return;
 
@@ -148,7 +148,7 @@ const VehicleMaster = () => {
     XLSX.writeFile(wb, "VehicleMaster.xlsx");
   };
 
-  // 🔹 Filtered & Paginated vehicles
+  // ðŸ”¹ Filtered & Paginated vehicles
   const filteredVehicles = vehicles.filter(
     (v) =>
       v.VehicleNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -165,7 +165,7 @@ const VehicleMaster = () => {
 
   return (
     <div style={{ padding: 20 }}>
-      <h2>🚛 Vehicle Master</h2>
+      <h2>ðŸš› Vehicle Master</h2>
 
       {/* Single Entry */}
       <div style={{ marginBottom: 25 }}>
@@ -190,7 +190,7 @@ const VehicleMaster = () => {
       <div style={{ marginBottom: 25 }}>
         <h4>Upload Excel</h4>
         <input type="file" accept=".xlsx,.xls" onChange={handleFileSelect} />
-        {excelFile && <p>📎 Selected: <b>{excelFile.name}</b></p>}
+        {excelFile && <p>ðŸ“Ž Selected: <b>{excelFile.name}</b></p>}
         <button
           onClick={handleExcelUpload}
           disabled={loading}
@@ -202,7 +202,7 @@ const VehicleMaster = () => {
 
       {/* Export to Excel */}
       <div style={{ marginBottom: 25 }}>
-        <button onClick={handleExportExcel}>📤 Export to Excel</button>
+        <button onClick={handleExportExcel}>ðŸ“¤ Export to Excel</button>
       </div>
 
       {/* Message */}

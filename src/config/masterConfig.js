@@ -1,4 +1,4 @@
-export const masterConfig = {
+﻿export const masterConfig = {
   destinations: {
     title: "Destinations",
     fields: [

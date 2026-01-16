@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useState } from "react";
 import { db, auth } from "../firebaseConfig";
 import {
   collection,
@@ -67,7 +67,7 @@ const ShoBilledChallan = () => {
   // New state for bill number filtering
   const [filterBillNum, setFilterBillNum] = useState("");
 
-  /* ✅ MVC-style applied filters */
+  /* âœ… MVC-style applied filters */
   const [appliedFilters, setAppliedFilters] = useState({
     searchTerm: "",
     filterFactory: "",
@@ -102,7 +102,7 @@ const ShoBilledChallan = () => {
             ? new Date(row.DispatchDate.seconds * 1000)
             : new Date(row.DispatchDate);
 
-          // 🔥 FORCE LOCAL DATE (MVC STYLE)
+          // ðŸ”¥ FORCE LOCAL DATE (MVC STYLE)
           row.DispatchDate = new Date(
             d.getFullYear(),
             d.getMonth(),
@@ -629,7 +629,7 @@ const ShoBilledChallan = () => {
         fontSize: 14,
         color: '#495057'
       }}>
-        Showing {filteredCount === 0 ? 0 : startIndex + 1}–{endIndex} of{" "}
+        Showing {filteredCount === 0 ? 0 : startIndex + 1}â€“{endIndex} of{" "}
         <strong>{filteredCount}</strong> filtered records (Total in DB: {totalRecords})
       </div>
 
@@ -705,7 +705,7 @@ const ShoBilledChallan = () => {
                           {d[col] ? parseFloat(d[col]).toFixed(2) : "0.00"}
                         </span>
                       ) : (
-                        d[col] || "—"
+                        d[col] || "â€”"
                       )}
                     </td>
                   ))}

@@ -1,4 +1,4 @@
-import { collection, addDoc, getDocs, query, where } from "firebase/firestore";
+﻿import { collection, addDoc, getDocs, query, where } from "firebase/firestore";
 import { db } from "../firebaseConfig";
 import factories from "./factories.json";
 
@@ -7,7 +7,7 @@ const importFactories = async () => {
     const colRef = collection(db, "factories");
 
     for (const factory of factories) {
-      // 🔒 prevent duplicates by code + name
+      // ðŸ”’ prevent duplicates by code + name
       const q = query(
         colRef,
         where("code", "==", factory.code),
@@ -27,9 +27,9 @@ const importFactories = async () => {
       }
     }
 
-    console.log("✅ Factory import completed");
+    console.log("âœ… Factory import completed");
   } catch (err) {
-    console.error("❌ Import error:", err);
+    console.error("âŒ Import error:", err);
   }
 };
 

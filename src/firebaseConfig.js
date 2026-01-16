@@ -1,10 +1,10 @@
-import { initializeApp } from "firebase/app";
+﻿import { initializeApp } from "firebase/app";
 import { getAnalytics } from "firebase/analytics";
 import { getAuth, GoogleAuthProvider } from "firebase/auth";
 import { getFirestore, doc, getDoc } from "firebase/firestore";
 import "./utils/migrateDates";
 
-/* 🔒 Firebase config */
+/* ðŸ”’ Firebase config */
 const firebaseConfig = {
   apiKey: "AIzaSyAd1bazB0rvrEhQwXWa-xUOkqLaCFZEjME",
   authDomain: "transport-app-c4674.firebaseapp.com",
@@ -15,23 +15,23 @@ const firebaseConfig = {
   measurementId: "G-2KW1848NFH"
 };
 
-/* 🔥 Init Firebase */
+/* ðŸ”¥ Init Firebase */
 const app = initializeApp(firebaseConfig);
 
-/* 📊 Analytics (browser only) */
+/* ðŸ“Š Analytics (browser only) */
 let analytics;
 if (typeof window !== "undefined") {
   analytics = getAnalytics(app);
 }
 
-/* 🔑 Auth */
+/* ðŸ”‘ Auth */
 const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
 
-/* 🗄️ Firestore */
+/* ðŸ—„ï¸ Firestore */
 const db = getFirestore(app);
 
-/* ✅ ADMIN CHECK — SPARK SAFE */
+/* âœ… ADMIN CHECK â€” SPARK SAFE */
 const isAdminUser = async (user) => {
   if (!user) return false;
 
@@ -41,5 +41,5 @@ const isAdminUser = async (user) => {
   return snap.data().role === "admin";
 };
 
-/* ✅ EXPORTS */
+/* âœ… EXPORTS */
 export { app, analytics, auth, googleProvider, db, isAdminUser };

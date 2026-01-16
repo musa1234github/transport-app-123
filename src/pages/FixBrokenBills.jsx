@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+﻿import React, { useState } from "react";
 import {
   collection,
   query,
@@ -24,7 +24,7 @@ const FixBrokenBills = () => {
 
     try {
       /* =========================
-         1️⃣ FIND CORRECT BILL
+         1ï¸âƒ£ FIND CORRECT BILL
       ========================== */
       const billQ = query(
         collection(db, "BillTable"),
@@ -44,7 +44,7 @@ const FixBrokenBills = () => {
       const correctBillId = correctBillDoc.id;
 
       /* =========================
-         2️⃣ FIND DISPATCH ROWS
+         2ï¸âƒ£ FIND DISPATCH ROWS
       ========================== */
       const dispQ = query(
         collection(db, "TblDispatch"),
@@ -61,7 +61,7 @@ const FixBrokenBills = () => {
       }
 
       /* =========================
-         3️⃣ UPDATE BILLID
+         3ï¸âƒ£ UPDATE BILLID
       ========================== */
       let updated = 0;
 
@@ -73,7 +73,7 @@ const FixBrokenBills = () => {
       }
 
       alert(
-        `✅ FIX COMPLETED SUCCESSFULLY\n\nBill: ${billNum}\nFactory: ${factory}\nDispatch Rows Updated: ${updated}`
+        `âœ… FIX COMPLETED SUCCESSFULLY\n\nBill: ${billNum}\nFactory: ${factory}\nDispatch Rows Updated: ${updated}`
       );
     } catch (err) {
       console.error(err);
@@ -123,7 +123,7 @@ const FixBrokenBills = () => {
       </button>
 
       <p style={{ marginTop: 15, color: "red" }}>
-        ⚠️ Run this only once per bill.  
+        âš ï¸ Run this only once per bill.  
         Remove this page after fixing.
       </p>
     </div>

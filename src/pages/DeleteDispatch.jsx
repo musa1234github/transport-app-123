@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+﻿import React, { useState } from "react";
 import { db, auth } from "../firebaseConfig";
 import {
   collection,
@@ -15,19 +15,19 @@ const DeleteDispatch = () => {
   const [message, setMessage] = useState("");
 
   const handleDelete = async () => {
-    // 1️⃣ Check login
+    // 1ï¸âƒ£ Check login
     if (!auth.currentUser) {
       alert("Please login first");
       return;
     }
 
-    // 2️⃣ Confirm delete
+    // 2ï¸âƒ£ Confirm delete
     if (!window.confirm("This will delete dispatch uploaded data. Continue?"))
       return;
 
     setMessage("Deleting...");
 
-    // 3️⃣ Build query
+    // 3ï¸âƒ£ Build query
     let q = collection(db, "TblDispatch");
 
     if (fromDate) {
@@ -38,7 +38,7 @@ const DeleteDispatch = () => {
       q = query(q, where("DispatchDate", "<=", new Date(toDate)));
     }
 
-    // 4️⃣ Fetch matching dispatch records
+    // 4ï¸âƒ£ Fetch matching dispatch records
     const snapshot = await getDocs(q);
 
     if (snapshot.empty) {
@@ -46,7 +46,7 @@ const DeleteDispatch = () => {
       return;
     }
 
-    // 5️⃣ Delete each dispatch record
+    // 5ï¸âƒ£ Delete each dispatch record
     for (const d of snapshot.docs) {
       await deleteDoc(doc(db, "TblDispatch", d.id));
     }

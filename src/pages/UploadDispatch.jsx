@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from "react";
+﻿import React, { useState, useEffect } from "react";
 import { db } from "../firebaseConfig";
 import { collection, addDoc, query, where, getDocs } from "firebase/firestore";
 import * as XLSX from "xlsx";
-import "./UploadDispatch.css";
+/*// import "./UploadDispatch.css";*/
 
 /* ================= CONSTANTS ================= */
 
@@ -210,7 +210,7 @@ const UploadDispatch = () => {
     setMessage("");
 
     if (!file || !factory) {
-      setMessage("❌ File and Factory required");
+      setMessage("âŒ File and Factory required");
       return;
     }
 
@@ -258,7 +258,7 @@ const UploadDispatch = () => {
         );
 
         if (headerRowIndex === -1) {
-          setMessage("❌ Header row not found (ORIENT format)");
+          setMessage("âŒ Header row not found (ORIENT format)");
           return;
         }
 
@@ -426,17 +426,17 @@ const UploadDispatch = () => {
       }
 
       setMessage(
-        `✅ Uploaded: ${uploaded}
-⚠️ Vehicle not found: ${vehicleMiss}
-⚠️ Invalid date: ${dateMiss}
-⚠️ Invalid quantity: ${qtyMiss}
-⚠️ Duplicate challan: ${dupMiss}
-⚠️ Skipped rows: ${skippedRows}`
+        `âœ… Uploaded: ${uploaded}
+âš ï¸ Vehicle not found: ${vehicleMiss}
+âš ï¸ Invalid date: ${dateMiss}
+âš ï¸ Invalid quantity: ${qtyMiss}
+âš ï¸ Duplicate challan: ${dupMiss}
+âš ï¸ Skipped rows: ${skippedRows}`
       );
 
     } catch (err) {
       console.error("Upload error:", err);
-      setMessage(`❌ Upload failed: ${err.message}`);
+      setMessage(`âŒ Upload failed: ${err.message}`);
     }
   };
 

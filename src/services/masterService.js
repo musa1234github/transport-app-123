@@ -1,4 +1,4 @@
-// src/services/masterService.js
+﻿// src/services/masterService.js
 import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc } from "firebase/firestore";
 import { db } from "../firebaseConfig";
 

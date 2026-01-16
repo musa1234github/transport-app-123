@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 import { db } from "../firebaseConfig";
 import {
   collection,
@@ -15,7 +15,7 @@ export default function useMasterCrud(collectionName, primaryField) {
   const [editId, setEditId] = useState(null);
   const [editValue, setEditValue] = useState("");
 
-  // 🔹 Load data
+  // ðŸ”¹ Load data
   useEffect(() => {
     fetchData();
   }, [collectionName]);
@@ -25,7 +25,7 @@ export default function useMasterCrud(collectionName, primaryField) {
     setRows(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
   };
 
-  // 🔹 Add record
+  // ðŸ”¹ Add record
   const addItem = async () => {
     if (!value.trim()) return;
     const ref = await addDoc(collection(db, collectionName), {
@@ -35,13 +35,13 @@ export default function useMasterCrud(collectionName, primaryField) {
     setValue("");
   };
 
-  // 🔹 Edit start
+  // ðŸ”¹ Edit start
   const startEdit = (row) => {
     setEditId(row.id);
     setEditValue(row[primaryField]);
   };
 
-  // 🔹 Save edit
+  // ðŸ”¹ Save edit
   const saveEdit = async () => {
     await updateDoc(doc(db, collectionName, editId), {
       [primaryField]: editValue
@@ -53,7 +53,7 @@ export default function useMasterCrud(collectionName, primaryField) {
     setEditValue("");
   };
 
-  // 🔹 Delete
+  // ðŸ”¹ Delete
   const removeItem = async (id) => {
     if (!window.confirm("Delete this record?")) return;
     await deleteDoc(doc(db, collectionName, id));

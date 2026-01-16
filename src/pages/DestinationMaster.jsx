@@ -1,4 +1,4 @@
-import * as XLSX from "xlsx";
+﻿import * as XLSX from "xlsx";
 import React, { useEffect, useState } from "react";
 import {
   getMasterData,
@@ -117,7 +117,7 @@ const DestinationMaster = () => {
         }
       }
 
-      alert(`Upload completed ✅ Added: ${added}, Skipped: ${skipped}`);
+      alert(`Upload completed âœ… Added: ${added}, Skipped: ${skipped}`);
       setDestinations(prev => [...prev, ...newDestinations]);
       e.target.value = "";
     };

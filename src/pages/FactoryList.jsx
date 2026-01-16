@@ -1,4 +1,4 @@
-// src/pages/FactoryList.jsx
+﻿// src/pages/FactoryList.jsx
 import { useEffect, useState } from "react";
 import {
   collection,
@@ -40,11 +40,11 @@ export default function FactoryList() {
       
       // Handle specific Firebase errors
       if (error.code === 'permission-denied') {
-        setError("❌ Permission denied. You need to login to view factories.");
+        setError("âŒ Permission denied. You need to login to view factories.");
       } else if (error.code === 'unavailable') {
-        setError("🌐 Network error. Please check your internet connection.");
+        setError("ðŸŒ Network error. Please check your internet connection.");
       } else if (error.code === 'not-found') {
-        setError("📂 No factories found. Add your first factory.");
+        setError("ðŸ“‚ No factories found. Add your first factory.");
       } else {
         setError(`Error: ${error.message}`);
       }
@@ -114,7 +114,7 @@ export default function FactoryList() {
       // Reset form and reload
       setForm({ id: null, factoryName: "", code: "", group: "", isActive: true });
       await loadFactories();
-      setError("✅ Operation successful!");
+      setError("âœ… Operation successful!");
       
       // Clear success message after 3 seconds
       setTimeout(() => setError(""), 3000);
@@ -122,9 +122,9 @@ export default function FactoryList() {
       console.error("Error saving factory:", error);
       
       if (error.code === 'permission-denied') {
-        setError("❌ Permission denied. Admin access required to modify factories.");
+        setError("âŒ Permission denied. Admin access required to modify factories.");
       } else if (error.code === 'already-exists') {
-        setError("⚠️ Factory with this code already exists.");
+        setError("âš ï¸ Factory with this code already exists.");
       } else {
         setError(`Error: ${error.message}`);
       }
@@ -159,7 +159,7 @@ export default function FactoryList() {
     try {
       await deleteDoc(doc(db, "factories", id));
       await loadFactories();
-      setError("✅ Factory deleted successfully!");
+      setError("âœ… Factory deleted successfully!");
       
       // Clear success message after 3 seconds
       setTimeout(() => setError(""), 3000);
@@ -167,9 +167,9 @@ export default function FactoryList() {
       console.error("Error deleting factory:", error);
       
       if (error.code === 'permission-denied') {
-        setError("❌ Permission denied. Admin access required to delete factories.");
+        setError("âŒ Permission denied. Admin access required to delete factories.");
       } else if (error.code === 'not-found') {
-        setError("⚠️ Factory not found. It may have been already deleted.");
+        setError("âš ï¸ Factory not found. It may have been already deleted.");
       } else {
         setError(`Error: ${error.message}`);
       }
@@ -194,9 +194,9 @@ export default function FactoryList() {
         <div style={{
           padding: "10px",
           marginBottom: "20px",
-          backgroundColor: error.includes("✅") ? "#d4edda" : "#f8d7da",
-          border: `1px solid ${error.includes("✅") ? "#c3e6cb" : "#f5c6cb"}`,
-          color: error.includes("✅") ? "#155724" : "#721c24",
+          backgroundColor: error.includes("âœ…") ? "#d4edda" : "#f8d7da",
+          border: `1px solid ${error.includes("âœ…") ? "#c3e6cb" : "#f5c6cb"}`,
+          color: error.includes("âœ…") ? "#155724" : "#721c24",
           borderRadius: "5px"
         }}>
           {error}
@@ -296,7 +296,7 @@ export default function FactoryList() {
                       color: f.isActive ? "#28a745" : "#dc3545",
                       fontWeight: "bold"
                     }}>
-                      {f.isActive ? "✓ Active" : "✗ Inactive"}
+                      {f.isActive ? "âœ“ Active" : "âœ— Inactive"}
                     </span>
                   </td>
                   {isAdmin && (
@@ -347,7 +347,7 @@ export default function FactoryList() {
           borderRadius: "5px"
         }}>
           <p style={{ margin: 0, color: "#856404" }}>
-            ⓘ You are logged in as a normal user. Only administrators can add, edit, or delete factories.
+            â“˜ You are logged in as a normal user. Only administrators can add, edit, or delete factories.
           </p>
         </div>
       )}

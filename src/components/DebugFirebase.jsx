@@ -1,4 +1,4 @@
-// src/components/DebugFirebase.jsx
+﻿// src/components/DebugFirebase.jsx
 import React, { useEffect, useState } from 'react';
 import { db, auth } from '../firebaseConfig';
 import { collection, getDocs } from 'firebase/firestore';
@@ -43,7 +43,7 @@ const DebugFirebase = () => {
           setData(displayData);
         }
         
-        setStatus(`✅ Connected to project: ${db.app.options.projectId}`);
+        setStatus(`âœ… Connected to project: ${db.app.options.projectId}`);
         
       } catch (err) {
         console.error('=== FIREBASE DEBUG ERROR ===', err);
@@ -51,7 +51,7 @@ const DebugFirebase = () => {
         console.error('Error message:', err.message);
         console.error('Full error:', err);
         
-        setStatus('❌ Connection Failed');
+        setStatus('âŒ Connection Failed');
         setError({
           code: err.code,
           message: err.message,
