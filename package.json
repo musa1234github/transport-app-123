@@ -1,4 +1,4 @@
-{
+﻿{
   "name": "transport-app-123",
   "private": true,
   "version": "0.0.0",
@@ -6,7 +6,7 @@
   "homepage": "https://musa1234github.github.io/transport-app-123",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build --outDir netlify/functions",
     "preview": "vite preview",
     "predeploy": "npm run build",
     "deploy": "gh-pages -d dist",
@@ -25,3 +25,4 @@
     "vite": "^5.0.0"
   }
 }
+
