@@ -25,7 +25,7 @@ const Home = ({ user, isAdmin }) => {
           alignItems: "center"
         }}
       >
-         <h2 style={{ margin: 0 }}>ðŸš› Transport App</h2>
+        <h2 style={{ margin: 0 }}>ðŸš› Transport App</h2>
 
         {user && (
           <div style={{ fontSize: "14px" }}>
@@ -60,10 +60,8 @@ const Home = ({ user, isAdmin }) => {
         >
           {isAdmin && (
             <li>
-              
               <Link to="/upload-dispatch" style={menuLink}>
-
-                ðŸšš Dispatch Upload
+                🚚 Dispatch Upload
               </Link>
             </li>
           )}
@@ -71,43 +69,43 @@ const Home = ({ user, isAdmin }) => {
           {isAdmin && (
             <li>
               <Link to="/bill-upload" style={menuLink}>
-                ðŸ§¾ Bill Upload
+                🧾 Bill Upload
               </Link>
             </li>
           )}
 
-           {isAdmin && (
+          {isAdmin && (
             <li>
               <Link to="/payment-upload" style={menuLink}>
-                ðŸ§¾ Payment Upload
+                🧾 Payment Upload
               </Link>
             </li>
           )}
 
-
-           
           <li>
             <Link to="/show-bill" style={menuLink}>
-              ðŸ“‘ Show Bills
+              📑 Show Bills
             </Link>
           </li>
-           <li>
+
+          <li>
             <Link to="/show-payment" style={menuLink}>
-              ðŸ“‘ Show Payments
+              📑 Show Payments
             </Link>
           </li>
 
           {isAdmin && (
             <li>
               <Link to="/destination-master" style={menuLink}>
-                ðŸ—ºï¸ Destination Master
+                🗺️ Destination Master
               </Link>
             </li>
           )}
+
           {isAdmin && (
             <li>
               <Link to="/show-billed-challan" style={menuLink}>
-                ðŸ—ºï¸ Show Billed Challan
+                🗺️ Show Billed Challan
               </Link>
             </li>
           )}
@@ -115,55 +113,54 @@ const Home = ({ user, isAdmin }) => {
           {isAdmin && (
             <li>
               <Link to="/vehicle-master" style={menuLink}>
-                ðŸš› Vehicle Master
+                🚛 Vehicle Master
               </Link>
             </li>
           )}
-          {isAdmin && ( // Add this block
+
+          {isAdmin && (
             <li>
               <Link to="/monthly-qty-report" style={menuLink}>
-                ðŸ“Š Monthly Quantity Report
+                📊 Monthly Quantity Report
               </Link>
             </li>
           )}
-          
+
           {isAdmin && (
             <li>
               <Link to="/daily-qty-report" style={menuLink}>
-                ðŸ“Š Day Quantity Report
+                📊 Day Quantity Report
               </Link>
             </li>
           )}
 
-
           <li>
             <Link to="/factories" style={menuLink}>
-              ðŸ­ Factories
+              🏭 Factories
             </Link>
           </li>
 
           <li>
             <Link to="/show-dispatch" style={menuLink}>
-              ðŸ“¦ Show Dispatch
+              📦 Show Dispatch
             </Link>
           </li>
 
           {isAdmin && (
             <li>
               <Link to="/delete-dispatch" style={{ ...menuLink, color: "red" }}>
-                âŒ Delete Dispatch
+                ❌ Delete Dispatch
               </Link>
             </li>
-
           )}
+
           {isAdmin && (
             <li>
               <Link to="/delete-duplicate-challan" style={{ ...menuLink, color: "red" }}>
-                âŒ Delete Duplicate Dispatch
+                ❌ Delete Duplicate Dispatch
               </Link>
             </li>
           )}
-
         </ul>
       </nav>
 
