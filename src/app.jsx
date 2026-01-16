@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Routes, Route, BrowserRouter, Navigate } from "react-router-dom";
 import { onAuthStateChanged } from "firebase/auth";
-
 import Login from "./Login.jsx";
 import Home from "./pages/Home.jsx";
 import FactoryList from "./pages/FactoryList.jsx";
@@ -17,8 +16,8 @@ import ShoBilledChallan from "./pages/ShoBilledChallan.jsx";
 import ShowQtyByMonth from "./pages/ShowQtyByMonth.jsx";
 import ShowDayQty from "./pages/ShowDayQty.jsx";
 import PaymentUpload from "./pages/PaymentUpload.jsx";
-
 import { auth, isAdminUser } from "./firebaseConfig";
+import ShowPayment from "./pages/ShowPayment.jsx";
 
 const App = () => {
   const [user, setUser] = useState(null);
@@ -110,6 +109,7 @@ const App = () => {
           <Route path="show-dispatch" element={<ShowDispatch isAdmin={isAdmin} />} />
           <Route path="vehicle-master" element={<VehicleMaster />} />
           <Route path="show-bill" element={<ShowBill />} />
+          <Route path="show-payment" element={<ShowPayment />} />
           <Route path="show-billed-challan" element={<ShoBilledChallan />} />
           <Route path="monthly-qty-report" element={<ShowQtyByMonth />} />
           <Route path="daily-qty-report" element={<ShowDayQty />} />
