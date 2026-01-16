@@ -25,7 +25,7 @@ const Home = ({ user, isAdmin }) => {
           alignItems: "center"
         }}
       >
-        <h2 style={{ margin: 0 }}>ðŸš› Transport App</h2>
+        <h2 style={{ margin: 0 }}>🚛 Transport App</h2>
 
         {user && (
           <div style={{ fontSize: "14px" }}>
