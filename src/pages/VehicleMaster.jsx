@@ -152,12 +152,13 @@ const VehicleMaster = () => {
     );
   };
 
-  // Handle select all
+  // Handle select all for current page
   const handleSelectAll = () => {
     if (selectAll) {
       setSelectedIds([]);
     } else {
-      setSelectedIds(paginatedVehicles.map(v => v.id));
+      const pageIds = paginatedVehicles.map(v => v.id);
+      setSelectedIds(pageIds);
     }
     setSelectAll(!selectAll);
   };
@@ -298,32 +299,108 @@ const VehicleMaster = () => {
     <div style={{ padding: 20 }}>
       <h2>🚚 Vehicle Master</h2>
 
-      {/* Multiple Delete Button */}
+      {/* Dynamic Delete Button - Only shows when records are selected */}
       {selectedIds.length > 0 && (
         <div style={{ 
-          marginBottom: 15, 
-          padding: 10, 
-          backgroundColor: "#ffe6e6", 
-          borderRadius: 5 
+          marginBottom: 20, 
+          padding: 15, 
+          backgroundColor: "#fff3cd", 
+          borderRadius: 8,
+          border: "1px solid #ffeaa7",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          boxShadow: "0 2px 5px rgba(0,0,0,0.1)"
         }}>
+          <div style={{ display: "flex", alignItems: "center" }}>
+            <div style={{
+              backgroundColor: "#ff6b6b",
+              color: "white",
+              borderRadius: "50%",
+              width: 30,
+              height: 30,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              marginRight: 10,
+              fontWeight: "bold"
+            }}>
+              {selectedIds.length}
+            </div>
+            <span style={{ fontWeight: "bold", color: "#856404" }}>
+              {selectedIds.length} vehicle(s) selected for deletion
+            </span>
+          </div>
+          
           <button 
             onClick={handleDeleteMultiple}
             style={{ 
-              backgroundColor: "#ff3333", 
+              backgroundColor: "#dc3545", 
               color: "white", 
               border: "none", 
-              padding: "8px 16px", 
-              borderRadius: 4,
-              cursor: "pointer"
+              padding: "10px 20px", 
+              borderRadius: 6,
+              cursor: "pointer",
+              fontWeight: "bold",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              transition: "all 0.3s"
             }}
+            onMouseOver={(e) => e.target.style.backgroundColor = "#c82333"}
+            onMouseOut={(e) => e.target.style.backgroundColor = "#dc3545"}
           >
             🗑️ Delete Selected ({selectedIds.length})
           </button>
-          <span style={{ marginLeft: 10 }}>
-            {selectedIds.length} vehicle(s) selected
-          </span>
         </div>
       )}
+
+      {/* Stats Card */}
+      <div style={{ 
+        marginBottom: 20, 
+        padding: 15, 
+        backgroundColor: "#f8f9fa", 
+        borderRadius: 8,
+        border: "1px solid #dee2e6"
+      }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <h4 style={{ margin: 0, color: "#495057" }}>📊 Vehicle Statistics</h4>
+            <p style={{ margin: "5px 0 0 0", color: "#6c757d" }}>
+              Manage your vehicle database efficiently
+            </p>
+          </div>
+          <div style={{ 
+            display: "flex", 
+            gap: 15,
+            backgroundColor: "white",
+            padding: "10px 15px",
+            borderRadius: 6,
+            border: "1px solid #e9ecef"
+          }}>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: "24px", fontWeight: "bold", color: "#28a745" }}>
+                {totalRecords}
+              </div>
+              <div style={{ fontSize: "12px", color: "#6c757d" }}>Total Vehicles</div>
+            </div>
+            <div style={{ width: 1, backgroundColor: "#dee2e6" }}></div>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: "24px", fontWeight: "bold", color: "#17a2b8" }}>
+                {filteredCount}
+              </div>
+              <div style={{ fontSize: "12px", color: "#6c757d" }}>Filtered</div>
+            </div>
+            <div style={{ width: 1, backgroundColor: "#dee2e6" }}></div>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: "24px", fontWeight: "bold", color: "#ffc107" }}>
+                {selectedIds.length}
+              </div>
+              <div style={{ fontSize: "12px", color: "#6c757d" }}>Selected</div>
+            </div>
+          </div>
+        </div>
+      </div>
 
       {/* Single Entry */}
       <div style={{ marginBottom: 25, padding: 15, border: "1px solid #ddd", borderRadius: 5 }}>
@@ -344,14 +421,14 @@ const VehicleMaster = () => {
           onClick={handleAddVehicle}
           style={{ 
             padding: "8px 16px", 
-            backgroundColor: "#4CAF50", 
+            backgroundColor: "#28a745", 
             color: "white", 
             border: "none", 
             borderRadius: 4,
             cursor: "pointer"
           }}
         >
-          Add Vehicle
+          ➕ Add Vehicle
         </button>
       </div>
 
@@ -366,14 +443,14 @@ const VehicleMaster = () => {
           style={{ 
             marginTop: 10,
             padding: "8px 16px", 
-            backgroundColor: "#2196F3", 
+            backgroundColor: "#17a2b8", 
             color: "white", 
             border: "none", 
             borderRadius: 4,
             cursor: "pointer"
           }}
         >
-          {loading ? "Uploading..." : "📤 Upload Excel"}
+          {loading ? "⏳ Uploading..." : "📤 Upload Excel"}
         </button>
       </div>
 
@@ -383,73 +460,92 @@ const VehicleMaster = () => {
           onClick={handleExportExcel}
           style={{ 
             padding: "8px 16px", 
-            backgroundColor: "#FF9800", 
-            color: "white", 
+            backgroundColor: "#ffc107", 
+            color: "#212529", 
             border: "none", 
             borderRadius: 4,
-            cursor: "pointer"
+            cursor: "pointer",
+            fontWeight: "bold"
           }}
         >
-          📥 Export to Excel
+          📥 Export to Excel ({totalRecords} records)
         </button>
       </div>
 
       {/* Message */}
       {message && (
         <div style={{ 
-          padding: 10, 
+          padding: 12, 
           backgroundColor: "#d4edda", 
           color: "#155724", 
-          borderRadius: 4,
-          marginBottom: 15
+          borderRadius: 6,
+          marginBottom: 15,
+          border: "1px solid #c3e6cb"
         }}>
-          {message}
+          ✅ {message}
         </div>
       )}
 
-      {/* Search */}
-      <div style={{ marginBottom: 15 }}>
-        <input
-          placeholder="🔍 Search Vehicle No or Owner Name"
-          value={searchTerm}
-          onChange={(e) => {
-            setSearchTerm(e.target.value);
-            setCurrentPage(1);
-          }}
-          style={{ 
-            width: 300, 
-            padding: 8, 
-            borderRadius: 4,
-            border: "1px solid #ccc"
-          }}
-        />
-      </div>
-
-      {/* Record count */}
-      <div style={{ marginBottom: 10, fontWeight: "bold" }}>
-        Showing {filteredCount === 0 ? 0 : startIndex + 1}-{endIndex} of {filteredCount} filtered records
-        (Total in DB: {totalRecords})
+      {/* Search and Record Info */}
+      <div style={{ 
+        marginBottom: 15, 
+        padding: 15, 
+        backgroundColor: "#e9ecef", 
+        borderRadius: 6,
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center"
+      }}>
+        <div>
+          <input
+            placeholder="🔍 Search Vehicle No or Owner Name"
+            value={searchTerm}
+            onChange={(e) => {
+              setSearchTerm(e.target.value);
+              setCurrentPage(1);
+            }}
+            style={{ 
+              width: 300, 
+              padding: 8, 
+              borderRadius: 4,
+              border: "1px solid #ced4da"
+            }}
+          />
+        </div>
+        
+        <div style={{ textAlign: "right" }}>
+          <div style={{ fontWeight: "bold", color: "#495057" }}>
+            📋 Displaying: <span style={{ color: "#28a745" }}>{filteredCount === 0 ? 0 : startIndex + 1}-{endIndex}</span> of {filteredCount} filtered records
+          </div>
+          <div style={{ fontSize: "12px", color: "#6c757d", marginTop: 2 }}>
+            Page {currentPage} of {totalPages} | Total in database: {totalRecords}
+          </div>
+        </div>
       </div>
 
       {/* Vehicle List */}
-      <table border="1" width="100%" style={{ borderCollapse: "collapse" }}>
+      <table border="1" width="100%" style={{ borderCollapse: "collapse", marginBottom: 20 }}>
         <thead>
-          <tr style={{ backgroundColor: "#f2f2f2" }}>
-            <th style={{ padding: 10 }}>
+          <tr style={{ backgroundColor: "#343a40", color: "white" }}>
+            <th style={{ padding: 12, textAlign: "center", width: "50px" }}>
               <input
                 type="checkbox"
-                checked={selectAll}
+                checked={selectAll && paginatedVehicles.length > 0}
                 onChange={handleSelectAll}
+                disabled={paginatedVehicles.length === 0}
               />
             </th>
-            <th style={{ padding: 10 }}>Vehicle No</th>
-            <th style={{ padding: 10 }}>Owner Name</th>
-            <th style={{ padding: 10 }}>Actions</th>
+            <th style={{ padding: 12 }}>Vehicle No</th>
+            <th style={{ padding: 12 }}>Owner Name</th>
+            <th style={{ padding: 12, width: "150px" }}>Actions</th>
           </tr>
         </thead>
         <tbody>
           {paginatedVehicles.map((v) => (
-            <tr key={v.id}>
+            <tr key={v.id} style={{ 
+              backgroundColor: selectedIds.includes(v.id) ? "#fff3cd" : "white",
+              transition: "background-color 0.2s"
+            }}>
               <td style={{ padding: 10, textAlign: "center" }}>
                 <input
                   type="checkbox"
@@ -457,12 +553,12 @@ const VehicleMaster = () => {
                   onChange={() => handleCheckboxChange(v.id)}
                 />
               </td>
-              <td style={{ padding: 10 }}>
+              <td style={{ padding: 10, fontWeight: "bold" }}>
                 {editingId === v.id ? (
                   <input
                     value={editVehicleNo}
                     onChange={(e) => setEditVehicleNo(e.target.value)}
-                    style={{ padding: 5, width: "100%" }}
+                    style={{ padding: 6, width: "100%", border: "1px solid #ced4da" }}
                   />
                 ) : (
                   v.VehicleNo
@@ -473,7 +569,7 @@ const VehicleMaster = () => {
                   <input
                     value={editOwnerName}
                     onChange={(e) => setEditOwnerName(e.target.value)}
-                    style={{ padding: 5, width: "100%" }}
+                    style={{ padding: 6, width: "100%", border: "1px solid #ced4da" }}
                   />
                 ) : (
                   v.OwnerName
@@ -481,47 +577,48 @@ const VehicleMaster = () => {
               </td>
               <td style={{ padding: 10 }}>
                 {editingId === v.id ? (
-                  <>
+                  <div style={{ display: "flex", gap: 8 }}>
                     <button 
                       onClick={handleUpdate}
                       style={{ 
-                        padding: "5px 10px", 
-                        marginRight: 5, 
-                        backgroundColor: "#4CAF50", 
+                        padding: "6px 12px", 
+                        backgroundColor: "#28a745", 
                         color: "white", 
                         border: "none", 
-                        borderRadius: 3,
-                        cursor: "pointer"
+                        borderRadius: 4,
+                        cursor: "pointer",
+                        flex: 1
                       }}
                     >
-                      Save
+                      💾 Save
                     </button>
                     <button 
                       onClick={handleCancelEdit}
                       style={{ 
-                        padding: "5px 10px", 
-                        backgroundColor: "#f44336", 
+                        padding: "6px 12px", 
+                        backgroundColor: "#6c757d", 
                         color: "white", 
                         border: "none", 
-                        borderRadius: 3,
-                        cursor: "pointer"
+                        borderRadius: 4,
+                        cursor: "pointer",
+                        flex: 1
                       }}
                     >
-                      Cancel
+                      ❌ Cancel
                     </button>
-                  </>
+                  </div>
                 ) : (
-                  <>
+                  <div style={{ display: "flex", gap: 8 }}>
                     <button 
                       onClick={() => handleEdit(v)}
                       style={{ 
-                        padding: "5px 10px", 
-                        marginRight: 5, 
-                        backgroundColor: "#2196F3", 
+                        padding: "6px 12px", 
+                        backgroundColor: "#007bff", 
                         color: "white", 
                         border: "none", 
-                        borderRadius: 3,
-                        cursor: "pointer"
+                        borderRadius: 4,
+                        cursor: "pointer",
+                        flex: 1
                       }}
                     >
                       ✏️ Edit
@@ -529,25 +626,29 @@ const VehicleMaster = () => {
                     <button 
                       onClick={() => handleDelete(v.id)}
                       style={{ 
-                        padding: "5px 10px", 
-                        backgroundColor: "#f44336", 
+                        padding: "6px 12px", 
+                        backgroundColor: "#dc3545", 
                         color: "white", 
                         border: "none", 
-                        borderRadius: 3,
-                        cursor: "pointer"
+                        borderRadius: 4,
+                        cursor: "pointer",
+                        flex: 1
                       }}
                     >
                       🗑️ Delete
                     </button>
-                  </>
+                  </div>
                 )}
               </td>
             </tr>
           ))}
           {paginatedVehicles.length === 0 && (
             <tr>
-              <td colSpan={4} style={{ textAlign: "center", padding: 20 }}>
-                No vehicles found
+              <td colSpan={4} style={{ textAlign: "center", padding: 40 }}>
+                <div style={{ color: "#6c757d" }}>
+                  📭 No vehicles found
+                  {searchTerm && <div style={{ marginTop: 5 }}>Try a different search term</div>}
+                </div>
               </td>
             </tr>
           )}
@@ -556,57 +657,83 @@ const VehicleMaster = () => {
 
       {/* Pagination */}
       {totalPages > 1 && (
-        <div style={{ marginTop: 20, textAlign: "center" }}>
-          <button
-            disabled={currentPage === 1}
-            onClick={() => setCurrentPage((p) => p - 1)}
-            style={{ 
-              padding: "8px 12px", 
-              margin: "0 5px", 
-              cursor: currentPage === 1 ? "not-allowed" : "pointer",
-              backgroundColor: currentPage === 1 ? "#f0f0f0" : "#4CAF50",
-              color: currentPage === 1 ? "#999" : "white",
-              border: "none",
-              borderRadius: 4
-            }}
-          >
-            Previous
-          </button>
+        <div style={{ 
+          marginTop: 20, 
+          display: "flex", 
+          justifyContent: "space-between",
+          alignItems: "center",
+          padding: "15px 0",
+          borderTop: "1px solid #dee2e6"
+        }}>
+          <div style={{ color: "#6c757d", fontSize: "14px" }}>
+            Showing {filteredCount === 0 ? 0 : startIndex + 1} to {endIndex} of {filteredCount} entries
+          </div>
           
-          {[...Array(totalPages)].map((_, i) => (
+          <div style={{ display: "flex", gap: 5 }}>
             <button
-              key={i}
-              onClick={() => setCurrentPage(i + 1)}
-              style={{
-                padding: "8px 12px",
-                margin: "0 2px",
-                backgroundColor: currentPage === i + 1 ? "#2196F3" : "#f0f0f0",
-                color: currentPage === i + 1 ? "white" : "#333",
+              disabled={currentPage === 1}
+              onClick={() => setCurrentPage((p) => p - 1)}
+              style={{ 
+                padding: "8px 12px", 
+                cursor: currentPage === 1 ? "not-allowed" : "pointer",
+                backgroundColor: currentPage === 1 ? "#f8f9fa" : "#6c757d",
+                color: currentPage === 1 ? "#adb5bd" : "white",
                 border: "none",
-                borderRadius: 4,
-                cursor: "pointer",
-                fontWeight: currentPage === i + 1 ? "bold" : "normal",
+                borderRadius: 4
               }}
             >
-              {i + 1}
+              ← Previous
             </button>
-          ))}
-          
-          <button
-            disabled={currentPage === totalPages}
-            onClick={() => setCurrentPage((p) => p + 1)}
-            style={{ 
-              padding: "8px 12px", 
-              margin: "0 5px", 
-              cursor: currentPage === totalPages ? "not-allowed" : "pointer",
-              backgroundColor: currentPage === totalPages ? "#f0f0f0" : "#4CAF50",
-              color: currentPage === totalPages ? "#999" : "white",
-              border: "none",
-              borderRadius: 4
-            }}
-          >
-            Next
-          </button>
+            
+            {[...Array(totalPages)].map((_, i) => {
+              // Show only first, last, current, and adjacent pages
+              if (
+                i === 0 || 
+                i === totalPages - 1 || 
+                (i >= currentPage - 2 && i <= currentPage) ||
+                (i <= currentPage + 2 && i >= currentPage)
+              ) {
+                return (
+                  <button
+                    key={i}
+                    onClick={() => setCurrentPage(i + 1)}
+                    style={{
+                      padding: "8px 12px",
+                      backgroundColor: currentPage === i + 1 ? "#007bff" : "#f8f9fa",
+                      color: currentPage === i + 1 ? "white" : "#495057",
+                      border: "1px solid #dee2e6",
+                      borderRadius: 4,
+                      cursor: "pointer",
+                      fontWeight: currentPage === i + 1 ? "bold" : "normal",
+                    }}
+                  >
+                    {i + 1}
+                  </button>
+                );
+              } else if (
+                i === currentPage - 3 ||
+                i === currentPage + 3
+              ) {
+                return <span key={i} style={{ padding: "8px", color: "#6c757d" }}>...</span>;
+              }
+              return null;
+            })}
+            
+            <button
+              disabled={currentPage === totalPages}
+              onClick={() => setCurrentPage((p) => p + 1)}
+              style={{ 
+                padding: "8px 12px", 
+                cursor: currentPage === totalPages ? "not-allowed" : "pointer",
+                backgroundColor: currentPage === totalPages ? "#f8f9fa" : "#6c757d",
+                color: currentPage === totalPages ? "#adb5bd" : "white",
+                border: "none",
+                borderRadius: 4
+              }}
+            >
+              Next →
+            </button>
+          </div>
         </div>
       )}
     </div>
