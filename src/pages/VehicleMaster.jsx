@@ -1,6 +1,15 @@
 ﻿import React, { useEffect, useState } from "react";
 import { db } from "../firebaseConfig";
-import { collection, addDoc, getDocs, query, where } from "firebase/firestore";
+import { 
+  collection, 
+  addDoc, 
+  getDocs, 
+  query, 
+  where, 
+  updateDoc, 
+  deleteDoc, 
+  doc 
+} from "firebase/firestore";
 import * as XLSX from "xlsx";
 
 const VehicleMaster = () => {
@@ -11,6 +20,16 @@ const VehicleMaster = () => {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
 
+  // Edit states
+  const [editingId, setEditingId] = useState(null);
+  const [editVehicleNo, setEditVehicleNo] = useState("");
+  const [editOwnerName, setEditOwnerName] = useState("");
+
+  // Selection states
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [selectAll, setSelectAll] = useState(false);
+
+  // Search and pagination
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const recordsPerPage = 10;
@@ -53,8 +72,119 @@ const VehicleMaster = () => {
 
     setVehicleNo("");
     setOwnerName("");
-    setMessage("âœ… Vehicle added successfully");
+    setMessage("✅ Vehicle added successfully");
     fetchVehicles();
+  };
+
+  // Start editing
+  const handleEdit = (vehicle) => {
+    setEditingId(vehicle.id);
+    setEditVehicleNo(vehicle.VehicleNo);
+    setEditOwnerName(vehicle.OwnerName);
+  };
+
+  // Update vehicle
+  const handleUpdate = async () => {
+    if (!editVehicleNo || !editOwnerName) {
+      alert("Both fields are required");
+      return;
+    }
+
+    const vNo = editVehicleNo.trim().replace(/\s+/g, " ").toUpperCase();
+    
+    // Check if another vehicle has the same number
+    const q = query(vehicleRef, where("VehicleNo", "==", vNo));
+    const existing = await getDocs(q);
+    const duplicate = existing.docs.find(doc => doc.id !== editingId);
+    
+    if (duplicate) {
+      alert("Vehicle number already exists");
+      return;
+    }
+
+    try {
+      const vehicleDoc = doc(db, "VehicleMaster", editingId);
+      await updateDoc(vehicleDoc, {
+        VehicleNo: vNo,
+        OwnerName: editOwnerName.trim(),
+        UpdatedAt: new Date(),
+      });
+      
+      setMessage("✅ Vehicle updated successfully");
+      setEditingId(null);
+      fetchVehicles();
+    } catch (error) {
+      alert("Error updating vehicle");
+      console.error(error);
+    }
+  };
+
+  // Cancel editing
+  const handleCancelEdit = () => {
+    setEditingId(null);
+    setEditVehicleNo("");
+    setEditOwnerName("");
+  };
+
+  // Delete single vehicle
+  const handleDelete = async (id) => {
+    if (!window.confirm("Are you sure you want to delete this vehicle?")) return;
+
+    try {
+      const vehicleDoc = doc(db, "VehicleMaster", id);
+      await deleteDoc(vehicleDoc);
+      setMessage("✅ Vehicle deleted successfully");
+      fetchVehicles();
+      // Remove from selected IDs if it's there
+      setSelectedIds(selectedIds.filter(selectedId => selectedId !== id));
+    } catch (error) {
+      alert("Error deleting vehicle");
+      console.error(error);
+    }
+  };
+
+  // Handle checkbox selection
+  const handleCheckboxChange = (id) => {
+    setSelectedIds(prev => 
+      prev.includes(id) 
+        ? prev.filter(item => item !== id)
+        : [...prev, id]
+    );
+  };
+
+  // Handle select all
+  const handleSelectAll = () => {
+    if (selectAll) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(paginatedVehicles.map(v => v.id));
+    }
+    setSelectAll(!selectAll);
+  };
+
+  // Delete multiple vehicles
+  const handleDeleteMultiple = async () => {
+    if (selectedIds.length === 0) {
+      alert("Please select vehicles to delete");
+      return;
+    }
+
+    if (!window.confirm(`Are you sure you want to delete ${selectedIds.length} vehicle(s)?`)) return;
+
+    try {
+      const deletePromises = selectedIds.map(id => 
+        deleteDoc(doc(db, "VehicleMaster", id))
+      );
+      await Promise.all(deletePromises);
+      
+      setMessage(`✅ ${selectedIds.length} vehicle(s) deleted successfully`);
+      setSelectedIds([]);
+      setSelectAll(false);
+      fetchVehicles();
+    } catch (error) {
+      alert("Error deleting vehicles");
+      console.error(error);
+    }
   };
 
   // Handle file selection
@@ -117,7 +247,7 @@ const VehicleMaster = () => {
         }
 
         setMessage(
-          `âœ… Excel upload completed. Added ${added} vehicles, Skipped ${skipped} duplicates.`
+          `✅ Excel upload completed. Added ${added} vehicles, Skipped ${skipped} duplicates.`
         );
 
         fetchVehicles();
@@ -133,22 +263,23 @@ const VehicleMaster = () => {
     reader.readAsArrayBuffer(excelFile);
   };
 
-  // ðŸ”¹ Export to Excel
+  // Export to Excel
   const handleExportExcel = () => {
     if (!vehicles.length) return;
 
     const exportData = vehicles.map(v => ({
       "Vehicle No": v.VehicleNo,
       "Owner Name": v.OwnerName,
+      "Created At": v.CreatedAt?.toDate().toLocaleString(),
     }));
 
     const ws = XLSX.utils.json_to_sheet(exportData);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "VehicleMaster");
-    XLSX.writeFile(wb, "VehicleMaster.xlsx");
+    XLSX.writeFile(wb, `VehicleMaster_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
-  // ðŸ”¹ Filtered & Paginated vehicles
+  // Filtered & Paginated vehicles
   const filteredVehicles = vehicles.filter(
     (v) =>
       v.VehicleNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -165,59 +296,132 @@ const VehicleMaster = () => {
 
   return (
     <div style={{ padding: 20 }}>
-      <h2>ðŸš› Vehicle Master</h2>
+      <h2>🚚 Vehicle Master</h2>
+
+      {/* Multiple Delete Button */}
+      {selectedIds.length > 0 && (
+        <div style={{ 
+          marginBottom: 15, 
+          padding: 10, 
+          backgroundColor: "#ffe6e6", 
+          borderRadius: 5 
+        }}>
+          <button 
+            onClick={handleDeleteMultiple}
+            style={{ 
+              backgroundColor: "#ff3333", 
+              color: "white", 
+              border: "none", 
+              padding: "8px 16px", 
+              borderRadius: 4,
+              cursor: "pointer"
+            }}
+          >
+            🗑️ Delete Selected ({selectedIds.length})
+          </button>
+          <span style={{ marginLeft: 10 }}>
+            {selectedIds.length} vehicle(s) selected
+          </span>
+        </div>
+      )}
 
       {/* Single Entry */}
-      <div style={{ marginBottom: 25 }}>
-        <h4>Add Vehicle</h4>
+      <div style={{ marginBottom: 25, padding: 15, border: "1px solid #ddd", borderRadius: 5 }}>
+        <h4>Add New Vehicle</h4>
         <input
           placeholder="Vehicle Number"
           value={vehicleNo}
           onChange={(e) => setVehicleNo(e.target.value)}
+          style={{ padding: 8, marginRight: 10 }}
         />
         <input
           placeholder="Owner Name"
           value={ownerName}
           onChange={(e) => setOwnerName(e.target.value)}
-          style={{ marginLeft: 10 }}
+          style={{ padding: 8, marginRight: 10 }}
         />
-        <button onClick={handleAddVehicle} style={{ marginLeft: 10 }}>
-          Add
+        <button 
+          onClick={handleAddVehicle}
+          style={{ 
+            padding: "8px 16px", 
+            backgroundColor: "#4CAF50", 
+            color: "white", 
+            border: "none", 
+            borderRadius: 4,
+            cursor: "pointer"
+          }}
+        >
+          Add Vehicle
         </button>
       </div>
 
       {/* Excel Upload */}
-      <div style={{ marginBottom: 25 }}>
+      <div style={{ marginBottom: 25, padding: 15, border: "1px solid #ddd", borderRadius: 5 }}>
         <h4>Upload Excel</h4>
         <input type="file" accept=".xlsx,.xls" onChange={handleFileSelect} />
-        {excelFile && <p>ðŸ“Ž Selected: <b>{excelFile.name}</b></p>}
+        {excelFile && <p>📄 Selected: <b>{excelFile.name}</b></p>}
         <button
           onClick={handleExcelUpload}
           disabled={loading}
-          style={{ marginTop: 10 }}
+          style={{ 
+            marginTop: 10,
+            padding: "8px 16px", 
+            backgroundColor: "#2196F3", 
+            color: "white", 
+            border: "none", 
+            borderRadius: 4,
+            cursor: "pointer"
+          }}
         >
-          {loading ? "Uploading..." : "Upload Excel"}
+          {loading ? "Uploading..." : "📤 Upload Excel"}
         </button>
       </div>
 
       {/* Export to Excel */}
       <div style={{ marginBottom: 25 }}>
-        <button onClick={handleExportExcel}>ðŸ“¤ Export to Excel</button>
+        <button 
+          onClick={handleExportExcel}
+          style={{ 
+            padding: "8px 16px", 
+            backgroundColor: "#FF9800", 
+            color: "white", 
+            border: "none", 
+            borderRadius: 4,
+            cursor: "pointer"
+          }}
+        >
+          📥 Export to Excel
+        </button>
       </div>
 
       {/* Message */}
-      {message && <p style={{ color: "green", fontWeight: "bold" }}>{message}</p>}
+      {message && (
+        <div style={{ 
+          padding: 10, 
+          backgroundColor: "#d4edda", 
+          color: "#155724", 
+          borderRadius: 4,
+          marginBottom: 15
+        }}>
+          {message}
+        </div>
+      )}
 
       {/* Search */}
-      <div style={{ marginBottom: 10 }}>
+      <div style={{ marginBottom: 15 }}>
         <input
-          placeholder="Search Vehicle No or Owner"
+          placeholder="🔍 Search Vehicle No or Owner Name"
           value={searchTerm}
           onChange={(e) => {
             setSearchTerm(e.target.value);
             setCurrentPage(1);
           }}
-          style={{ width: 300 }}
+          style={{ 
+            width: 300, 
+            padding: 8, 
+            borderRadius: 4,
+            border: "1px solid #ccc"
+          }}
         />
       </div>
 
@@ -228,24 +432,122 @@ const VehicleMaster = () => {
       </div>
 
       {/* Vehicle List */}
-      <table border="1" width="100%">
+      <table border="1" width="100%" style={{ borderCollapse: "collapse" }}>
         <thead>
-          <tr>
-            <th>Vehicle No</th>
-            <th>Owner Name</th>
+          <tr style={{ backgroundColor: "#f2f2f2" }}>
+            <th style={{ padding: 10 }}>
+              <input
+                type="checkbox"
+                checked={selectAll}
+                onChange={handleSelectAll}
+              />
+            </th>
+            <th style={{ padding: 10 }}>Vehicle No</th>
+            <th style={{ padding: 10 }}>Owner Name</th>
+            <th style={{ padding: 10 }}>Actions</th>
           </tr>
         </thead>
         <tbody>
           {paginatedVehicles.map((v) => (
             <tr key={v.id}>
-              <td>{v.VehicleNo}</td>
-              <td>{v.OwnerName}</td>
+              <td style={{ padding: 10, textAlign: "center" }}>
+                <input
+                  type="checkbox"
+                  checked={selectedIds.includes(v.id)}
+                  onChange={() => handleCheckboxChange(v.id)}
+                />
+              </td>
+              <td style={{ padding: 10 }}>
+                {editingId === v.id ? (
+                  <input
+                    value={editVehicleNo}
+                    onChange={(e) => setEditVehicleNo(e.target.value)}
+                    style={{ padding: 5, width: "100%" }}
+                  />
+                ) : (
+                  v.VehicleNo
+                )}
+              </td>
+              <td style={{ padding: 10 }}>
+                {editingId === v.id ? (
+                  <input
+                    value={editOwnerName}
+                    onChange={(e) => setEditOwnerName(e.target.value)}
+                    style={{ padding: 5, width: "100%" }}
+                  />
+                ) : (
+                  v.OwnerName
+                )}
+              </td>
+              <td style={{ padding: 10 }}>
+                {editingId === v.id ? (
+                  <>
+                    <button 
+                      onClick={handleUpdate}
+                      style={{ 
+                        padding: "5px 10px", 
+                        marginRight: 5, 
+                        backgroundColor: "#4CAF50", 
+                        color: "white", 
+                        border: "none", 
+                        borderRadius: 3,
+                        cursor: "pointer"
+                      }}
+                    >
+                      Save
+                    </button>
+                    <button 
+                      onClick={handleCancelEdit}
+                      style={{ 
+                        padding: "5px 10px", 
+                        backgroundColor: "#f44336", 
+                        color: "white", 
+                        border: "none", 
+                        borderRadius: 3,
+                        cursor: "pointer"
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button 
+                      onClick={() => handleEdit(v)}
+                      style={{ 
+                        padding: "5px 10px", 
+                        marginRight: 5, 
+                        backgroundColor: "#2196F3", 
+                        color: "white", 
+                        border: "none", 
+                        borderRadius: 3,
+                        cursor: "pointer"
+                      }}
+                    >
+                      ✏️ Edit
+                    </button>
+                    <button 
+                      onClick={() => handleDelete(v.id)}
+                      style={{ 
+                        padding: "5px 10px", 
+                        backgroundColor: "#f44336", 
+                        color: "white", 
+                        border: "none", 
+                        borderRadius: 3,
+                        cursor: "pointer"
+                      }}
+                    >
+                      🗑️ Delete
+                    </button>
+                  </>
+                )}
+              </td>
             </tr>
           ))}
           {paginatedVehicles.length === 0 && (
             <tr>
-              <td colSpan={2} style={{ textAlign: "center" }}>
-                No records found
+              <td colSpan={4} style={{ textAlign: "center", padding: 20 }}>
+                No vehicles found
               </td>
             </tr>
           )}
@@ -254,28 +556,54 @@ const VehicleMaster = () => {
 
       {/* Pagination */}
       {totalPages > 1 && (
-        <div style={{ marginTop: 10 }}>
+        <div style={{ marginTop: 20, textAlign: "center" }}>
           <button
             disabled={currentPage === 1}
             onClick={() => setCurrentPage((p) => p - 1)}
+            style={{ 
+              padding: "8px 12px", 
+              margin: "0 5px", 
+              cursor: currentPage === 1 ? "not-allowed" : "pointer",
+              backgroundColor: currentPage === 1 ? "#f0f0f0" : "#4CAF50",
+              color: currentPage === 1 ? "#999" : "white",
+              border: "none",
+              borderRadius: 4
+            }}
           >
-            Prev
+            Previous
           </button>
+          
           {[...Array(totalPages)].map((_, i) => (
             <button
               key={i}
               onClick={() => setCurrentPage(i + 1)}
               style={{
-                margin: "0 3px",
+                padding: "8px 12px",
+                margin: "0 2px",
+                backgroundColor: currentPage === i + 1 ? "#2196F3" : "#f0f0f0",
+                color: currentPage === i + 1 ? "white" : "#333",
+                border: "none",
+                borderRadius: 4,
+                cursor: "pointer",
                 fontWeight: currentPage === i + 1 ? "bold" : "normal",
               }}
             >
               {i + 1}
             </button>
           ))}
+          
           <button
             disabled={currentPage === totalPages}
             onClick={() => setCurrentPage((p) => p + 1)}
+            style={{ 
+              padding: "8px 12px", 
+              margin: "0 5px", 
+              cursor: currentPage === totalPages ? "not-allowed" : "pointer",
+              backgroundColor: currentPage === totalPages ? "#f0f0f0" : "#4CAF50",
+              color: currentPage === totalPages ? "#999" : "white",
+              border: "none",
+              borderRadius: 4
+            }}
           >
             Next
           </button>
