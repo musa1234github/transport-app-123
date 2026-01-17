@@ -25,7 +25,7 @@ const safeNum = (v) => {
   return isNaN(n) ? 0 : n;
 };
 
-/* ===== PARSE DATE (MULTIPLE FORMATS) ===== */
+/* ===== IMPROVED DATE PARSING (MULTIPLE FORMATS) ===== */
 const parseDate = (v) => {
   if (!v) return null;
   
@@ -34,12 +34,39 @@ const parseDate = (v) => {
   
   // If it's an Excel serial number
   if (typeof v === "number") {
-    return new Date(Math.round((v - 25569) * 86400 * 1000));
+    // Excel date (Windows) starts from Jan 1, 1900
+    const excelEpoch = new Date(1899, 11, 30);
+    const millisecondsPerDay = 24 * 60 * 60 * 1000;
+    const date = new Date(excelEpoch.getTime() + (v - 1) * millisecondsPerDay);
+    
+    // Adjust for Excel's leap year bug
+    if (v > 60) {
+      date.setTime(date.getTime() - 24 * 60 * 60 * 1000);
+    }
+    
+    return date;
   }
   
   const str = String(v).trim();
   
-  // Try dd-mm-yyyy or dd-mm-yy
+  // Try dd.mm.yyyy (with dots) - NEW FORMAT
+  const dotMatch = str.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2,4})$/);
+  if (dotMatch) {
+    const day = parseInt(dotMatch[1], 10);
+    const month = parseInt(dotMatch[2], 10) - 1;
+    let year = parseInt(dotMatch[3], 10);
+    
+    if (year < 100) {
+      year = year >= 0 && year <= 50 ? year + 2000 : year + 1900;
+    }
+    
+    const date = new Date(year, month, day);
+    if (!isNaN(date.getTime()) && date.getDate() === day && date.getMonth() === month) {
+      return date;
+    }
+  }
+  
+  // Try dd-mm-yyyy or dd/mm/yyyy
   const match = str.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{2,4})$/);
   if (match) {
     const day = parseInt(match[1], 10);
@@ -56,7 +83,20 @@ const parseDate = (v) => {
     }
   }
   
-  // Try standard Date parse
+  // Try yyyy-mm-dd (ISO format)
+  const isoMatch = str.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/);
+  if (isoMatch) {
+    const year = parseInt(isoMatch[1], 10);
+    const month = parseInt(isoMatch[2], 10) - 1;
+    const day = parseInt(isoMatch[3], 10);
+    
+    const date = new Date(year, month, day);
+    if (!isNaN(date.getTime()) && date.getDate() === day && date.getMonth() === month) {
+      return date;
+    }
+  }
+  
+  // Try standard Date parse as last resort
   const parsed = new Date(str);
   if (!isNaN(parsed.getTime())) {
     return parsed;
@@ -91,6 +131,7 @@ const PaymentUpload = ({ isAdmin }) => {
 
   const loadPayments = async () => {
     try {
+      // FIXED QUERY: Only query PaymentReceived > 0
       const paymentsQuery = query(
         collection(db, "BillTable"),
         where("FactoryName", "==", factory),
@@ -112,7 +153,12 @@ const PaymentUpload = ({ isAdmin }) => {
       setPayments(paymentsData);
       addLog(`Loaded ${paymentsData.length} payments for ${factory}`, "info");
     } catch (error) {
-      addLog(`Error loading payments: ${error.message}`, "error");
+      if (error.message.includes("requires an index")) {
+        addLog(`Error loading payments: The query requires a Firestore index. Please create the composite index first.`, "error");
+        addLog(`Index needed: BillTable collection with fields: FactoryName (asc), PaymentReceived (asc)`, "error");
+      } else {
+        addLog(`Error loading payments: ${error.message}`, "error");
+      }
     }
   };
 
@@ -130,9 +176,9 @@ const PaymentUpload = ({ isAdmin }) => {
 
     reader.onload = async (e) => {
       try {
-        const wb = XLSX.read(e.target.result, { type: "binary" });
+        const wb = XLSX.read(e.target.result, { type: "binary", cellDates: true }); // Added cellDates
         const ws = wb.Sheets[wb.SheetNames[0]];
-        const rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
+        const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false }); // Added raw: false
 
         let success = 0;
         let skipped = 0;
@@ -196,21 +242,25 @@ const PaymentUpload = ({ isAdmin }) => {
           }
 
           /* ===== FIND BILL ===== */
+          // FIX: Use a simpler query first to avoid index issues
           const billQuery = query(
             collection(db, "BillTable"),
-            where("BillNum", "==", billNumber),
-            where("FactoryName", "==", factory)
+            where("BillNum", "==", billNumber)
           );
 
           const billSnapshot = await getDocs(billQuery);
           
-          if (billSnapshot.empty) {
+          // Filter by factory client-side to avoid composite index error
+          const billDoc = billSnapshot.docs.find(doc => 
+            doc.data().FactoryName === factory
+          );
+          
+          if (!billDoc) {
             addLog(`Row ${i} skipped: Bill ${billNumber} not found in ${factory}`, "warning");
             skipped++;
             continue;
           }
 
-          const billDoc = billSnapshot.docs[0];
           const billId = billDoc.id;
 
           /* ===== FIND OR CREATE PAYMENT ===== */
@@ -301,7 +351,7 @@ const PaymentUpload = ({ isAdmin }) => {
       ["BillNumber", "PaymentNumber", "PaymentDate", "ActualAmount", "TDS", "GST", "PaymentReceived", "Shortage"],
       ["BILL-001", "PAY-001", "15-01-2026", 50000, 2500, 9000, 48000, "500"],
       ["BILL-002", "PAY-002", "16-01-2026", 75000, 3750, 13500, 72000, "250"],
-      ["BILL-003", "PAY-003", "17-01-2026", 60000, 3000, 10800, 57600, "-300"]
+      ["BILL-003", "PAY-003", "17.01.2026", 60000, 3000, 10800, 57600, "-300"] // Added dot format example
     ];
 
     const ws = XLSX.utils.aoa_to_sheet(sampleData);
@@ -423,6 +473,9 @@ const PaymentUpload = ({ isAdmin }) => {
         <h4>Upload Payment Excel File:</h4>
         <p style={{ margin: "10px 0", color: "#6c757d" }}>
           Excel must have columns: BillNumber, PaymentNumber, PaymentDate, ActualAmount, TDS, GST, PaymentReceived, Shortage
+        </p>
+        <p style={{ margin: "10px 0", color: "#6c757d", fontSize: "14px" }}>
+          <strong>Note:</strong> Date formats accepted: dd.mm.yyyy, dd-mm-yyyy, dd/mm/yyyy, yyyy-mm-dd
         </p>
         
         <div style={{ marginBottom: "15px" }}>
