@@ -82,17 +82,21 @@ const Home = ({ user, isAdmin }) => {
             </li>
           )}
 
+          {isAdmin && (  
           <li>
             <Link to="/show-bill" style={menuLink}>
               📑 Show Bills
             </Link>
           </li>
+          )}
 
+          {isAdmin && (
           <li>
             <Link to="/show-payment" style={menuLink}>
               📑 Show Payments
             </Link>
           </li>
+          )}
 
           {isAdmin && (
             <li>
