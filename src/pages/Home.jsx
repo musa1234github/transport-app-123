@@ -150,21 +150,21 @@ const Home = ({ user, isAdmin }) => {
             </Link>
           </li>
 
-          {isAdmin && (
+          {/* {isAdmin && (
             <li>
               <Link to="/delete-dispatch" style={{ ...menuLink, color: "red" }}>
                 ❌ Delete Dispatch
               </Link>
             </li>
-          )}
+          )} */}
 
-          {isAdmin && (
+          {/* {isAdmin && (
             <li>
               <Link to="/delete-duplicate-challan" style={{ ...menuLink, color: "red" }}>
                 ❌ Delete Duplicate Dispatch
               </Link>
             </li>
-          )}
+          )} */}
         </ul>
       </nav>
 
