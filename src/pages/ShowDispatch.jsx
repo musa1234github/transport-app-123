@@ -9,10 +9,16 @@ import {
 } from "firebase/firestore";
 import * as XLSX from "xlsx";
 
+const FACTORY_NAME_FIXES = {
+  MANIGARH: "MANIGARH"
+};
+
 const factoryMap = {
   "10": "JSW",
-  "6": "Manigar",
-  "7": "Ultratech"
+  "6": "MANIGARH", // Changed from "Manigar" to "MANIGARH"
+  "7": "ULTRATECH",
+  // Add more mappings if you have DisVid for other factories
+  // If not, FactoryName will be used directly from the record
 };
 
 const COLUMN_SEQUENCE = [
@@ -25,6 +31,18 @@ const COLUMN_SEQUENCE = [
   "Advance",
   "Diesel",
   "FactoryName"
+];
+
+// Factory options for filter dropdown - same as upload component
+const FACTORY_OPTIONS = [
+  "ACC MARATHA",
+  "AMBUJA",
+  "DALMIA",
+  "MP BIRLA",
+  "ORIENT",
+  "MANIGARH",
+  "ULTRATECH",
+  "JSW"
 ];
 
 const normalizeDate = (d) => {
@@ -64,7 +82,7 @@ const ShowDispatch = () => {
   const [toDate, setToDate] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
 
-  /* âœ… MVC-style applied filters */
+  /* ✅ MVC-style applied filters */
   const [appliedFilters, setAppliedFilters] = useState({
     searchTerm: "",
     filterFactory: "",
@@ -97,7 +115,7 @@ const ShowDispatch = () => {
             ? new Date(row.DispatchDate.seconds * 1000)
             : new Date(row.DispatchDate);
 
-          // ðŸ”¥ FORCE LOCAL DATE (MVC STYLE)
+          // 🔥 FORCE LOCAL DATE (MVC STYLE)
           row.DispatchDate = new Date(
             d.getFullYear(),
             d.getMonth(),
@@ -105,7 +123,16 @@ const ShowDispatch = () => {
           );
         }
 
-        row.FactoryName = row.FactoryName || factoryMap[row.DisVid] || "";
+        // Apply factory name fixes if needed
+        if (row.FactoryName) {
+          const fixedName = FACTORY_NAME_FIXES[row.FactoryName.toUpperCase()];
+          if (fixedName) {
+            row.FactoryName = fixedName;
+          }
+        } else if (row.DisVid) {
+          // Fallback to factoryMap for backward compatibility
+          row.FactoryName = factoryMap[row.DisVid] || "";
+        }
 
         return row;
       });
@@ -210,7 +237,7 @@ const ShowDispatch = () => {
   const filteredDispatches = dispatches.filter(d => {
     const { searchTerm, filterFactory, fromDate, toDate } = appliedFilters;
 
-    // âœ… MVC BEHAVIOR: if no filter selected, return all
+    // ✅ MVC BEHAVIOR: if no filter selected, return all
     if (!searchTerm && !filterFactory && !fromDate && !toDate) {
       return true;
     }
@@ -234,7 +261,7 @@ const ShowDispatch = () => {
           })
         );
 
-    const matchesFactory = filterFactory ? d.DisVid === filterFactory : true;
+    const matchesFactory = filterFactory ? d.FactoryName === filterFactory : true;
 
     // Date filtering logic
     const rowDate = normalizeDate(d.DispatchDate);
@@ -324,9 +351,11 @@ const ShowDispatch = () => {
           style={{ padding: 8, border: "1px solid #ccc", borderRadius: 4 }}
         >
           <option value="">All Factories</option>
-          <option value="10">JSW</option>
-          <option value="6">Manigar</option>
-          <option value="7">Ultratech</option>
+          {FACTORY_OPTIONS.map((factory, index) => (
+            <option key={index} value={factory}>
+              {factory}
+            </option>
+          ))}
         </select>
 
         <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
@@ -510,7 +539,7 @@ const ShowDispatch = () => {
       </div>
 
       <div style={{ marginTop: 20, fontWeight: "bold", color: "#333" }}>
-        Showing {filteredCount === 0 ? 0 : startIndex + 1}â€“{endIndex} of{" "}
+        Showing {filteredCount === 0 ? 0 : startIndex + 1}–{endIndex} of{" "}
         {filteredCount} filtered records (Total in DB: {totalRecords})
       </div>
 
