@@ -1,16 +1,48 @@
-﻿import React from "react";
-import { signOut } from "firebase/auth";
-import { Link, Outlet } from "react-router-dom";
-import { auth } from "../firebaseConfig";
+﻿import React, { useEffect, useState } from "react";
+import { signOut, onAuthStateChanged } from "firebase/auth";
+import { Link, Outlet, useNavigate } from "react-router-dom";
+import { auth, isAdminUser } from "../firebaseConfig";
 
-const Home = ({ user, isAdmin }) => {
+const Home = () => {
+  const [user, setUser] = useState(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  const navigate = useNavigate();
+
+  /* ================= AUTH + ROLE CHECK ================= */
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      if (!currentUser) {
+        navigate("/");
+        return;
+      }
+
+      setUser(currentUser);
+
+      // 🔐 Check admin role from Firestore
+      const admin = await isAdminUser(currentUser);
+      setIsAdmin(admin);
+
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [navigate]);
+
+  /* ================= LOGOUT ================= */
   const handleLogout = async () => {
     try {
       await signOut(auth);
+      navigate("/");
     } catch (error) {
       console.error("Logout failed:", error);
     }
   };
+
+  if (loading) {
+    return <p style={{ padding: "20px" }}>Loading...</p>;
+  }
 
   return (
     <div style={{ minHeight: "100vh", background: "#f5f7fa" }}>
@@ -156,7 +188,10 @@ const Home = ({ user, isAdmin }) => {
 
           {isAdmin && (
             <li>
-              <Link to="/delete-duplicate-challan" style={{ ...menuLink, color: "red" }}>
+              <Link
+                to="/delete-duplicate-challan"
+                style={{ ...menuLink, color: "red" }}
+              >
                 ❌ Delete Duplicate Dispatch
               </Link>
             </li>
@@ -201,7 +236,7 @@ const menuLink = {
   fontWeight: "500",
   padding: "6px 10px",
   borderRadius: "4px",
-  transition: "background 0.2s",
+  transition: "background 0.2s"
 };
 
 export default Home;
