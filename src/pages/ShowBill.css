@@ -1,0 +1,458 @@
+/* ShowBill.css */
+
+/* Container Styles */
+.bill-report-container {
+  padding: 20px;
+}
+
+.bill-report-title {
+  margin-bottom: 20px;
+  color: #333;
+}
+
+/* Filter Bar Styles */
+.filter-bar {
+  margin-bottom: 15px;
+  padding: 15px;
+  background-color: #f5f5f5;
+  border-radius: 5px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.filter-input {
+  padding: 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+.filter-input-search {
+  width: 250px;
+}
+
+.filter-input-date {
+  padding: 8px;
+}
+
+.filter-select {
+  padding: 8px;
+  width: 200px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+.filter-label {
+  margin-right: 5px;
+  font-weight: 500;
+}
+
+.filter-button-group {
+  display: flex;
+  gap: 10px;
+}
+
+.filter-button {
+  padding: 8px 16px;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: opacity 0.3s;
+}
+
+.filter-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.filter-button-apply {
+  background-color: #4CAF50;
+}
+
+.filter-button-clear {
+  background-color: #f44336;
+}
+
+.export-button-group {
+  display: flex;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.export-button {
+  padding: 8px 16px;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  transition: opacity 0.3s;
+}
+
+.export-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.export-button-all {
+  background-color: #2196F3;
+}
+
+.export-button-selected {
+  background-color: #FF9800;
+}
+
+.applied-filters {
+  font-size: 12px;
+  color: #666;
+  display: flex;
+  gap: 10px;
+  width: 100%;
+  margin-top: 10px;
+}
+
+/* Pagination Controls Styles */
+.pagination-controls {
+  margin-bottom: 15px;
+  padding: 10px;
+  background-color: #f8f9fa;
+  border-radius: 5px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border: 1px solid #dee2e6;
+}
+
+.records-selector {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.records-selector-label {
+  font-weight: bold;
+}
+
+.records-selector-select {
+  padding: 5px 10px;
+  border-radius: 4px;
+  border: 1px solid #ccc;
+}
+
+.records-info {
+  margin-left: 20px;
+  color: #666;
+}
+
+.total-records {
+  font-weight: bold;
+  color: #495057;
+}
+
+/* Selection Controls Styles */
+.selection-controls {
+  margin-bottom: 15px;
+  padding: 10px;
+  border-radius: 5px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.selection-controls-with-selection {
+  background-color: #fff3cd;
+  border: 1px solid #ffc107;
+}
+
+.selection-controls-without-selection {
+  background-color: #e9ecef;
+  border: 1px solid #dee2e6;
+}
+
+.selection-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.selection-checkbox {
+  margin-right: 5px;
+}
+
+.page-bills-info {
+  color: #666;
+  font-size: 14px;
+  margin-left: 20px;
+}
+
+.selection-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.delete-button {
+  padding: 8px 16px;
+  background-color: #dc3545;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: bold;
+}
+
+.delete-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+/* Table Styles */
+.table-container {
+  overflow-x: auto;
+  margin-bottom: 20px;
+}
+
+.bill-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.bill-table th {
+  padding: 10px;
+  background-color: #f2f2f2;
+  text-align: left;
+}
+
+.bill-table td {
+  padding: 8px;
+  text-align: center;
+}
+
+.bill-table th.checkbox-column {
+  width: 40px;
+  text-align: center;
+}
+
+.bill-table td.checkbox-column {
+  text-align: center;
+}
+
+.selected-row {
+  background-color: #f8d7da !important;
+}
+
+/* Pagination Styles */
+.pagination {
+  margin-top: 20px;
+  padding: 15px;
+  background-color: #f8f9fa;
+  border-radius: 5px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border: 1px solid #dee2e6;
+}
+
+.pagination-left {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.pagination-info {
+  font-weight: bold;
+  margin-right: 10px;
+}
+
+.pagination-button {
+  padding: 8px 12px;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.pagination-button:disabled {
+  cursor: not-allowed;
+  color: #6c757d;
+  background-color: #e9ecef;
+}
+
+.pagination-button-first {
+  background-color: #007bff;
+  font-weight: bold;
+}
+
+.pagination-button-prev {
+  background-color: #007bff;
+}
+
+.pagination-button-number {
+  background-color: #6c757d;
+  font-weight: normal;
+}
+
+.pagination-button-current {
+  background-color: #495057;
+  font-weight: bold;
+}
+
+.pagination-button-next {
+  background-color: #007bff;
+}
+
+.pagination-button-last {
+  background-color: #007bff;
+  font-weight: bold;
+}
+
+.pagination-dots {
+  padding: 8px 0;
+}
+
+.pagination-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pagination-go-to {
+  width: 60px;
+  padding: 5px;
+  text-align: center;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+/* Dispatch Details Styles */
+.dispatch-title {
+  margin-top: 30px;
+  margin-bottom: 15px;
+}
+
+.dispatch-months {
+  margin-left: 20px;
+  font-size: 16px;
+  color: #666;
+}
+
+/* Modal Styles */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0,0,0,0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background-color: white;
+  padding: 30px;
+  border-radius: 8px;
+  max-width: 500px;
+  width: 90%;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+
+.modal-title {
+  margin-top: 0;
+  color: #dc3545;
+}
+
+.modal-note {
+  color: #666;
+  font-size: 14px;
+  margin-top: 10px;
+}
+
+.modal-actions {
+  margin-top: 25px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.modal-button {
+  padding: 8px 16px;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.modal-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.modal-button-cancel {
+  background-color: #6c757d;
+}
+
+.modal-button-delete {
+  background-color: #dc3545;
+}
+
+/* Loading States */
+.loading-container {
+  text-align: center;
+  padding: 20px;
+}
+
+.exporting-container {
+  text-align: center;
+  padding: 10px;
+  color: #2196F3;
+}
+
+.no-data-container {
+  text-align: center;
+  padding: 20px;
+}
+
+/* View Button */
+.view-button {
+  padding: 5px 10px;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-right: 5px;
+}
+
+.view-button-active {
+  background-color: #6c757d;
+}
+
+.view-button-inactive {
+  background-color: #007bff;
+}
+
+/* Utility Classes */
+.flex {
+  display: flex;
+}
+
+.items-center {
+  align-items: center;
+}
+
+.gap-5 {
+  gap: 5px;
+}
+
+.gap-10 {
+  gap: 10px;
+}
+
+.ml-auto {
+  margin-left: auto;
+}

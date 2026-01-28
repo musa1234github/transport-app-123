@@ -1,4 +1,5 @@
-﻿import React, { useState, useEffect } from "react";
+﻿import { useOutletContext } from "react-router-dom";
+import React, { useState, useEffect } from "react";
 import * as XLSX from "xlsx";
 import {
   collection,
@@ -28,85 +29,87 @@ const safeNum = (v) => {
 /* ===== IMPROVED DATE PARSING (MULTIPLE FORMATS) ===== */
 const parseDate = (v) => {
   if (!v) return null;
-  
+
   // If it's already a Date object
   if (v instanceof Date) return v;
-  
+
   // If it's an Excel serial number
   if (typeof v === "number") {
     // Excel date (Windows) starts from Jan 1, 1900
     const excelEpoch = new Date(1899, 11, 30);
     const millisecondsPerDay = 24 * 60 * 60 * 1000;
     const date = new Date(excelEpoch.getTime() + (v - 1) * millisecondsPerDay);
-    
+
     // Adjust for Excel's leap year bug
     if (v > 60) {
       date.setTime(date.getTime() - 24 * 60 * 60 * 1000);
     }
-    
+
     return date;
   }
-  
+
   const str = String(v).trim();
-  
+
   // Try dd.mm.yyyy (with dots) - NEW FORMAT
   const dotMatch = str.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2,4})$/);
   if (dotMatch) {
     const day = parseInt(dotMatch[1], 10);
     const month = parseInt(dotMatch[2], 10) - 1;
     let year = parseInt(dotMatch[3], 10);
-    
+
     if (year < 100) {
       year = year >= 0 && year <= 50 ? year + 2000 : year + 1900;
     }
-    
+
     const date = new Date(year, month, day);
     if (!isNaN(date.getTime()) && date.getDate() === day && date.getMonth() === month) {
       return date;
     }
   }
-  
+
   // Try dd-mm-yyyy or dd/mm/yyyy
   const match = str.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{2,4})$/);
   if (match) {
     const day = parseInt(match[1], 10);
     const month = parseInt(match[2], 10) - 1;
     let year = parseInt(match[3], 10);
-    
+
     if (year < 100) {
       year = year >= 0 && year <= 50 ? year + 2000 : year + 1900;
     }
-    
+
     const date = new Date(year, month, day);
     if (!isNaN(date.getTime()) && date.getDate() === day && date.getMonth() === month) {
       return date;
     }
   }
-  
+
   // Try yyyy-mm-dd (ISO format)
   const isoMatch = str.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/);
   if (isoMatch) {
     const year = parseInt(isoMatch[1], 10);
     const month = parseInt(isoMatch[2], 10) - 1;
     const day = parseInt(isoMatch[3], 10);
-    
+
     const date = new Date(year, month, day);
     if (!isNaN(date.getTime()) && date.getDate() === day && date.getMonth() === month) {
       return date;
     }
   }
-  
+
   // Try standard Date parse as last resort
   const parsed = new Date(str);
   if (!isNaN(parsed.getTime())) {
     return parsed;
   }
-  
+
   console.warn(`Could not parse date: ${v}`);
   return null;
 };
 
-const PaymentUpload = ({ isAdmin }) => {
+const PaymentUpload = () => {
+  const { userRole } = useOutletContext();
+
   const [file, setFile] = useState(null);
   const [factory, setFactory] = useState("");
   const [loading, setLoading] = useState(false);
@@ -120,9 +123,14 @@ const PaymentUpload = ({ isAdmin }) => {
     }
   }, [factory]);
 
-  if (!isAdmin) {
+  /* ===== ACCESS CONTROL ===== */
+  const canUpload = userRole === "admin";
+
+  if (!canUpload) {
     return <h3 style={{ color: "red" }}>Access Denied</h3>;
   }
+
+
 
   const addLog = (message, type = "info") => {
     const timestamp = new Date().toLocaleTimeString();
@@ -137,10 +145,10 @@ const PaymentUpload = ({ isAdmin }) => {
         where("FactoryName", "==", factory),
         where("PaymentReceived", ">", 0)
       );
-      
+
       const querySnapshot = await getDocs(paymentsQuery);
       const paymentsData = [];
-      
+
       querySnapshot.forEach((doc) => {
         const data = doc.data();
         paymentsData.push({
@@ -149,7 +157,7 @@ const PaymentUpload = ({ isAdmin }) => {
           BillDate: data.BillDate?.toDate ? data.BillDate.toDate() : data.BillDate
         });
       });
-      
+
       setPayments(paymentsData);
       addLog(`Loaded ${paymentsData.length} payments for ${factory}`, "info");
     } catch (error) {
@@ -209,7 +217,7 @@ const PaymentUpload = ({ isAdmin }) => {
           const gst = safeNum(row[5]);
           const paymentReceived = safeNum(row[6]);
           const shortageStr = String(row[7] || "").trim();
-          
+
           // Clean shortage string (remove dashes)
           const shortageCleaned = shortageStr.replace(/[-â€“]/g, "").trim();
           const shortage = safeNum(shortageCleaned);
@@ -249,12 +257,12 @@ const PaymentUpload = ({ isAdmin }) => {
           );
 
           const billSnapshot = await getDocs(billQuery);
-          
+
           // Filter by factory client-side to avoid composite index error
-          const billDoc = billSnapshot.docs.find(doc => 
+          const billDoc = billSnapshot.docs.find(doc =>
             doc.data().FactoryName === factory
           );
-          
+
           if (!billDoc) {
             addLog(`Row ${i} skipped: Bill ${billNumber} not found in ${factory}`, "warning");
             skipped++;
@@ -265,16 +273,16 @@ const PaymentUpload = ({ isAdmin }) => {
 
           /* ===== FIND OR CREATE PAYMENT ===== */
           let paymentId = null;
-          
+
           if (!paymentMap.has(paymentNumber)) {
             // Check if payment already exists in database
             const paymentQuery = query(
               collection(db, "PaymentTable"),
               where("DocNumber", "==", paymentNumber)
             );
-            
+
             const paymentSnapshot = await getDocs(paymentQuery);
-            
+
             if (!paymentSnapshot.empty) {
               // Payment exists, use existing ID
               paymentId = paymentSnapshot.docs[0].id;
@@ -290,7 +298,7 @@ const PaymentUpload = ({ isAdmin }) => {
                   FactoryName: factory,
                   CreatedOn: serverTimestamp()
                 });
-                
+
                 paymentId = paymentRef.id;
                 paymentMap.set(paymentNumber, { id: paymentId, exists: false });
                 addLog(`Row ${i}: Created new payment ${paymentNumber}`, "success");
@@ -326,7 +334,7 @@ const PaymentUpload = ({ isAdmin }) => {
 
         setLoading(false);
         await loadPayments(); // Refresh payments list
-        
+
         const summary = `Upload completed:\nSuccess: ${success}\nSkipped: ${skipped}\nFailed: ${failed}`;
         addLog(summary, "info");
         alert(summary);
@@ -357,7 +365,7 @@ const PaymentUpload = ({ isAdmin }) => {
     const ws = XLSX.utils.aoa_to_sheet(sampleData);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "PaymentTemplate");
-    
+
     XLSX.writeFile(wb, `Payment_Upload_Template_${factory || 'Generic'}.xlsx`);
     addLog("Payment template downloaded", "info");
   };
@@ -375,10 +383,10 @@ const PaymentUpload = ({ isAdmin }) => {
     try {
       setLoading(true);
       addLog(`Starting deletion of ${selectedPayments.size} payments...`, "info");
-      
+
       let deletedCount = 0;
       let errorCount = 0;
-      
+
       for (const billId of selectedPayments) {
         try {
           // Reset payment fields in BillTable
@@ -391,7 +399,7 @@ const PaymentUpload = ({ isAdmin }) => {
             PaymentNumber: null,
             UpdatedAt: serverTimestamp()
           });
-          
+
           deletedCount++;
           addLog(`Reset payment for bill ID: ${billId}`, "success");
         } catch (error) {
@@ -399,10 +407,10 @@ const PaymentUpload = ({ isAdmin }) => {
           addLog(`Failed to reset bill ${billId}: ${error.message}`, "error");
         }
       }
-      
+
       setSelectedPayments(new Set());
       await loadPayments();
-      
+
       setLoading(false);
       const summary = `Deletion completed:\nReset: ${deletedCount}\nErrors: ${errorCount}`;
       addLog(summary, "info");
@@ -435,22 +443,22 @@ const PaymentUpload = ({ isAdmin }) => {
   return (
     <div style={{ maxWidth: 1200, margin: "30px auto", padding: "0 20px" }}>
       <h1 style={{ textAlign: "center", marginBottom: "30px" }}>Payments</h1>
-      
+
       {/* Factory Selection */}
       <div style={{ marginBottom: "25px", width: "200px" }}>
         <label style={{ display: "block", marginBottom: "5px", fontWeight: "bold" }}>
           Select Factory:
         </label>
-        <select 
-          value={factory} 
+        <select
+          value={factory}
           onChange={e => {
             setFactory(e.target.value);
             setSelectedPayments(new Set());
           }}
-          style={{ 
-            width: "100%", 
-            padding: "10px", 
-            borderRadius: "4px", 
+          style={{
+            width: "100%",
+            padding: "10px",
+            borderRadius: "4px",
             border: "1px solid #ced4da",
             fontSize: "16px"
           }}
@@ -463,10 +471,10 @@ const PaymentUpload = ({ isAdmin }) => {
       </div>
 
       {/* Upload Section */}
-      <div style={{ 
-        backgroundColor: "#f8f9fa", 
-        padding: "20px", 
-        borderRadius: "5px", 
+      <div style={{
+        backgroundColor: "#f8f9fa",
+        padding: "20px",
+        borderRadius: "5px",
         marginBottom: "30px",
         border: "1px solid #dee2e6"
       }}>
@@ -477,7 +485,7 @@ const PaymentUpload = ({ isAdmin }) => {
         <p style={{ margin: "10px 0", color: "#6c757d", fontSize: "14px" }}>
           <strong>Note:</strong> Date formats accepted: dd.mm.yyyy, dd-mm-yyyy, dd/mm/yyyy, yyyy-mm-dd
         </p>
-        
+
         <div style={{ marginBottom: "15px" }}>
           <label style={{ display: "block", marginBottom: "5px", fontWeight: "bold" }}>
             Select Excel File:
@@ -491,18 +499,18 @@ const PaymentUpload = ({ isAdmin }) => {
                 addLog(`Selected file: ${e.target.files[0].name}`, "info");
               }
             }}
-            style={{ 
-              width: "100%", 
-              padding: "10px", 
-              borderRadius: "4px", 
+            style={{
+              width: "100%",
+              padding: "10px",
+              borderRadius: "4px",
               border: "1px solid #ced4da"
             }}
           />
         </div>
 
         <div style={{ display: "flex", gap: "10px" }}>
-          <button 
-            onClick={handleUpload} 
+          <button
+            onClick={handleUpload}
             disabled={loading || !file || !factory}
             style={{
               padding: "10px 20px",
@@ -517,8 +525,8 @@ const PaymentUpload = ({ isAdmin }) => {
           >
             {loading ? "Uploading..." : "Upload Payments"}
           </button>
-          
-          <button 
+
+          <button
             onClick={downloadTemplate}
             style={{
               padding: "10px 20px",
@@ -538,36 +546,36 @@ const PaymentUpload = ({ isAdmin }) => {
 
       {/* Upload Log */}
       {uploadLog.length > 0 && (
-        <div style={{ 
-          marginBottom: "30px", 
-          border: "1px solid #dee2e6", 
+        <div style={{
+          marginBottom: "30px",
+          border: "1px solid #dee2e6",
           borderRadius: "5px",
           overflow: "hidden"
         }}>
-          <div style={{ 
-            backgroundColor: "#343a40", 
-            color: "white", 
+          <div style={{
+            backgroundColor: "#343a40",
+            color: "white",
             padding: "10px 15px",
             fontWeight: "bold"
           }}>
             Upload Log
           </div>
-          <div style={{ 
-            maxHeight: "200px", 
-            overflowY: "auto", 
+          <div style={{
+            maxHeight: "200px",
+            overflowY: "auto",
             backgroundColor: "#f8f9fa"
           }}>
             {uploadLog.map((log, index) => (
-              <div 
-                key={index} 
+              <div
+                key={index}
                 style={{
                   padding: "8px 15px",
                   borderBottom: "1px solid #dee2e6",
                   fontFamily: "monospace",
                   fontSize: "12px",
-                  color: log.type === "error" ? "#dc3545" : 
-                         log.type === "warning" ? "#ffc107" : 
-                         log.type === "success" ? "#28a745" : "#6c757d"
+                  color: log.type === "error" ? "#dc3545" :
+                    log.type === "warning" ? "#ffc107" :
+                      log.type === "success" ? "#28a745" : "#6c757d"
                 }}
               >
                 <span style={{ color: "#6c757d", marginRight: "10px" }}>
@@ -586,7 +594,7 @@ const PaymentUpload = ({ isAdmin }) => {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px" }}>
             <h4>Payment Records for {factory}</h4>
             {selectedPayments.size > 0 && (
-              <button 
+              <button
                 onClick={handleDeleteSelected}
                 disabled={loading}
                 style={{
@@ -605,16 +613,16 @@ const PaymentUpload = ({ isAdmin }) => {
           </div>
 
           <div style={{ overflowX: "auto" }}>
-            <table style={{ 
-              width: "100%", 
+            <table style={{
+              width: "100%",
               borderCollapse: "collapse",
               border: "1px solid #dee2e6"
             }}>
               <thead>
                 <tr style={{ backgroundColor: "#343a40", color: "white" }}>
                   <th style={{ padding: "12px", textAlign: "left", border: "1px solid #dee2e6" }}>
-                    <input 
-                      type="checkbox" 
+                    <input
+                      type="checkbox"
                       id="selectAll"
                       checked={payments.length > 0 && selectedPayments.size === payments.length}
                       onChange={toggleSelectAll}
@@ -632,7 +640,7 @@ const PaymentUpload = ({ isAdmin }) => {
                 {payments.map((payment) => (
                   <tr key={payment.id} style={{ borderBottom: "1px solid #dee2e6" }}>
                     <td style={{ padding: "12px", border: "1px solid #dee2e6" }}>
-                      <input 
+                      <input
                         type="checkbox"
                         checked={selectedPayments.has(payment.id)}
                         onChange={() => toggleSelectOne(payment.id)}

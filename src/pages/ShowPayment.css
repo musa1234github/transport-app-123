@@ -1,0 +1,285 @@
+/* ShowPayment.css */
+
+/* Container Styles */
+.container {
+  padding: 20px;
+}
+
+/* Filter Bar Styles */
+.filter-bar {
+  margin-bottom: 15px;
+  padding: 15px;
+  background-color: #f5f5f5;
+  border-radius: 5px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.filter-input {
+  width: 250px;
+  padding: 8px;
+}
+
+.filter-select {
+  padding: 8px;
+  width: 200px;
+}
+
+.date-filter-container {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.filter-button {
+  padding: 8px 16px;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 1;
+}
+
+.filter-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.apply-button {
+  background-color: #4CAF50;
+}
+
+.clear-button {
+  background-color: #f44336;
+}
+
+/* Export Button Styles */
+.export-button-group {
+  display: flex;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.export-button {
+  padding: 8px 16px;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  opacity: 1;
+}
+
+.export-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.export-all-button {
+  background-color: #2196F3;
+}
+
+.export-selected-button {
+  background-color: #FF9800;
+}
+
+/* Records Per Page Selector */
+.records-selector {
+  margin-bottom: 15px;
+  padding: 10px;
+  background-color: #f8f9fa;
+  border-radius: 5px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border: 1px solid #dee2e6;
+}
+
+.records-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Selection Controls */
+.selection-controls {
+  margin-bottom: 15px;
+  padding: 10px;
+  border-radius: 5px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.selection-controls-with-selection {
+  background-color: #fff3cd;
+  border: 1px solid #ffc107;
+}
+
+.selection-controls-without-selection {
+  background-color: #e9ecef;
+  border: 1px solid #dee2e6;
+}
+
+/* Table Styles */
+.table-container {
+  overflow-x: auto;
+}
+
+.data-table {
+  border: 1px solid #ddd;
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table-header {
+  background-color: #f2f2f2;
+  padding: 10px;
+  text-align: left;
+}
+
+.table-cell {
+  padding: 8px;
+  text-align: center;
+  border: 1px solid #ddd;
+}
+
+.amount-cell {
+  text-align: right;
+}
+
+.selected-row {
+  background-color: #f8d7da;
+}
+
+/* Pagination Styles */
+.pagination-container {
+  margin-top: 20px;
+  padding: 15px;
+  background-color: #f8f9fa;
+  border-radius: 5px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border: 1px solid #dee2e6;
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.page-button {
+  padding: 8px 12px;
+  background-color: #6c757d;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.current-page-button {
+  background-color: #495057;
+  font-weight: bold;
+}
+
+.disabled-page-button {
+  background-color: #e9ecef;
+  color: #6c757d;
+  cursor: not-allowed;
+}
+
+.go-to-page-input {
+  padding: 8px;
+  width: 60px;
+  text-align: center;
+  border-radius: 4px;
+  border: 1px solid #ccc;
+}
+
+/* Modal Styles */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0,0,0,0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background-color: white;
+  padding: 30px;
+  border-radius: 8px;
+  max-width: 500px;
+  width: 90%;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+
+.modal-buttons {
+  margin-top: 25px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.modal-button {
+  padding: 8px 16px;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.cancel-button {
+  background-color: #6c757d;
+}
+
+.delete-button {
+  background-color: #dc3545;
+  font-weight: bold;
+}
+
+/* Status Messages */
+.loading-message {
+  text-align: center;
+  padding: 20px;
+}
+
+.exporting-message {
+  text-align: center;
+  padding: 10px;
+  color: #2196F3;
+}
+
+.no-data-message {
+  text-align: center;
+  padding: 20px;
+}
+
+/* Helper Classes */
+.warning-box {
+  background-color: #fff3cd;
+  padding: 10px;
+  border-radius: 4px;
+  border: 1px solid #ffeaa7;
+  margin-bottom: 20px;
+}
+
+.currency-positive {
+  color: #28a745;
+  font-weight: bold;
+}
+
+.currency-negative {
+  color: #dc3545;
+}

@@ -13,6 +13,7 @@ import {
   serverTimestamp
 } from "firebase/firestore";
 import * as XLSX from 'xlsx';
+import "./ShowBill.css"; // Import CSS file
 
 /* ===== SAFE DATE ===== */
 const toDate = (v) => {
@@ -35,10 +36,8 @@ const formatDate = (date) => {
   if (!date) return "";
   
   try {
-    // Ensure it's a valid date
     if (isNaN(date.getTime())) return "";
     
-    // Format as dd-MMM-yyyy (e.g., 05-Jan-2026) to match Excel format
     const day = String(date.getDate()).padStart(2, "0");
     const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", 
                         "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -72,7 +71,6 @@ const formatDateForSort = (date) => {
 const getDispatchMonth = (dispatchRows) => {
   if (!dispatchRows || dispatchRows.length === 0) return "";
   
-  // Get unique months from all dispatch dates
   const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", 
                       "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   
@@ -80,10 +78,9 @@ const getDispatchMonth = (dispatchRows) => {
   
   dispatchRows.forEach(dispatch => {
     if (dispatch.DispatchDate) {
-      // Parse the formatted date (dd-MMM-yyyy)
       const parts = dispatch.DispatchDate.split('-');
       if (parts.length === 3) {
-        const month = parts[1]; // This should be the 3-letter month
+        const month = parts[1];
         if (monthNames.includes(month)) {
           monthsSet.add(month);
         }
@@ -91,7 +88,6 @@ const getDispatchMonth = (dispatchRows) => {
     }
   });
   
-  // If multiple months, show them comma-separated
   const monthsArray = Array.from(monthsSet).sort((a, b) => 
     monthNames.indexOf(a) - monthNames.indexOf(b)
   );
@@ -99,7 +95,7 @@ const getDispatchMonth = (dispatchRows) => {
   return monthsArray.join(', ');
 };
 
-const ShowBill = () => {
+const ShowBill = ({ userRole }) => {
   const [rows, setRows] = useState([]);
   const [dispatchRows, setDispatchRows] = useState({});
   const [selectedBillId, setSelectedBillId] = useState(null);
@@ -109,6 +105,10 @@ const ShowBill = () => {
   const [selectAll, setSelectAll] = useState(false);
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [dataLoaded, setDataLoaded] = useState(false); // Track if data has been loaded
+
+  // Check if user is admin
+  const isAdmin = userRole === "admin";
 
   /* ===== PAGINATION STATES ===== */
   const [currentPage, setCurrentPage] = useState(1);
@@ -190,14 +190,14 @@ const ShowBill = () => {
         if (!reportMap[r.BillID]) {
           reportMap[r.BillID] = {
             BillID: r.BillID,
-            "Dispatch Month": "", // Will be calculated later
+            "Dispatch Month": "",
             "Factory Name": bill.FactoryName || "",
             "Bill Num": bill.BillNum || "",
             "LR Quantity": 0,
             "Bill Quantity": 0,
             "Taxable Amount": 0,
             "Final Price": 0,
-            FINAL_RAW: 0, // For internal calculation
+            FINAL_RAW: 0,
             "Actual Amount": 0,
             "TDS": 0,
             "GST": 0,
@@ -268,6 +268,8 @@ const ShowBill = () => {
 
       setRows(result);
       setDispatchRows(dispatchMap);
+      setDataLoaded(true); // Mark data as loaded
+      
       // Reset selected bills and pagination when data reloads
       setSelectedBills([]);
       setSelectAll(false);
@@ -281,11 +283,16 @@ const ShowBill = () => {
 
   /* ===== LOAD WHEN APPLIED FILTERS CHANGE ===== */
   useEffect(() => {
-    load();
+    // Only load data if appliedFilters have changed and data hasn't been loaded yet
+    // OR if we're applying new filters
+    if (Object.values(appliedFilters).some(filter => filter !== "")) {
+      load();
+    }
   }, [appliedFilters]);
 
   /* ===== APPLY FILTERS FUNCTION ===== */
   const applyFilters = () => {
+    // Mark that we want to load data
     setAppliedFilters({
       fromDate: fromDate,
       toDate: toDateFilter,
@@ -306,6 +313,11 @@ const ShowBill = () => {
       searchBill: "",
       factoryFilter: ""
     });
+    // Clear data when filters are cleared
+    setRows([]);
+    setDispatchRows({});
+    setDataLoaded(false);
+    setSelectedBills([]);
   };
 
   /* ===== FACTORY LIST ===== */
@@ -424,9 +436,14 @@ const ShowBill = () => {
 
   /* ================= EXPORT TO EXCEL ================= */
   const exportToExcel = () => {
+    if (!dataLoaded || filteredRows.length === 0) {
+      alert("No data to export! Please apply filters first.");
+      return;
+    }
+
     setExporting(true);
     try {
-      // Prepare data for export - in exact Excel format sequence
+      // Prepare data for export
       const exportData = filteredRows.map(row => {
         return {
           "Dispatch Month": row["Dispatch Month"] || "",
@@ -453,24 +470,15 @@ const ShowBill = () => {
       // Create worksheet
       const ws = XLSX.utils.json_to_sheet(exportData);
       
-      // Set column widths to match Excel format
+      // Set column widths
       const wscols = [
-        { wch: 15 }, // Dispatch Month
-        { wch: 20 }, // Factory Name
-        { wch: 20 }, // Bill Num
-        { wch: 12 }, // LR Quantity
-        { wch: 15 }, // Bill Quantity
-        { wch: 15 }, // Taxable Amount
-        { wch: 15 }, // Final Price
-        { wch: 15 }, // Actual Amount
-        { wch: 12 }, // TDS
-        { wch: 12 }, // GST
-        { wch: 12 }, // Bill Date
-        { wch: 20 }  // Bill Type
+        { wch: 15 }, { wch: 20 }, { wch: 20 }, { wch: 12 },
+        { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 15 },
+        { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 20 }
       ];
       ws['!cols'] = wscols;
 
-      // Add some styling (bold headers)
+      // Add styling
       const range = XLSX.utils.decode_range(ws['!ref']);
       for (let C = range.s.c; C <= range.e.c; ++C) {
         const address = XLSX.utils.encode_col(C) + "1";
@@ -481,7 +489,7 @@ const ShowBill = () => {
         };
       }
 
-      // Format number columns with 2 decimal places
+      // Format number columns
       const numberColumns = ["LR Quantity", "Bill Quantity", "Taxable Amount", "Final Price", 
                            "Actual Amount", "TDS", "GST"];
       const colIndexMap = {};
@@ -530,11 +538,9 @@ const ShowBill = () => {
 
     setExporting(true);
     try {
-      // Filter rows for selected bills
       const allFilteredRows = filteredRows;
       const selectedRows = allFilteredRows.filter(row => selectedBills.includes(row.BillID));
       
-      // Prepare data for export - in exact Excel format sequence
       const exportData = selectedRows.map(row => {
         return {
           "Dispatch Month": row["Dispatch Month"] || "",
@@ -552,10 +558,8 @@ const ShowBill = () => {
         };
       });
 
-      // Create worksheet
       const ws = XLSX.utils.json_to_sheet(exportData);
       
-      // Set column widths
       const wscols = [
         { wch: 15 }, { wch: 20 }, { wch: 20 }, { wch: 12 },
         { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 15 },
@@ -563,7 +567,6 @@ const ShowBill = () => {
       ];
       ws['!cols'] = wscols;
 
-      // Add header styling
       const range = XLSX.utils.decode_range(ws['!ref']);
       for (let C = range.s.c; C <= range.e.c; ++C) {
         const address = XLSX.utils.encode_col(C) + "1";
@@ -574,15 +577,12 @@ const ShowBill = () => {
         };
       }
 
-      // Create workbook
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Selected Bills");
 
-      // Generate filename
       const dateStr = new Date().toISOString().split('T')[0];
       const fileName = `Selected_Bills_${selectedBills.length}_${dateStr}.xlsx`;
 
-      // Export file
       XLSX.writeFile(wb, fileName);
       
       alert(`Exported ${selectedBills.length} selected bills to ${fileName}`);
@@ -608,7 +608,6 @@ const ShowBill = () => {
     setDeleting(true);
     try {
       for (const billId of selectedBills) {
-        // Find all dispatch records linked to this bill
         const dispatchQuery = query(
           collection(db, "TblDispatch"),
           where("BillID", "==", billId)
@@ -616,7 +615,6 @@ const ShowBill = () => {
         
         const dispatchSnapshot = await getDocs(dispatchQuery);
         
-        // Remove BillID and BillNum from dispatch records
         for (const dispatchDoc of dispatchSnapshot.docs) {
           await updateDoc(doc(db, "TblDispatch", dispatchDoc.id), {
             BillID: "",
@@ -625,11 +623,9 @@ const ShowBill = () => {
           });
         }
         
-        // Delete the bill from BillTable
         await deleteDoc(doc(db, "BillTable", billId));
       }
 
-      // Reload data
       await load();
       alert(`Successfully deleted ${selectedBills.length} bill(s)`);
     } catch (error) {
@@ -642,27 +638,25 @@ const ShowBill = () => {
   };
 
   return (
-    <div style={{ padding: 20 }}>
-      <h2>Bill Report</h2>
+    <div className="bill-report-container">
+      <h2 className="bill-report-title">Bill Report</h2>
+
+      {/* Show initial state message */}
+      {!dataLoaded && rows.length === 0 && !loading && (
+        <div className="no-data-container">
+          <p>No data loaded. Please apply filters to load bills.</p>
+        </div>
+      )}
 
       {/* ===== FILTER BAR ===== */}
-      <div style={{ 
-        marginBottom: 15, 
-        padding: 15, 
-        backgroundColor: '#f5f5f5', 
-        borderRadius: 5,
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: 10,
-        alignItems: 'center'
-      }}>
+      <div className="filter-bar">
         <div>
           <input
             type="text"
             placeholder="Search factory, bill no, date, month"
             value={searchBill}
             onChange={e => setSearchBill(e.target.value)}
-            style={{ width: 250, padding: 8 }}
+            className="filter-input filter-input-search"
           />
         </div>
 
@@ -670,106 +664,68 @@ const ShowBill = () => {
           <select
             value={factoryFilter}
             onChange={e => setFactoryFilter(e.target.value)}
-            style={{ padding: 8, width: 200 }}
+            className="filter-select"
           >
             <option value="">Select Factory</option>
-            {factories.map(f => (
+            {dataLoaded && factories.map(f => (
               <option key={f} value={f}>{f}</option>
             ))}
           </select>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-          <label>From:</label>
+        <div className="flex items-center gap-5">
+          <label className="filter-label">From:</label>
           <input
             type="date"
             value={fromDate}
             onChange={e => setFromDate(e.target.value)}
-            style={{ padding: 8 }}
+            className="filter-input-date"
           />
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-          <label>To:</label>
+        <div className="flex items-center gap-5">
+          <label className="filter-label">To:</label>
           <input
             type="date"
             value={toDateFilter}
             onChange={e => setToDateFilter(e.target.value)}
-            style={{ padding: 8 }}
+            className="filter-input-date"
           />
         </div>
 
-        <div style={{ display: 'flex', gap: 10 }}>
+        <div className="filter-button-group">
           <button 
             onClick={applyFilters}
             disabled={loading}
-            style={{ 
-              padding: '8px 16px', 
-              backgroundColor: '#4CAF50', 
-              color: 'white', 
-              border: 'none', 
-              borderRadius: 4,
-              cursor: loading ? 'not-allowed' : 'pointer',
-              opacity: loading ? 0.7 : 1
-            }}
+            className="filter-button filter-button-apply"
           >
             {loading ? 'Loading...' : 'Apply Filters'}
           </button>
           <button 
             onClick={clearFilters}
             disabled={loading}
-            style={{ 
-              padding: '8px 16px', 
-              backgroundColor: '#f44336', 
-              color: 'white', 
-              border: 'none', 
-              borderRadius: 4,
-              cursor: loading ? 'not-allowed' : 'pointer',
-              opacity: loading ? 0.7 : 1
-            }}
+            className="filter-button filter-button-clear"
           >
             Clear Filters
           </button>
         </div>
 
         {/* ===== EXPORT BUTTONS ===== */}
-        <div style={{ display: 'flex', gap: 10, marginLeft: 'auto' }}>
+        <div className="export-button-group">
           <button 
             onClick={exportToExcel}
-            disabled={exporting || filteredRows.length === 0}
-            style={{ 
-              padding: '8px 16px', 
-              backgroundColor: '#2196F3', 
-              color: 'white', 
-              border: 'none', 
-              borderRadius: 4,
-              cursor: (exporting || filteredRows.length === 0) ? 'not-allowed' : 'pointer',
-              opacity: (exporting || filteredRows.length === 0) ? 0.7 : 1,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 5
-            }}
+            disabled={exporting || !dataLoaded || filteredRows.length === 0}
+            className="export-button export-button-all"
             title="Export all filtered bills to Excel"
           >
             {exporting ? 'Exporting...' : 'Export All to Excel'}
           </button>
           
-          {selectedBills.length > 0 && (
+          {isAdmin && selectedBills.length > 0 && (
             <button 
               onClick={exportSelectedToExcel}
               disabled={exporting}
-              style={{ 
-                padding: '8px 16px', 
-                backgroundColor: '#FF9800', 
-                color: 'white', 
-                border: 'none', 
-                borderRadius: 4,
-                cursor: exporting ? 'not-allowed' : 'pointer',
-                opacity: exporting ? 0.7 : 1,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 5
-              }}
+              className="export-button export-button-selected"
               title={`Export ${selectedBills.length} selected bills to Excel`}
             >
               {exporting ? 'Exporting...' : `Export Selected (${selectedBills.length})`}
@@ -779,7 +735,7 @@ const ShowBill = () => {
 
         {/* Applied filters indicator */}
         {(appliedFilters.fromDate || appliedFilters.toDate || appliedFilters.searchBill || appliedFilters.factoryFilter) && (
-          <div style={{ fontSize: 12, color: '#666', display: 'flex', gap: 10, width: '100%', marginTop: 10 }}>
+          <div className="applied-filters">
             {appliedFilters.fromDate || appliedFilters.toDate ? (
               <span>
                 Date: {appliedFilters.fromDate || 'Any'} to {appliedFilters.toDate || 'Any'}
@@ -795,435 +751,333 @@ const ShowBill = () => {
         )}
       </div>
 
-      {/* ===== RECORDS PER PAGE SELECTOR ===== */}
-      <div style={{ 
-        marginBottom: 15, 
-        padding: 10, 
-        backgroundColor: '#f8f9fa', 
-        borderRadius: 5,
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        border: '1px solid #dee2e6'
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontWeight: 'bold' }}>Records per page:</span>
-          <select 
-            value={recordsPerPage} 
-            onChange={handleRecordsPerPageChange}
-            style={{ padding: '5px 10px', borderRadius: 4, border: '1px solid #ccc' }}
-            disabled={loading}
-          >
-            <option value="10">10</option>
-            <option value="20">20</option>
-            <option value="50">50</option>
-            <option value="100">100</option>
-            <option value="200">200</option>
-          </select>
-          
-          <span style={{ marginLeft: 20, color: '#666' }}>
-            Showing {indexOfFirstRecord + 1} to {Math.min(indexOfLastRecord, totalRecords)} of {totalRecords} records
-          </span>
-        </div>
-        
-        {/* Total records count */}
-        <div style={{ fontWeight: 'bold', color: '#495057' }}>
-          Total Bills: {totalRecords}
-        </div>
-      </div>
+      {/* Show loading state */}
+      {loading && <div className="loading-container">Loading data...</div>}
+      {exporting && <div className="exporting-container">Exporting to Excel...</div>}
 
-      {/* ===== DELETE & EXPORT CONTROLS ===== */}
-      <div style={{ 
-        marginBottom: 15, 
-        padding: 10, 
-        backgroundColor: selectedBills.length > 0 ? '#fff3cd' : '#e9ecef',
-        borderRadius: 5,
-        border: selectedBills.length > 0 ? '1px solid #ffc107' : '1px solid #dee2e6',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center'
-      }}>
-        <div>
-          <span style={{ marginRight: 10 }}>
-            <input
-              type="checkbox"
-              checked={selectAll && displayRows.length > 0}
-              onChange={handleSelectAll}
-              disabled={displayRows.length === 0 || loading}
-              style={{ marginRight: 5 }}
-            />
-            Select All ({selectedBills.length} selected)
-          </span>
-          <span style={{ color: '#666', fontSize: '14px', marginLeft: '20px' }}>
-            Page Bills: {displayRows.length}
-          </span>
-        </div>
-        
-        <div style={{ display: 'flex', gap: 10 }}>
-          {selectedBills.length > 0 && (
-            <>
-              <button
-                onClick={exportSelectedToExcel}
-                disabled={exporting}
-                style={{
-                  padding: '8px 16px',
-                  backgroundColor: '#FF9800',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: 4,
-                  cursor: exporting ? 'not-allowed' : 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 5
-                }}
+      {/* Only show table controls and data if data is loaded */}
+      {dataLoaded && rows.length > 0 && (
+        <>
+          {/* ===== RECORDS PER PAGE SELECTOR ===== */}
+          <div className="pagination-controls">
+            <div className="records-selector">
+              <span className="records-selector-label">Records per page:</span>
+              <select 
+                value={recordsPerPage} 
+                onChange={handleRecordsPerPageChange}
+                className="records-selector-select"
+                disabled={loading}
               >
-                {exporting ? 'Exporting...' : `Export ${selectedBills.length} Selected`}
-              </button>
-              <button
-                onClick={deleteSelectedBills}
-                disabled={deleting}
-                style={{
-                  padding: '8px 16px',
-                  backgroundColor: '#dc3545',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: 4,
-                  cursor: deleting ? 'not-allowed' : 'pointer',
-                  fontWeight: 'bold'
-                }}
-              >
-                {deleting ? 'Deleting...' : `Delete Selected (${selectedBills.length})`}
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-
-      {loading && <div style={{ textAlign: 'center', padding: 20 }}>Loading data...</div>}
-      {exporting && <div style={{ textAlign: 'center', padding: 10, color: '#2196F3' }}>Exporting to Excel...</div>}
-
-      {/* ===== BILL TABLE ===== */}
-      <div style={{ overflowX: 'auto' }}>
-        <table border="1" width="100%" style={{ borderCollapse: 'collapse' }}>
-          <thead>
-            <tr style={{ backgroundColor: '#f2f2f2' }}>
-              <th style={{ padding: 10, textAlign: 'center', width: '40px' }}>
-                <input
-                  type="checkbox"
-                  checked={selectAll && displayRows.length > 0}
-                  onChange={handleSelectAll}
-                  disabled={displayRows.length === 0 || loading}
-                />
-              </th>
-              {/* UPDATED COLUMN SEQUENCE to match Excel file */}
-              <th style={{ padding: 10 }}>Dispatch Month</th>
-              <th style={{ padding: 10 }}>Factory Name</th>
-              <th style={{ padding: 10 }}>Bill Num</th>
-              <th style={{ padding: 10 }}>LR Quantity</th>
-              <th style={{ padding: 10 }}>Bill Quantity</th>
-              <th style={{ padding: 10 }}>Taxable Amount</th>
-              <th style={{ padding: 10 }}>Final Price</th>
-              <th style={{ padding: 10 }}>Actual Amount</th>
-              <th style={{ padding: 10 }}>TDS</th>
-              <th style={{ padding: 10 }}>GST</th>
-              <th style={{ padding: 10 }}>Bill Date</th>
-              <th style={{ padding: 10 }}>Bill Type</th>
-              <th style={{ padding: 10 }}>Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {!loading && displayRows.length > 0 ? (
-              displayRows.map((r, i) => (
-                <tr key={i} style={{ 
-                  textAlign: 'center',
-                  backgroundColor: selectedBills.includes(r.BillID) ? '#f8d7da' : 'inherit'
-                }}>
-                  <td style={{ padding: 8, textAlign: 'center' }}>
-                    <input
-                      type="checkbox"
-                      checked={selectedBills.includes(r.BillID)}
-                      onChange={() => handleSelectBill(r.BillID)}
-                      disabled={loading}
-                    />
-                  </td>
-                  {/* UPDATED COLUMN SEQUENCE to match Excel file */}
-                  <td style={{ padding: 8, fontWeight: r["Dispatch Month"] ? 'normal' : 'lighter' }}>
-                    {r["Dispatch Month"] || "N/A"}
-                  </td>
-                  <td style={{ padding: 8 }}>{r["Factory Name"]}</td>
-                  <td style={{ padding: 8 }}>{r["Bill Num"]}</td>
-                  <td style={{ padding: 8 }}>{r["LR Quantity"]}</td>
-                  <td style={{ padding: 8 }}>{r["Bill Quantity"]}</td>
-                  <td style={{ padding: 8 }}>{r["Taxable Amount"]}</td>
-                  <td style={{ padding: 8 }}>{r["Final Price"]}</td>
-                  <td style={{ padding: 8 }}>{r["Actual Amount"]}</td>
-                  <td style={{ padding: 8 }}>{r["TDS"]}</td>
-                  <td style={{ padding: 8 }}>{r["GST"]}</td>
-                  <td style={{ padding: 8 }}>{r["Bill Date"]}</td>
-                  <td style={{ padding: 8 }}>{r["Bill Type"]}</td>
-                  <td style={{ padding: 8 }}>
-                    <button
-                      onClick={() =>
-                        setSelectedBillId(
-                          selectedBillId === r.BillID ? null : r.BillID
-                        )
-                      }
-                      style={{
-                        padding: '5px 10px',
-                        backgroundColor: selectedBillId === r.BillID ? '#6c757d' : '#007bff',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: 4,
-                        cursor: 'pointer',
-                        marginRight: '5px'
-                      }}
-                    >
-                      {selectedBillId === r.BillID ? "Hide" : "View"}
-                    </button>
-                  </td>
-                </tr>
-              ))
-            ) : !loading && (
-              <tr>
-                <td colSpan="15" style={{ textAlign: 'center', padding: 20 }}>
-                  No bills found. Try adjusting your filters.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {/* ===== PAGINATION CONTROLS ===== */}
-      {!loading && totalRecords > 0 && (
-        <div style={{ 
-          marginTop: 20, 
-          padding: 15, 
-          backgroundColor: '#f8f9fa', 
-          borderRadius: 5,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          border: '1px solid #dee2e6'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-            <span style={{ fontWeight: 'bold', marginRight: 10 }}>Page {currentPage} of {totalPages}</span>
-            
-            {/* First and Previous buttons */}
-            <button
-              onClick={() => handlePageChange(1)}
-              disabled={currentPage === 1}
-              style={{
-                padding: '8px 12px',
-                backgroundColor: currentPage === 1 ? '#e9ecef' : '#007bff',
-                color: currentPage === 1 ? '#6c757d' : 'white',
-                border: 'none',
-                borderRadius: 4,
-                cursor: currentPage === 1 ? 'not-allowed' : 'pointer',
-                fontWeight: 'bold'
-              }}
-              title="First Page"
-            >
-              Â«Â«
-            </button>
-            
-            <button
-              onClick={() => handlePageChange(currentPage - 1)}
-              disabled={currentPage === 1}
-              style={{
-                padding: '8px 12px',
-                backgroundColor: currentPage === 1 ? '#e9ecef' : '#007bff',
-                color: currentPage === 1 ? '#6c757d' : 'white',
-                border: 'none',
-                borderRadius: 4,
-                cursor: currentPage === 1 ? 'not-allowed' : 'pointer'
-              }}
-              title="Previous Page"
-            >
-              Â«
-            </button>
-            
-            {/* Page number buttons */}
-            <div style={{ display: 'flex', gap: 5 }}>
-              {/* Show first page if not in first 3 pages */}
-              {currentPage > 3 && (
-                <>
-                  <button
-                    onClick={() => handlePageChange(1)}
-                    style={{
-                      padding: '8px 12px',
-                      backgroundColor: '#6c757d',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: 4,
-                      cursor: 'pointer'
-                    }}
-                  >
-                    1
-                  </button>
-                  {currentPage > 4 && <span style={{ padding: '8px 0' }}>...</span>}
-                </>
-              )}
+                <option value="10">10</option>
+                <option value="20">20</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+                <option value="200">200</option>
+              </select>
               
-              {/* Show pages around current page */}
-              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                let pageNum;
-                if (totalPages <= 5) {
-                  pageNum = i + 1;
-                } else if (currentPage <= 3) {
-                  pageNum = i + 1;
-                } else if (currentPage >= totalPages - 2) {
-                  pageNum = totalPages - 4 + i;
-                } else {
-                  pageNum = currentPage - 2 + i;
-                }
-                
-                if (pageNum < 1 || pageNum > totalPages) return null;
-                
-                return (
-                  <button
-                    key={pageNum}
-                    onClick={() => handlePageChange(pageNum)}
-                    style={{
-                      padding: '8px 12px',
-                      backgroundColor: currentPage === pageNum ? '#495057' : '#6c757d',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: 4,
-                      cursor: 'pointer',
-                      fontWeight: currentPage === pageNum ? 'bold' : 'normal'
-                    }}
-                  >
-                    {pageNum}
-                  </button>
-                );
-              })}
-              
-              {/* Show last page if not in last 3 pages */}
-              {currentPage < totalPages - 2 && (
-                <>
-                  {currentPage < totalPages - 3 && <span style={{ padding: '8px 0' }}>...</span>}
-                  <button
-                    onClick={() => handlePageChange(totalPages)}
-                    style={{
-                      padding: '8px 12px',
-                      backgroundColor: '#6c757d',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: 4,
-                      cursor: 'pointer'
-                    }}
-                  >
-                    {totalPages}
-                  </button>
-                </>
-              )}
+              <span className="records-info">
+                Showing {indexOfFirstRecord + 1} to {Math.min(indexOfLastRecord, totalRecords)} of {totalRecords} records
+              </span>
             </div>
             
-            {/* Next and Last buttons */}
-            <button
-              onClick={() => handlePageChange(currentPage + 1)}
-              disabled={currentPage === totalPages}
-              style={{
-                padding: '8px 12px',
-                backgroundColor: currentPage === totalPages ? '#e9ecef' : '#007bff',
-                color: currentPage === totalPages ? '#6c757d' : 'white',
-                border: 'none',
-                borderRadius: 4,
-                cursor: currentPage === totalPages ? 'not-allowed' : 'pointer'
-              }}
-              title="Next Page"
-            >
-              Â»
-            </button>
-            
-            <button
-              onClick={() => handlePageChange(totalPages)}
-              disabled={currentPage === totalPages}
-              style={{
-                padding: '8px 12px',
-                backgroundColor: currentPage === totalPages ? '#e9ecef' : '#007bff',
-                color: currentPage === totalPages ? '#6c757d' : 'white',
-                border: 'none',
-                borderRadius: 4,
-                cursor: currentPage === totalPages ? 'not-allowed' : 'pointer',
-                fontWeight: 'bold'
-              }}
-              title="Last Page"
-            >
-              Â»Â»
-            </button>
+            {/* Total records count */}
+            <div className="total-records">
+              Total Bills: {totalRecords}
+            </div>
           </div>
-          
-          {/* Go to page input */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span>Go to page:</span>
-            <input
-              type="number"
-              min="1"
-              max={totalPages}
-              value={currentPage}
-              onChange={(e) => {
-                const page = parseInt(e.target.value);
-                if (page >= 1 && page <= totalPages) {
-                  handlePageChange(page);
-                }
-              }}
-              onBlur={(e) => {
-                const page = parseInt(e.target.value);
-                if (!page || page < 1 || page > totalPages) {
-                  e.target.value = currentPage;
-                }
-              }}
-              style={{
-                width: '60px',
-                padding: '5px',
-                textAlign: 'center',
-                border: '1px solid #ccc',
-                borderRadius: 4
-              }}
-            />
-            <span>of {totalPages}</span>
+
+          {/* ===== DELETE & EXPORT CONTROLS (Only for Admin) ===== */}
+          {isAdmin && (
+            <div className={`selection-controls ${selectedBills.length > 0 ? 'selection-controls-with-selection' : 'selection-controls-without-selection'}`}>
+              <div className="selection-info">
+                <span>
+                  <input
+                    type="checkbox"
+                    checked={selectAll && displayRows.length > 0}
+                    onChange={handleSelectAll}
+                    disabled={displayRows.length === 0 || loading}
+                    className="selection-checkbox"
+                  />
+                  Select All ({selectedBills.length} selected)
+                </span>
+                <span className="page-bills-info">
+                  Page Bills: {displayRows.length}
+                </span>
+              </div>
+              
+              <div className="selection-actions">
+                {selectedBills.length > 0 && (
+                  <>
+                    <button
+                      onClick={exportSelectedToExcel}
+                      disabled={exporting}
+                      className="export-button export-button-selected"
+                    >
+                      {exporting ? 'Exporting...' : `Export ${selectedBills.length} Selected`}
+                    </button>
+                    <button
+                      onClick={deleteSelectedBills}
+                      disabled={deleting}
+                      className="delete-button"
+                    >
+                      {deleting ? 'Deleting...' : `Delete Selected (${selectedBills.length})`}
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ===== BILL TABLE ===== */}
+          <div className="table-container">
+            <table border="1" className="bill-table">
+              <thead>
+                <tr>
+                  {/* Only show checkbox column for admin */}
+                  {isAdmin && (
+                    <th className="checkbox-column">
+                      <input
+                        type="checkbox"
+                        checked={selectAll && displayRows.length > 0}
+                        onChange={handleSelectAll}
+                        disabled={displayRows.length === 0 || loading}
+                      />
+                    </th>
+                  )}
+                  <th>Dispatch Month</th>
+                  <th>Factory Name</th>
+                  <th>Bill Num</th>
+                  <th>LR Quantity</th>
+                  <th>Bill Quantity</th>
+                  <th>Taxable Amount</th>
+                  <th>Final Price</th>
+                  <th>Actual Amount</th>
+                  <th>TDS</th>
+                  <th>GST</th>
+                  <th>Bill Date</th>
+                  <th>Bill Type</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {displayRows.length > 0 ? (
+                  displayRows.map((r, i) => (
+                    <tr key={i} className={isAdmin && selectedBills.includes(r.BillID) ? 'selected-row' : ''}>
+                      {/* Only show checkbox for admin */}
+                      {isAdmin && (
+                        <td className="checkbox-column">
+                          <input
+                            type="checkbox"
+                            checked={selectedBills.includes(r.BillID)}
+                            onChange={() => handleSelectBill(r.BillID)}
+                            disabled={loading}
+                          />
+                        </td>
+                      )}
+                      <td style={{ fontWeight: r["Dispatch Month"] ? 'normal' : 'lighter' }}>
+                        {r["Dispatch Month"] || "N/A"}
+                      </td>
+                      <td>{r["Factory Name"]}</td>
+                      <td>{r["Bill Num"]}</td>
+                      <td>{r["LR Quantity"]}</td>
+                      <td>{r["Bill Quantity"]}</td>
+                      <td>{r["Taxable Amount"]}</td>
+                      <td>{r["Final Price"]}</td>
+                      <td>{r["Actual Amount"]}</td>
+                      <td>{r["TDS"]}</td>
+                      <td>{r["GST"]}</td>
+                      <td>{r["Bill Date"]}</td>
+                      <td>{r["Bill Type"]}</td>
+                      <td>
+                        <button
+                          onClick={() =>
+                            setSelectedBillId(
+                              selectedBillId === r.BillID ? null : r.BillID
+                            )
+                          }
+                          className={`view-button ${selectedBillId === r.BillID ? 'view-button-active' : 'view-button-inactive'}`}
+                        >
+                          {selectedBillId === r.BillID ? "Hide" : "View"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={isAdmin ? "15" : "14"} className="no-data-container">
+                      No bills found with current filters.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
-        </div>
+
+          {/* ===== PAGINATION CONTROLS ===== */}
+          {totalRecords > 0 && (
+            <div className="pagination">
+              <div className="pagination-left">
+                <span className="pagination-info">Page {currentPage} of {totalPages}</span>
+                
+                {/* First and Previous buttons */}
+                <button
+                  onClick={() => handlePageChange(1)}
+                  disabled={currentPage === 1}
+                  className="pagination-button pagination-button-first"
+                  title="First Page"
+                >
+                  ««
+                </button>
+                
+                <button
+                  onClick={() => handlePageChange(currentPage - 1)}
+                  disabled={currentPage === 1}
+                  className="pagination-button pagination-button-prev"
+                  title="Previous Page"
+                >
+                  «
+                </button>
+                
+                {/* Page number buttons */}
+                <div className="flex gap-5">
+                  {/* Show first page if not in first 3 pages */}
+                  {currentPage > 3 && (
+                    <>
+                      <button
+                        onClick={() => handlePageChange(1)}
+                        className="pagination-button pagination-button-number"
+                      >
+                        1
+                      </button>
+                      {currentPage > 4 && <span className="pagination-dots">...</span>}
+                    </>
+                  )}
+                  
+                  {/* Show pages around current page */}
+                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                    let pageNum;
+                    if (totalPages <= 5) {
+                      pageNum = i + 1;
+                    } else if (currentPage <= 3) {
+                      pageNum = i + 1;
+                    } else if (currentPage >= totalPages - 2) {
+                      pageNum = totalPages - 4 + i;
+                    } else {
+                      pageNum = currentPage - 2 + i;
+                    }
+                    
+                    if (pageNum < 1 || pageNum > totalPages) return null;
+                    
+                    return (
+                      <button
+                        key={pageNum}
+                        onClick={() => handlePageChange(pageNum)}
+                        className={`pagination-button ${currentPage === pageNum ? 'pagination-button-current' : 'pagination-button-number'}`}
+                      >
+                        {pageNum}
+                      </button>
+                    );
+                  })}
+                  
+                  {/* Show last page if not in last 3 pages */}
+                  {currentPage < totalPages - 2 && (
+                    <>
+                      {currentPage < totalPages - 3 && <span className="pagination-dots">...</span>}
+                      <button
+                        onClick={() => handlePageChange(totalPages)}
+                        className="pagination-button pagination-button-number"
+                      >
+                        {totalPages}
+                      </button>
+                    </>
+                  )}
+                </div>
+                
+                {/* Next and Last buttons */}
+                <button
+                  onClick={() => handlePageChange(currentPage + 1)}
+                  disabled={currentPage === totalPages}
+                  className="pagination-button pagination-button-next"
+                  title="Next Page"
+                >
+                  »
+                </button>
+                
+                <button
+                  onClick={() => handlePageChange(totalPages)}
+                  disabled={currentPage === totalPages}
+                  className="pagination-button pagination-button-last"
+                  title="Last Page"
+                >
+                  »»
+                </button>
+              </div>
+              
+              {/* Go to page input */}
+              <div className="pagination-right">
+                <span>Go to page:</span>
+                <input
+                  type="number"
+                  min="1"
+                  max={totalPages}
+                  value={currentPage}
+                  onChange={(e) => {
+                    const page = parseInt(e.target.value);
+                    if (page >= 1 && page <= totalPages) {
+                      handlePageChange(page);
+                    }
+                  }}
+                  onBlur={(e) => {
+                    const page = parseInt(e.target.value);
+                    if (!page || page < 1 || page > totalPages) {
+                      e.target.value = currentPage;
+                    }
+                  }}
+                  className="pagination-go-to"
+                />
+                <span>of {totalPages}</span>
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       {/* ===== DISPATCH DETAILS ===== */}
       {selectedBillId && dispatchRows[selectedBillId] && (
         <>
-          <h3 style={{ marginTop: 30, marginBottom: 15 }}>
+          <h3 className="dispatch-title">
             Dispatch Details for Bill: {selectedBillId}
             {rows.find(r => r.BillID === selectedBillId)?.["Dispatch Month"] && (
-              <span style={{ marginLeft: 20, fontSize: '16px', color: '#666' }}>
+              <span className="dispatch-months">
                 Dispatch Month(s): {rows.find(r => r.BillID === selectedBillId)?.["Dispatch Month"]}
               </span>
             )}
           </h3>
-          <div style={{ overflowX: 'auto' }}>
-            <table border="1" width="100%" style={{ borderCollapse: 'collapse' }}>
+          <div className="table-container">
+            <table border="1" className="bill-table">
               <thead>
-                <tr style={{ backgroundColor: '#f2f2f2' }}>
-                  <th style={{ padding: 10 }}>Challan No</th>
-                  <th style={{ padding: 10 }}>Dispatch Date</th>
-                  <th style={{ padding: 10 }}>Vehicle No</th>
-                  <th style={{ padding: 10 }}>Quantity</th>
-                  <th style={{ padding: 10 }}>Unit Price</th>
-                  <th style={{ padding: 10 }}>Final Price</th>
-                  <th style={{ padding: 10 }}>LR No</th>
-                  <th style={{ padding: 10 }}>Delivery No</th>
+                <tr>
+                  <th>Challan No</th>
+                  <th>Dispatch Date</th>
+                  <th>Vehicle No</th>
+                  <th>Quantity</th>
+                  <th>Unit Price</th>
+                  <th>Final Price</th>
+                  <th>LR No</th>
+                  <th>Delivery No</th>
                 </tr>
               </thead>
               <tbody>
                 {getSortedDispatchRows(selectedBillId).map((d, i) => (
-                  <tr key={i} style={{ textAlign: 'center' }}>
-                    <td style={{ padding: 8 }}>{d.ChallanNo}</td>
-                    <td style={{ padding: 8 }}>{d.DispatchDate}</td>
-                    <td style={{ padding: 8 }}>{d.VehicleNo}</td>
-                    <td style={{ padding: 8 }}>{d.Quantity.toFixed(2)}</td>
-                    <td style={{ padding: 8 }}>{d.UnitPrice.toFixed(2)}</td>
-                    <td style={{ padding: 8 }}>{d.FinalPrice.toFixed(2)}</td>
-                    <td style={{ padding: 8 }}>{d.LRNo}</td>
-                    <td style={{ padding: 8 }}>{d.DeliveryNum}</td>
+                  <tr key={i}>
+                    <td>{d.ChallanNo}</td>
+                    <td>{d.DispatchDate}</td>
+                    <td>{d.VehicleNo}</td>
+                    <td>{d.Quantity.toFixed(2)}</td>
+                    <td>{d.UnitPrice.toFixed(2)}</td>
+                    <td>{d.FinalPrice.toFixed(2)}</td>
+                    <td>{d.LRNo}</td>
+                    <td>{d.DeliveryNum}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1232,67 +1086,30 @@ const ShowBill = () => {
         </>
       )}
 
-      {/* ===== CONFIRM DELETE MODAL ===== */}
-      {showConfirmDelete && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.5)',
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center',
-          zIndex: 1000
-        }}>
-          <div style={{
-            backgroundColor: 'white',
-            padding: '30px',
-            borderRadius: '8px',
-            maxWidth: '500px',
-            width: '90%',
-            boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
-          }}>
-            <h3 style={{ marginTop: 0, color: '#dc3545' }}>Confirm Delete</h3>
+      {/* ===== CONFIRM DELETE MODAL (Only for Admin) ===== */}
+      {isAdmin && showConfirmDelete && (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <h3 className="modal-title">Confirm Delete</h3>
             <p>
               Are you sure you want to delete <strong>{selectedBills.length}</strong> selected bill(s)?
             </p>
-            <p style={{ color: '#666', fontSize: '14px', marginTop: '10px' }}>
+            <p className="modal-note">
               <strong>Note:</strong> This will remove the bill from BillTable but keep the dispatch records (only removing their BillID link).
             </p>
             
-            <div style={{ 
-              marginTop: '25px', 
-              display: 'flex', 
-              justifyContent: 'flex-end',
-              gap: '10px'
-            }}>
+            <div className="modal-actions">
               <button
                 onClick={() => setShowConfirmDelete(false)}
                 disabled={deleting}
-                style={{
-                  padding: '8px 16px',
-                  backgroundColor: '#6c757d',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: 'pointer'
-                }}
+                className="modal-button modal-button-cancel"
               >
                 Cancel
               </button>
               <button
                 onClick={confirmDelete}
                 disabled={deleting}
-                style={{
-                  padding: '8px 16px',
-                  backgroundColor: '#dc3545',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: 'pointer'
-                }}
+                className="modal-button modal-button-delete"
               >
                 {deleting ? 'Deleting...' : 'Delete'}
               </button>

@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState } from "react";
+﻿import React, { useState, useEffect, useCallback } from "react";
 import { db } from "../firebaseConfig";
 import { 
   collection, 
@@ -11,6 +11,7 @@ import {
   doc 
 } from "firebase/firestore";
 import * as XLSX from "xlsx";
+import "./VehicleMaster.css";
 
 const VehicleMaster = () => {
   const [vehicleNo, setVehicleNo] = useState("");
@@ -19,6 +20,7 @@ const VehicleMaster = () => {
   const [excelFile, setExcelFile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [dataLoaded, setDataLoaded] = useState(false);
 
   // Edit states
   const [editingId, setEditingId] = useState(null);
@@ -36,15 +38,26 @@ const VehicleMaster = () => {
 
   const vehicleRef = collection(db, "VehicleMaster");
 
-  // Fetch vehicles from Firestore
-  const fetchVehicles = async () => {
-    const snapshot = await getDocs(vehicleRef);
-    const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    setVehicles(data);
-  };
+  // Fetch vehicles from Firestore - only when triggered
+  const fetchVehicles = useCallback(async () => {
+    try {
+      setLoading(true);
+      const snapshot = await getDocs(vehicleRef);
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setVehicles(data);
+      setDataLoaded(true);
+      setMessage(`✅ Loaded ${data.length} vehicles`);
+    } catch (error) {
+      console.error("Error fetching vehicles:", error);
+      setMessage("❌ Error loading vehicles");
+    } finally {
+      setLoading(false);
+    }
+  }, [vehicleRef]);
 
+  // Load data only when search filter is applied or manually triggered
   useEffect(() => {
-    fetchVehicles();
+    // Don't auto-load on component mount
   }, []);
 
   // Single entry
@@ -73,7 +86,10 @@ const VehicleMaster = () => {
     setVehicleNo("");
     setOwnerName("");
     setMessage("✅ Vehicle added successfully");
-    fetchVehicles();
+    // Refresh data if already loaded
+    if (dataLoaded) {
+      fetchVehicles();
+    }
   };
 
   // Start editing
@@ -112,7 +128,9 @@ const VehicleMaster = () => {
       
       setMessage("✅ Vehicle updated successfully");
       setEditingId(null);
-      fetchVehicles();
+      if (dataLoaded) {
+        fetchVehicles();
+      }
     } catch (error) {
       alert("Error updating vehicle");
       console.error(error);
@@ -134,7 +152,9 @@ const VehicleMaster = () => {
       const vehicleDoc = doc(db, "VehicleMaster", id);
       await deleteDoc(vehicleDoc);
       setMessage("✅ Vehicle deleted successfully");
-      fetchVehicles();
+      if (dataLoaded) {
+        fetchVehicles();
+      }
       // Remove from selected IDs if it's there
       setSelectedIds(selectedIds.filter(selectedId => selectedId !== id));
     } catch (error) {
@@ -181,7 +201,9 @@ const VehicleMaster = () => {
       setMessage(`✅ ${selectedIds.length} vehicle(s) deleted successfully`);
       setSelectedIds([]);
       setSelectAll(false);
-      fetchVehicles();
+      if (dataLoaded) {
+        fetchVehicles();
+      }
     } catch (error) {
       alert("Error deleting vehicles");
       console.error(error);
@@ -251,7 +273,9 @@ const VehicleMaster = () => {
           `✅ Excel upload completed. Added ${added} vehicles, Skipped ${skipped} duplicates.`
         );
 
-        fetchVehicles();
+        if (dataLoaded) {
+          fetchVehicles();
+        }
       } catch (err) {
         console.error("Excel upload error:", err);
         alert("Excel upload failed. Check console.");
@@ -266,7 +290,10 @@ const VehicleMaster = () => {
 
   // Export to Excel
   const handleExportExcel = () => {
-    if (!vehicles.length) return;
+    if (!vehicles.length) {
+      alert("No data to export");
+      return;
+    }
 
     const exportData = vehicles.map(v => ({
       "Vehicle No": v.VehicleNo,
@@ -280,12 +307,21 @@ const VehicleMaster = () => {
     XLSX.writeFile(wb, `VehicleMaster_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
+  // Handle search/filter application
+  const handleApplyFilter = () => {
+    if (!dataLoaded) {
+      fetchVehicles();
+    }
+  };
+
   // Filtered & Paginated vehicles
-  const filteredVehicles = vehicles.filter(
-    (v) =>
-      v.VehicleNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      v.OwnerName.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredVehicles = dataLoaded 
+    ? vehicles.filter(
+        (v) =>
+          v.VehicleNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          v.OwnerName.toLowerCase().includes(searchTerm.toLowerCase())
+      )
+    : [];
 
   const totalRecords = vehicles.length;
   const filteredCount = filteredVehicles.length;
@@ -296,445 +332,335 @@ const VehicleMaster = () => {
   const paginatedVehicles = filteredVehicles.slice(startIndex, endIndex);
 
   return (
-    <div style={{ padding: 20 }}>
-      <h2>🚚 Vehicle Master</h2>
+    <div className="vehicle-master-container">
+      <h2 className="page-title">🚚 Vehicle Master</h2>
 
-      {/* Dynamic Delete Button - Only shows when records are selected */}
+      {/* Dynamic Delete Button */}
       {selectedIds.length > 0 && (
-        <div style={{ 
-          marginBottom: 20, 
-          padding: 15, 
-          backgroundColor: "#fff3cd", 
-          borderRadius: 8,
-          border: "1px solid #ffeaa7",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          boxShadow: "0 2px 5px rgba(0,0,0,0.1)"
-        }}>
-          <div style={{ display: "flex", alignItems: "center" }}>
-            <div style={{
-              backgroundColor: "#ff6b6b",
-              color: "white",
-              borderRadius: "50%",
-              width: 30,
-              height: 30,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              marginRight: 10,
-              fontWeight: "bold"
-            }}>
-              {selectedIds.length}
+        <div className="delete-warning">
+          <div className="delete-warning-content">
+            <div className="selected-count">
+              <div className="count-badge">{selectedIds.length}</div>
+              <span className="count-text">
+                {selectedIds.length} vehicle(s) selected for deletion
+              </span>
             </div>
-            <span style={{ fontWeight: "bold", color: "#856404" }}>
-              {selectedIds.length} vehicle(s) selected for deletion
-            </span>
+            
+            <button 
+              onClick={handleDeleteMultiple}
+              className="btn-delete-multiple"
+            >
+              🗑️ Delete Selected ({selectedIds.length})
+            </button>
           </div>
-          
-          <button 
-            onClick={handleDeleteMultiple}
-            style={{ 
-              backgroundColor: "#dc3545", 
-              color: "white", 
-              border: "none", 
-              padding: "10px 20px", 
-              borderRadius: 6,
-              cursor: "pointer",
-              fontWeight: "bold",
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              transition: "all 0.3s"
-            }}
-            onMouseOver={(e) => e.target.style.backgroundColor = "#c82333"}
-            onMouseOut={(e) => e.target.style.backgroundColor = "#dc3545"}
-          >
-            🗑️ Delete Selected ({selectedIds.length})
-          </button>
         </div>
       )}
 
-      {/* Stats Card */}
-      <div style={{ 
-        marginBottom: 20, 
-        padding: 15, 
-        backgroundColor: "#f8f9fa", 
-        borderRadius: 8,
-        border: "1px solid #dee2e6"
-      }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div>
-            <h4 style={{ margin: 0, color: "#495057" }}>📊 Vehicle Statistics</h4>
-            <p style={{ margin: "5px 0 0 0", color: "#6c757d" }}>
-              Manage your vehicle database efficiently
-            </p>
-          </div>
-          <div style={{ 
-            display: "flex", 
-            gap: 15,
-            backgroundColor: "white",
-            padding: "10px 15px",
-            borderRadius: 6,
-            border: "1px solid #e9ecef"
-          }}>
-            <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: "24px", fontWeight: "bold", color: "#28a745" }}>
-                {totalRecords}
+      {/* Load Data Section */}
+      {!dataLoaded && (
+        <div className="data-load-section">
+          <div className="load-card">
+            <h4>📊 Load Vehicle Data</h4>
+            <p>No data loaded yet. Click below to load vehicles or use the search filter.</p>
+            <div className="load-actions">
+              <button 
+                onClick={fetchVehicles}
+                className="btn-load-data"
+                disabled={loading}
+              >
+                {loading ? "⏳ Loading..." : "📥 Load All Vehicles"}
+              </button>
+              <div className="load-search">
+                <input
+                  placeholder="🔍 Search Vehicle No or Owner Name"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="search-input"
+                />
+                <button 
+                  onClick={handleApplyFilter}
+                  className="btn-apply-filter"
+                >
+                  Search & Load
+                </button>
               </div>
-              <div style={{ fontSize: "12px", color: "#6c757d" }}>Total Vehicles</div>
-            </div>
-            <div style={{ width: 1, backgroundColor: "#dee2e6" }}></div>
-            <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: "24px", fontWeight: "bold", color: "#17a2b8" }}>
-                {filteredCount}
-              </div>
-              <div style={{ fontSize: "12px", color: "#6c757d" }}>Filtered</div>
-            </div>
-            <div style={{ width: 1, backgroundColor: "#dee2e6" }}></div>
-            <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: "24px", fontWeight: "bold", color: "#ffc107" }}>
-                {selectedIds.length}
-              </div>
-              <div style={{ fontSize: "12px", color: "#6c757d" }}>Selected</div>
             </div>
           </div>
         </div>
-      </div>
+      )}
+
+      {/* Stats Card - Only show when data is loaded */}
+      {dataLoaded && (
+        <div className="stats-card">
+          <div className="stats-header">
+            <div>
+              <h4>📊 Vehicle Statistics</h4>
+              <p>Manage your vehicle database efficiently</p>
+            </div>
+            <div className="stats-numbers">
+              <div className="stat-item">
+                <div className="stat-value total">{totalRecords}</div>
+                <div className="stat-label">Total Vehicles</div>
+              </div>
+              <div className="stat-divider"></div>
+              <div className="stat-item">
+                <div className="stat-value filtered">{filteredCount}</div>
+                <div className="stat-label">Filtered</div>
+              </div>
+              <div className="stat-divider"></div>
+              <div className="stat-item">
+                <div className="stat-value selected">{selectedIds.length}</div>
+                <div className="stat-label">Selected</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Single Entry */}
-      <div style={{ marginBottom: 25, padding: 15, border: "1px solid #ddd", borderRadius: 5 }}>
+      <div className="section-card">
         <h4>Add New Vehicle</h4>
-        <input
-          placeholder="Vehicle Number"
-          value={vehicleNo}
-          onChange={(e) => setVehicleNo(e.target.value)}
-          style={{ padding: 8, marginRight: 10 }}
-        />
-        <input
-          placeholder="Owner Name"
-          value={ownerName}
-          onChange={(e) => setOwnerName(e.target.value)}
-          style={{ padding: 8, marginRight: 10 }}
-        />
-        <button 
-          onClick={handleAddVehicle}
-          style={{ 
-            padding: "8px 16px", 
-            backgroundColor: "#28a745", 
-            color: "white", 
-            border: "none", 
-            borderRadius: 4,
-            cursor: "pointer"
-          }}
-        >
-          ➕ Add Vehicle
-        </button>
+        <div className="form-row">
+          <input
+            placeholder="Vehicle Number"
+            value={vehicleNo}
+            onChange={(e) => setVehicleNo(e.target.value)}
+            className="form-input"
+          />
+          <input
+            placeholder="Owner Name"
+            value={ownerName}
+            onChange={(e) => setOwnerName(e.target.value)}
+            className="form-input"
+          />
+          <button 
+            onClick={handleAddVehicle}
+            className="btn-add"
+          >
+            ➕ Add Vehicle
+          </button>
+        </div>
       </div>
 
       {/* Excel Upload */}
-      <div style={{ marginBottom: 25, padding: 15, border: "1px solid #ddd", borderRadius: 5 }}>
+      <div className="section-card">
         <h4>Upload Excel</h4>
-        <input type="file" accept=".xlsx,.xls" onChange={handleFileSelect} />
-        {excelFile && <p>📄 Selected: <b>{excelFile.name}</b></p>}
+        <input 
+          type="file" 
+          accept=".xlsx,.xls" 
+          onChange={handleFileSelect} 
+          className="file-input"
+        />
+        {excelFile && <p className="file-selected">📄 Selected: <b>{excelFile.name}</b></p>}
         <button
           onClick={handleExcelUpload}
           disabled={loading}
-          style={{ 
-            marginTop: 10,
-            padding: "8px 16px", 
-            backgroundColor: "#17a2b8", 
-            color: "white", 
-            border: "none", 
-            borderRadius: 4,
-            cursor: "pointer"
-          }}
+          className="btn-upload"
         >
           {loading ? "⏳ Uploading..." : "📤 Upload Excel"}
         </button>
       </div>
 
       {/* Export to Excel */}
-      <div style={{ marginBottom: 25 }}>
+      <div className="section-card">
         <button 
           onClick={handleExportExcel}
-          style={{ 
-            padding: "8px 16px", 
-            backgroundColor: "#ffc107", 
-            color: "#212529", 
-            border: "none", 
-            borderRadius: 4,
-            cursor: "pointer",
-            fontWeight: "bold"
-          }}
+          className="btn-export"
+          disabled={!dataLoaded}
         >
           📥 Export to Excel ({totalRecords} records)
         </button>
+        {!dataLoaded && <p className="export-hint">Load data first to export</p>}
       </div>
 
       {/* Message */}
       {message && (
-        <div style={{ 
-          padding: 12, 
-          backgroundColor: "#d4edda", 
-          color: "#155724", 
-          borderRadius: 6,
-          marginBottom: 15,
-          border: "1px solid #c3e6cb"
-        }}>
-          ✅ {message}
+        <div className="message-box">
+          {message}
         </div>
       )}
 
-      {/* Search and Record Info */}
-      <div style={{ 
-        marginBottom: 15, 
-        padding: 15, 
-        backgroundColor: "#e9ecef", 
-        borderRadius: 6,
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center"
-      }}>
-        <div>
-          <input
-            placeholder="🔍 Search Vehicle No or Owner Name"
-            value={searchTerm}
-            onChange={(e) => {
-              setSearchTerm(e.target.value);
-              setCurrentPage(1);
-            }}
-            style={{ 
-              width: 300, 
-              padding: 8, 
-              borderRadius: 4,
-              border: "1px solid #ced4da"
-            }}
-          />
-        </div>
-        
-        <div style={{ textAlign: "right" }}>
-          <div style={{ fontWeight: "bold", color: "#495057" }}>
-            📋 Displaying: <span style={{ color: "#28a745" }}>{filteredCount === 0 ? 0 : startIndex + 1}-{endIndex}</span> of {filteredCount} filtered records
-          </div>
-          <div style={{ fontSize: "12px", color: "#6c757d", marginTop: 2 }}>
-            Page {currentPage} of {totalPages} | Total in database: {totalRecords}
-          </div>
-        </div>
-      </div>
-
-      {/* Vehicle List */}
-      <table border="1" width="100%" style={{ borderCollapse: "collapse", marginBottom: 20 }}>
-        <thead>
-          <tr style={{ backgroundColor: "#343a40", color: "white" }}>
-            <th style={{ padding: 12, textAlign: "center", width: "50px" }}>
+      {/* Search and Record Info - Only show when data is loaded */}
+      {dataLoaded && (
+        <>
+          <div className="search-section">
+            <div>
               <input
-                type="checkbox"
-                checked={selectAll && paginatedVehicles.length > 0}
-                onChange={handleSelectAll}
-                disabled={paginatedVehicles.length === 0}
+                placeholder="🔍 Search Vehicle No or Owner Name"
+                value={searchTerm}
+                onChange={(e) => {
+                  setSearchTerm(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="search-input-large"
               />
-            </th>
-            <th style={{ padding: 12 }}>Vehicle No</th>
-            <th style={{ padding: 12 }}>Owner Name</th>
-            <th style={{ padding: 12, width: "150px" }}>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {paginatedVehicles.map((v) => (
-            <tr key={v.id} style={{ 
-              backgroundColor: selectedIds.includes(v.id) ? "#fff3cd" : "white",
-              transition: "background-color 0.2s"
-            }}>
-              <td style={{ padding: 10, textAlign: "center" }}>
-                <input
-                  type="checkbox"
-                  checked={selectedIds.includes(v.id)}
-                  onChange={() => handleCheckboxChange(v.id)}
-                />
-              </td>
-              <td style={{ padding: 10, fontWeight: "bold" }}>
-                {editingId === v.id ? (
-                  <input
-                    value={editVehicleNo}
-                    onChange={(e) => setEditVehicleNo(e.target.value)}
-                    style={{ padding: 6, width: "100%", border: "1px solid #ced4da" }}
-                  />
-                ) : (
-                  v.VehicleNo
-                )}
-              </td>
-              <td style={{ padding: 10 }}>
-                {editingId === v.id ? (
-                  <input
-                    value={editOwnerName}
-                    onChange={(e) => setEditOwnerName(e.target.value)}
-                    style={{ padding: 6, width: "100%", border: "1px solid #ced4da" }}
-                  />
-                ) : (
-                  v.OwnerName
-                )}
-              </td>
-              <td style={{ padding: 10 }}>
-                {editingId === v.id ? (
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button 
-                      onClick={handleUpdate}
-                      style={{ 
-                        padding: "6px 12px", 
-                        backgroundColor: "#28a745", 
-                        color: "white", 
-                        border: "none", 
-                        borderRadius: 4,
-                        cursor: "pointer",
-                        flex: 1
-                      }}
-                    >
-                      💾 Save
-                    </button>
-                    <button 
-                      onClick={handleCancelEdit}
-                      style={{ 
-                        padding: "6px 12px", 
-                        backgroundColor: "#6c757d", 
-                        color: "white", 
-                        border: "none", 
-                        borderRadius: 4,
-                        cursor: "pointer",
-                        flex: 1
-                      }}
-                    >
-                      ❌ Cancel
-                    </button>
-                  </div>
-                ) : (
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button 
-                      onClick={() => handleEdit(v)}
-                      style={{ 
-                        padding: "6px 12px", 
-                        backgroundColor: "#007bff", 
-                        color: "white", 
-                        border: "none", 
-                        borderRadius: 4,
-                        cursor: "pointer",
-                        flex: 1
-                      }}
-                    >
-                      ✏️ Edit
-                    </button>
-                    <button 
-                      onClick={() => handleDelete(v.id)}
-                      style={{ 
-                        padding: "6px 12px", 
-                        backgroundColor: "#dc3545", 
-                        color: "white", 
-                        border: "none", 
-                        borderRadius: 4,
-                        cursor: "pointer",
-                        flex: 1
-                      }}
-                    >
-                      🗑️ Delete
-                    </button>
-                  </div>
-                )}
-              </td>
-            </tr>
-          ))}
-          {paginatedVehicles.length === 0 && (
-            <tr>
-              <td colSpan={4} style={{ textAlign: "center", padding: 40 }}>
-                <div style={{ color: "#6c757d" }}>
-                  📭 No vehicles found
-                  {searchTerm && <div style={{ marginTop: 5 }}>Try a different search term</div>}
-                </div>
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
+            </div>
+            
+            <div className="record-info">
+              <div className="record-count">
+                📋 Displaying: <span>{filteredCount === 0 ? 0 : startIndex + 1}-{endIndex}</span> of {filteredCount} filtered records
+              </div>
+              <div className="record-details">
+                Page {currentPage} of {totalPages} | Total in database: {totalRecords}
+              </div>
+            </div>
+          </div>
 
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <div style={{ 
-          marginTop: 20, 
-          display: "flex", 
-          justifyContent: "space-between",
-          alignItems: "center",
-          padding: "15px 0",
-          borderTop: "1px solid #dee2e6"
-        }}>
-          <div style={{ color: "#6c757d", fontSize: "14px" }}>
-            Showing {filteredCount === 0 ? 0 : startIndex + 1} to {endIndex} of {filteredCount} entries
-          </div>
-          
-          <div style={{ display: "flex", gap: 5 }}>
-            <button
-              disabled={currentPage === 1}
-              onClick={() => setCurrentPage((p) => p - 1)}
-              style={{ 
-                padding: "8px 12px", 
-                cursor: currentPage === 1 ? "not-allowed" : "pointer",
-                backgroundColor: currentPage === 1 ? "#f8f9fa" : "#6c757d",
-                color: currentPage === 1 ? "#adb5bd" : "white",
-                border: "none",
-                borderRadius: 4
-              }}
-            >
-              ← Previous
-            </button>
-            
-            {[...Array(totalPages)].map((_, i) => {
-              // Show only first, last, current, and adjacent pages
-              if (
-                i === 0 || 
-                i === totalPages - 1 || 
-                (i >= currentPage - 2 && i <= currentPage) ||
-                (i <= currentPage + 2 && i >= currentPage)
-              ) {
-                return (
-                  <button
-                    key={i}
-                    onClick={() => setCurrentPage(i + 1)}
-                    style={{
-                      padding: "8px 12px",
-                      backgroundColor: currentPage === i + 1 ? "#007bff" : "#f8f9fa",
-                      color: currentPage === i + 1 ? "white" : "#495057",
-                      border: "1px solid #dee2e6",
-                      borderRadius: 4,
-                      cursor: "pointer",
-                      fontWeight: currentPage === i + 1 ? "bold" : "normal",
-                    }}
+          {/* Vehicle List */}
+          <div className="table-container">
+            <table className="vehicle-table">
+              <thead>
+                <tr>
+                  <th className="checkbox-header">
+                    <input
+                      type="checkbox"
+                      checked={selectAll && paginatedVehicles.length > 0}
+                      onChange={handleSelectAll}
+                      disabled={paginatedVehicles.length === 0}
+                    />
+                  </th>
+                  <th>Vehicle No</th>
+                  <th>Owner Name</th>
+                  <th className="actions-header">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {paginatedVehicles.map((v) => (
+                  <tr 
+                    key={v.id}
+                    className={selectedIds.includes(v.id) ? "row-selected" : ""}
                   >
-                    {i + 1}
-                  </button>
-                );
-              } else if (
-                i === currentPage - 3 ||
-                i === currentPage + 3
-              ) {
-                return <span key={i} style={{ padding: "8px", color: "#6c757d" }}>...</span>;
-              }
-              return null;
-            })}
-            
-            <button
-              disabled={currentPage === totalPages}
-              onClick={() => setCurrentPage((p) => p + 1)}
-              style={{ 
-                padding: "8px 12px", 
-                cursor: currentPage === totalPages ? "not-allowed" : "pointer",
-                backgroundColor: currentPage === totalPages ? "#f8f9fa" : "#6c757d",
-                color: currentPage === totalPages ? "#adb5bd" : "white",
-                border: "none",
-                borderRadius: 4
-              }}
-            >
-              Next →
-            </button>
+                    <td className="checkbox-cell">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.includes(v.id)}
+                        onChange={() => handleCheckboxChange(v.id)}
+                      />
+                    </td>
+                    <td>
+                      {editingId === v.id ? (
+                        <input
+                          value={editVehicleNo}
+                          onChange={(e) => setEditVehicleNo(e.target.value)}
+                          className="edit-input"
+                        />
+                      ) : (
+                        <span className="vehicle-number">{v.VehicleNo}</span>
+                      )}
+                    </td>
+                    <td>
+                      {editingId === v.id ? (
+                        <input
+                          value={editOwnerName}
+                          onChange={(e) => setEditOwnerName(e.target.value)}
+                          className="edit-input"
+                        />
+                      ) : (
+                        v.OwnerName
+                      )}
+                    </td>
+                    <td className="actions-cell">
+                      {editingId === v.id ? (
+                        <div className="edit-actions">
+                          <button 
+                            onClick={handleUpdate}
+                            className="btn-save"
+                          >
+                            💾 Save
+                          </button>
+                          <button 
+                            onClick={handleCancelEdit}
+                            className="btn-cancel"
+                          >
+                            ❌ Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="action-buttons">
+                          <button 
+                            onClick={() => handleEdit(v)}
+                            className="btn-edit"
+                          >
+                            ✏️ Edit
+                          </button>
+                          <button 
+                            onClick={() => handleDelete(v.id)}
+                            className="btn-delete"
+                          >
+                            🗑️ Delete
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {paginatedVehicles.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="no-data">
+                      <div>
+                        📭 No vehicles found
+                        {searchTerm && <div className="no-data-hint">Try a different search term</div>}
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
-        </div>
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="pagination-container">
+              <div className="pagination-info">
+                Showing {filteredCount === 0 ? 0 : startIndex + 1} to {endIndex} of {filteredCount} entries
+              </div>
+              
+              <div className="pagination-controls">
+                <button
+                  disabled={currentPage === 1}
+                  onClick={() => setCurrentPage((p) => p - 1)}
+                  className={`pagination-btn ${currentPage === 1 ? 'disabled' : ''}`}
+                >
+                  ← Previous
+                </button>
+                
+                {[...Array(totalPages)].map((_, i) => {
+                  // Show only first, last, current, and adjacent pages
+                  if (
+                    i === 0 || 
+                    i === totalPages - 1 || 
+                    (i >= currentPage - 2 && i <= currentPage) ||
+                    (i <= currentPage + 2 && i >= currentPage)
+                  ) {
+                    return (
+                      <button
+                        key={i}
+                        onClick={() => setCurrentPage(i + 1)}
+                        className={`pagination-number ${currentPage === i + 1 ? 'active' : ''}`}
+                      >
+                        {i + 1}
+                      </button>
+                    );
+                  } else if (
+                    i === currentPage - 3 ||
+                    i === currentPage + 3
+                  ) {
+                    return <span key={i} className="pagination-ellipsis">...</span>;
+                  }
+                  return null;
+                })}
+                
+                <button
+                  disabled={currentPage === totalPages}
+                  onClick={() => setCurrentPage((p) => p + 1)}
+                  className={`pagination-btn ${currentPage === totalPages ? 'disabled' : ''}`}
+                >
+                  Next →
+                </button>
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

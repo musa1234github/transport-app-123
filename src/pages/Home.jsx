@@ -3,13 +3,12 @@ import { signOut } from "firebase/auth";
 import { Link, Outlet } from "react-router-dom";
 import { auth } from "../firebaseConfig";
 
-const Home = ({ user, isAdmin }) => {
+const Home = ({ user, userRole }) => {
+  const canUpload = userRole === "admin" || userRole === "dispatcher";
+  const isAdmin = userRole === "admin";
+
   const handleLogout = async () => {
-    try {
-      await signOut(auth);
-    } catch (error) {
-      console.error("Logout failed:", error);
-    }
+    await signOut(auth);
   };
 
   return (
@@ -30,11 +29,15 @@ const Home = ({ user, isAdmin }) => {
         {user && (
           <div style={{ fontSize: "14px" }}>
             {user.email}{" "}
-            {isAdmin ? (
-              <span style={{ color: "#22c55e" }}>(Admin)</span>
-            ) : (
-              <span style={{ color: "#f87171" }}>(User)</span>
-            )}
+            <span style={{ color: "#22c55e" }}>
+              (
+              {userRole === "admin"
+                ? "Admin"
+                : userRole === "dispatcher"
+                ? "Dispatcher"
+                : "User"}
+              )
+            </span>
           </div>
         )}
       </div>
@@ -54,129 +57,42 @@ const Home = ({ user, isAdmin }) => {
             gap: "25px",
             margin: 0,
             padding: 0,
-            alignItems: "center",
             flexWrap: "wrap"
           }}
         >
-          {isAdmin && (
-            <li>
-              <Link to="/upload-dispatch" style={menuLink}>
-                🚚 Dispatch Upload
-              </Link>
-            </li>
+          {canUpload && (
+            <>
+              <li><Link to="/upload-dispatch" style={menuLink}>🚚 Dispatch Upload</Link></li>
+              <li><Link to="/bill-upload" style={menuLink}>🧾 Bill Upload</Link></li>
+              <li><Link to="/payment-upload" style={menuLink}>🧾 Payment Upload</Link></li>
+            </>
           )}
 
           {isAdmin && (
-            <li>
-              <Link to="/bill-upload" style={menuLink}>
-                🧾 Bill Upload
-              </Link>
-            </li>
+            <>
+              <li><Link to="/destination-master" style={menuLink}>🗺️ Destination Master</Link></li>
+              <li><Link to="/vehicle-master" style={menuLink}>🚛 Vehicle Master</Link></li>
+            </>
           )}
 
-          {isAdmin && (
-            <li>
-              <Link to="/payment-upload" style={menuLink}>
-                🧾 Payment Upload
-              </Link>
-            </li>
-          )}
-
-          {isAdmin && (  
-          <li>
-            <Link to="/show-bill" style={menuLink}>
-              📑 Show Bills
-            </Link>
-          </li>
-          )}
-
-          {isAdmin && (
-          <li>
-            <Link to="/show-payment" style={menuLink}>
-              📑 Show Payments
-            </Link>
-          </li>
-          )}
-
-          {isAdmin && (
-            <li>
-              <Link to="/destination-master" style={menuLink}>
-                🗺️ Destination Master
-              </Link>
-            </li>
-          )}
-
-          {isAdmin && (
-            <li>
-              <Link to="/show-billed-challan" style={menuLink}>
-                🗺️ Show Billed Challan
-              </Link>
-            </li>
-          )}
-
-          {isAdmin && (
-            <li>
-              <Link to="/vehicle-master" style={menuLink}>
-                🚛 Vehicle Master
-              </Link>
-            </li>
-          )}
-
-          {isAdmin && (
-            <li>
-              <Link to="/monthly-qty-report" style={menuLink}>
-                📊 Monthly Quantity Report
-              </Link>
-            </li>
-          )}
-
-          {isAdmin && (
-            <li>
-              <Link to="/daily-qty-report" style={menuLink}>
-                📊 Day Quantity Report
-              </Link>
-            </li>
-          )}
-
-          <li>
-            <Link to="/factories" style={menuLink}>
-              🏭 Factories
-            </Link>
-          </li>
-
-          <li>
-            <Link to="/show-dispatch" style={menuLink}>
-              📦 Show Dispatch
-            </Link>
-          </li>
-
-          {/* {isAdmin && (
-            <li>
-              <Link to="/delete-dispatch" style={{ ...menuLink, color: "red" }}>
-                ❌ Delete Dispatch
-              </Link>
-            </li>
-          )} */}
-
-          {/* {isAdmin && (
-            <li>
-              <Link to="/delete-duplicate-challan" style={{ ...menuLink, color: "red" }}>
-                ❌ Delete Duplicate Dispatch
-              </Link>
-            </li>
-          )} */}
+          <li><Link to="/factories" style={menuLink}>🏭 Factories</Link></li>
+          <li><Link to="/show-dispatch" style={menuLink}>📦 Show Dispatch</Link></li>
+          <li><Link to="/show-bill" style={menuLink}>📑 Show Bills</Link></li>
+          <li><Link to="/show-payment" style={menuLink}>📑 Show Payments</Link></li>
+          <li><Link to="/monthly-qty-report" style={menuLink}>📊 Monthly Qty</Link></li>
+          <li><Link to="/daily-qty-report" style={menuLink}>📊 Daily Qty</Link></li>
         </ul>
       </nav>
 
-      {/* ================= CONTENT AREA ================= */}
+      {/* ================= CONTENT ================= */}
       <div style={{ padding: "25px" }}>
-        {!isAdmin && (
-          <p style={{ color: "red", marginBottom: "10px" }}>
+        {userRole === "viewer" && (
+          <p style={{ color: "red" }}>
             You are logged in as a normal user. Restricted actions are hidden.
           </p>
         )}
 
-        <Outlet />
+        <Outlet context={{ userRole }} />
 
         <br />
 
@@ -198,14 +114,12 @@ const Home = ({ user, isAdmin }) => {
   );
 };
 
-/* ================= MENU LINK STYLE ================= */
 const menuLink = {
   textDecoration: "none",
   color: "#1f2937",
   fontWeight: "500",
   padding: "6px 10px",
-  borderRadius: "4px",
-  transition: "background 0.2s",
+  borderRadius: "4px"
 };
 
 export default Home;

@@ -5,7 +5,9 @@ import {
   getDocs,
   deleteDoc,
   doc,
-  updateDoc
+  updateDoc,
+  query,
+  where
 } from "firebase/firestore";
 import * as XLSX from "xlsx";
 
@@ -15,10 +17,8 @@ const FACTORY_NAME_FIXES = {
 
 const factoryMap = {
   "10": "JSW",
-  "6": "MANIGARH", // Changed from "Manigar" to "MANIGARH"
+  "6": "MANIGARH",
   "7": "ULTRATECH",
-  // Add more mappings if you have DisVid for other factories
-  // If not, FactoryName will be used directly from the record
 };
 
 const COLUMN_SEQUENCE = [
@@ -33,7 +33,7 @@ const COLUMN_SEQUENCE = [
   "FactoryName"
 ];
 
-// Factory options for filter dropdown - same as upload component
+// Factory options for filter dropdown
 const FACTORY_OPTIONS = [
   "ACC MARATHA",
   "AMBUJA",
@@ -52,7 +52,7 @@ const normalizeDate = (d) => {
   return x;
 };
 
-// ===== FORMAT DATE FOR DISPLAY (dd-MM-yy) =====
+// Format date for display (dd-MM-yy)
 const formatShortDate = (date) => {
   if (!date) return "";
   const d = new Date(date);
@@ -62,7 +62,7 @@ const formatShortDate = (date) => {
   return `${dd}-${mm}-${yy}`;
 };
 
-// ===== FORMAT DATE FOR INPUT (YYYY-MM-DD) =====
+// Format date for input (YYYY-MM-DD)
 const formatDateForInput = (date) => {
   if (!date) return "";
   const d = new Date(date);
@@ -81,8 +81,10 @@ const ShowDispatch = () => {
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [dataLoaded, setDataLoaded] = useState(false);
 
-  /* ✅ MVC-style applied filters */
+  // Applied filters
   const [appliedFilters, setAppliedFilters] = useState({
     searchTerm: "",
     filterFactory: "",
@@ -95,6 +97,7 @@ const ShowDispatch = () => {
 
   const recordsPerPage = 10;
 
+  // Check admin status only on page load
   useEffect(() => {
     const checkAdmin = async () => {
       if (auth.currentUser) {
@@ -102,12 +105,37 @@ const ShowDispatch = () => {
         setIsAdmin(!!token.claims.admin);
       }
     };
+    checkAdmin();
+  }, []);
 
-    const fetchDispatches = async () => {
-      const snapshot = await getDocs(collection(db, "TblDispatch"));
-      const data = snapshot.docs.map(ds => {
+  // Function to fetch data with filters
+  const fetchDispatches = async () => {
+    setLoading(true);
+    try {
+      let q = collection(db, "TblDispatch");
+      
+      // Build query based on filters
+      const conditions = [];
+      
+      // Only add factory filter if selected
+      if (appliedFilters.filterFactory) {
+        conditions.push(where("FactoryName", "==", appliedFilters.filterFactory));
+      }
+      
+      // Date filtering requires separate handling since Firestore doesn't support range with different fields
+      // We'll fetch and filter locally for dates
+      
+      // If we have conditions, create a query, otherwise fetch all
+      let querySnapshot;
+      if (conditions.length > 0) {
+        const firestoreQuery = query(q, ...conditions);
+        querySnapshot = await getDocs(firestoreQuery);
+      } else {
+        querySnapshot = await getDocs(q);
+      }
+      
+      const data = querySnapshot.docs.map(ds => {
         const row = { id: ds.id, ...ds.data() };
-
         row.DisVid = String(row.DisVid || "");
 
         if (row.DispatchDate) {
@@ -115,7 +143,6 @@ const ShowDispatch = () => {
             ? new Date(row.DispatchDate.seconds * 1000)
             : new Date(row.DispatchDate);
 
-          // 🔥 FORCE LOCAL DATE (MVC STYLE)
           row.DispatchDate = new Date(
             d.getFullYear(),
             d.getMonth(),
@@ -123,41 +150,70 @@ const ShowDispatch = () => {
           );
         }
 
-        // Apply factory name fixes if needed
+        // Apply factory name fixes
         if (row.FactoryName) {
           const fixedName = FACTORY_NAME_FIXES[row.FactoryName.toUpperCase()];
           if (fixedName) {
             row.FactoryName = fixedName;
           }
         } else if (row.DisVid) {
-          // Fallback to factoryMap for backward compatibility
           row.FactoryName = factoryMap[row.DisVid] || "";
         }
 
         return row;
       });
 
-      setDispatches(data);
-    };
+      // Apply date filtering locally if needed
+      let filteredData = data;
+      
+      // Apply date range filtering
+      if (appliedFilters.fromDate || appliedFilters.toDate) {
+        filteredData = filteredData.filter(d => {
+          const rowDate = normalizeDate(d.DispatchDate);
+          const from = appliedFilters.fromDate ? normalizeDate(new Date(appliedFilters.fromDate)) : null;
+          const to = appliedFilters.toDate ? normalizeDate(new Date(appliedFilters.toDate)) : null;
 
-    checkAdmin();
-    fetchDispatches();
-  }, []);
+          let matchesFromDate = true;
+          let matchesToDate = true;
 
-  /* ================= APPLY FILTER (MVC BUTTON) ================= */
+          if (from && rowDate) {
+            matchesFromDate = rowDate.getTime() >= from.getTime();
+          }
+          if (to && rowDate) {
+            const toEndOfDay = new Date(to);
+            toEndOfDay.setDate(toEndOfDay.getDate() + 1);
+            matchesToDate = rowDate.getTime() < toEndOfDay.getTime();
+          }
 
+          return matchesFromDate && matchesToDate;
+        });
+      }
+
+      setDispatches(filteredData);
+      setDataLoaded(true);
+      setCurrentPage(1);
+    } catch (error) {
+      console.error("Error fetching dispatches:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /* ================= APPLY FILTERS ================= */
   const applyFilters = () => {
+    // Set applied filters
     setAppliedFilters({
       searchTerm,
       filterFactory,
       fromDate,
       toDate
     });
-    setCurrentPage(1);
+    
+    // Fetch data with filters
+    fetchDispatches();
   };
 
   /* ================= CLEAR FILTERS ================= */
-
   const clearFilters = () => {
     setSearchTerm("");
     setFilterFactory("");
@@ -169,11 +225,13 @@ const ShowDispatch = () => {
       fromDate: "",
       toDate: ""
     });
+    setDispatches([]);
+    setDataLoaded(false);
+    setSelectedIds([]);
     setCurrentPage(1);
   };
 
   /* ================= EDIT ================= */
-
   const handleEdit = (row) => {
     setEditId(row.id);
     setEditChallan(row.ChallanNo || "");
@@ -200,7 +258,6 @@ const ShowDispatch = () => {
   };
 
   /* ================= DELETE ================= */
-
   const handleDelete = async (id) => {
     if (!isAdmin) return;
     if (!window.confirm("Delete this record?")) return;
@@ -223,7 +280,6 @@ const ShowDispatch = () => {
   };
 
   /* ================= CHECKBOX ================= */
-
   const handleCheckboxChange = (id) => {
     setSelectedIds(prev =>
       prev.includes(id)
@@ -232,57 +288,27 @@ const ShowDispatch = () => {
     );
   };
 
-  /* ================= FILTER (APPLIED ONLY ON BUTTON CLICK) ================= */
-
-  const filteredDispatches = dispatches.filter(d => {
-    const { searchTerm, filterFactory, fromDate, toDate } = appliedFilters;
-
-    // ✅ MVC BEHAVIOR: if no filter selected, return all
-    if (!searchTerm && !filterFactory && !fromDate && !toDate) {
-      return true;
-    }
-
-    const terms = searchTerm
+  /* ================= FILTER DATA FOR DISPLAY ================= */
+  // Apply search filter to already loaded data
+  const filteredDispatches = dataLoaded ? dispatches.filter(d => {
+    const terms = appliedFilters.searchTerm
       .toLowerCase()
       .trim()
       .split(/\s+/)
       .filter(Boolean);
 
-    const matchesSearch =
-      terms.length === 0
-        ? true
-        : terms.every(term =>
-          Object.values(d).some(v => {
-            if (!v) return false;
-            if (v instanceof Date) {
-              return formatShortDate(v).toLowerCase().includes(term);
-            }
-            return v.toString().toLowerCase().includes(term);
-          })
-        );
+    if (terms.length === 0) return true;
 
-    const matchesFactory = filterFactory ? d.FactoryName === filterFactory : true;
-
-    // Date filtering logic
-    const rowDate = normalizeDate(d.DispatchDate);
-    const from = fromDate ? normalizeDate(new Date(fromDate)) : null;
-    const to = toDate ? normalizeDate(new Date(toDate)) : null;
-
-    let matchesFromDate = true;
-    let matchesToDate = true;
-
-    if (from && rowDate) {
-      matchesFromDate = rowDate.getTime() >= from.getTime();
-    }
-    if (to && rowDate) {
-      // Add one day to include the entire end date
-      const toEndOfDay = new Date(to);
-      toEndOfDay.setDate(toEndOfDay.getDate() + 1);
-      matchesToDate = rowDate.getTime() < toEndOfDay.getTime();
-    }
-
-    return matchesSearch && matchesFactory && matchesFromDate && matchesToDate;
-  });
+    return terms.every(term =>
+      Object.values(d).some(v => {
+        if (!v) return false;
+        if (v instanceof Date) {
+          return formatShortDate(v).toLowerCase().includes(term);
+        }
+        return v.toString().toLowerCase().includes(term);
+      })
+    );
+  }) : [];
 
   const totalRecords = dispatches.length;
   const filteredCount = filteredDispatches.length;
@@ -313,7 +339,6 @@ const ShowDispatch = () => {
   };
 
   /* ================= EXCEL ================= */
-
   const exportToExcel = () => {
     if (!filteredDispatches.length) return;
 
@@ -332,11 +357,11 @@ const ShowDispatch = () => {
   };
 
   /* ================= UI ================= */
-
   return (
     <div style={{ padding: 20 }}>
       <h2>Dispatch Data</h2>
 
+      {/* Filter Controls */}
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 15 }}>
         <input
           placeholder="Search..."
@@ -366,7 +391,6 @@ const ShowDispatch = () => {
             onChange={(e) => {
               const selectedDate = e.target.value;
               if (selectedDate) {
-                // Create date in local timezone without time component
                 const [year, month, day] = selectedDate.split('-');
                 const localDate = new Date(year, month - 1, day);
                 setFromDate(localDate);
@@ -386,7 +410,6 @@ const ShowDispatch = () => {
             onChange={(e) => {
               const selectedDate = e.target.value;
               if (selectedDate) {
-                // Create date in local timezone without time component
                 const [year, month, day] = selectedDate.split('-');
                 const localDate = new Date(year, month - 1, day);
                 setToDate(localDate);
@@ -400,198 +423,253 @@ const ShowDispatch = () => {
 
         <button 
           onClick={applyFilters}
-          style={{ padding: "8px 16px", backgroundColor: "#007bff", color: "white", border: "none", borderRadius: 4, cursor: "pointer" }}
-        >
-          Apply Filters
-        </button>
-        
-        <button 
-          onClick={clearFilters}
-          style={{ padding: "8px 16px", backgroundColor: "#6c757d", color: "white", border: "none", borderRadius: 4, cursor: "pointer" }}
-        >
-          Clear Filters
-        </button>
-        
-        <button 
-          onClick={exportToExcel}
-          style={{ padding: "8px 16px", backgroundColor: "#28a745", color: "white", border: "none", borderRadius: 4, cursor: "pointer" }}
-        >
-          Export Excel
-        </button>
-      </div>
-
-      {isAdmin && selectedIds.length > 0 && (
-        <button 
-          onClick={handleDeleteSelected} 
+          disabled={loading}
           style={{ 
-            marginTop: 10, 
             padding: "8px 16px", 
-            backgroundColor: "#dc3545", 
+            backgroundColor: "#007bff", 
             color: "white", 
             border: "none", 
             borderRadius: 4, 
             cursor: "pointer" 
           }}
         >
-          Delete Selected ({selectedIds.length})
+          {loading ? "Loading..." : "Apply Filters"}
         </button>
-      )}
-
-      <div style={{ overflowX: "auto", marginTop: 20 }}>
-        <table border="1" width="100%" style={{ borderCollapse: "collapse" }}>
-          <thead>
-            <tr style={{ backgroundColor: "#f2f2f2" }}>
-              {isAdmin && (
-                <th style={{ padding: 10 }}>
-                  <input
-                    type="checkbox"
-                    checked={isAllSelected}
-                    onChange={handleSelectAll}
-                  />
-                </th>
-              )}
-              {COLUMN_SEQUENCE.map(col => (
-                <th key={col} style={{ padding: 10, textAlign: "left" }}>{col}</th>
-              ))}
-              {isAdmin && <th style={{ padding: 10 }}>Action</th>}
-            </tr>
-          </thead>
-
-          <tbody>
-            {paginatedDispatches.length > 0 ? (
-              paginatedDispatches.map(d => (
-                <tr key={d.id} style={{ borderBottom: "1px solid #ddd" }}>
-                  {isAdmin && (
-                    <td style={{ padding: 10, textAlign: "center" }}>
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.includes(d.id)}
-                        onChange={() => handleCheckboxChange(d.id)}
-                      />
-                    </td>
-                  )}
-
-                  {COLUMN_SEQUENCE.map(col => (
-                    <td key={col} style={{ padding: 10 }}>
-                      {col === "ChallanNo" && editId === d.id ? (
-                        <input
-                          value={editChallan}
-                          onChange={e => setEditChallan(e.target.value)}
-                          style={{ padding: 4, width: "100%" }}
-                        />
-                      ) : col === "DispatchDate" ? (
-                        formatShortDate(d[col])
-                      ) : (
-                        d[col]
-                      )}
-                    </td>
-                  ))}
-
-                  {isAdmin && (
-                    <td style={{ padding: 10 }}>
-                      {editId === d.id ? (
-                        <>
-                          <button 
-                            onClick={() => handleSave(d.id)}
-                            style={{ marginRight: 5, padding: "5px 10px", backgroundColor: "#28a745", color: "white", border: "none", borderRadius: 3, cursor: "pointer" }}
-                          >
-                            Save
-                          </button>
-                          <button 
-                            onClick={handleCancel}
-                            style={{ padding: "5px 10px", backgroundColor: "#6c757d", color: "white", border: "none", borderRadius: 3, cursor: "pointer" }}
-                          >
-                            Cancel
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button 
-                            onClick={() => handleEdit(d)}
-                            style={{ marginRight: 5, padding: "5px 10px", backgroundColor: "#007bff", color: "white", border: "none", borderRadius: 3, cursor: "pointer" }}
-                          >
-                            Edit
-                          </button>
-                          <button 
-                            onClick={() => handleDelete(d.id)}
-                            style={{ padding: "5px 10px", backgroundColor: "#dc3545", color: "white", border: "none", borderRadius: 3, cursor: "pointer" }}
-                          >
-                            Delete
-                          </button>
-                        </>
-                      )}
-                    </td>
-                  )}
-                </tr>
-              ))
-            ) : (
-              <tr>
-                <td 
-                  colSpan={isAdmin ? COLUMN_SEQUENCE.length + 2 : COLUMN_SEQUENCE.length} 
-                  style={{ padding: 20, textAlign: "center" }}
-                >
-                  No records found
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      <div style={{ marginTop: 20, fontWeight: "bold", color: "#333" }}>
-        Showing {filteredCount === 0 ? 0 : startIndex + 1}–{endIndex} of{" "}
-        {filteredCount} filtered records (Total in DB: {totalRecords})
-      </div>
-
-      {totalPages > 1 && (
-        <div style={{ marginTop: 20, display: "flex", alignItems: "center", gap: 5 }}>
+        
+        <button 
+          onClick={clearFilters}
+          style={{ 
+            padding: "8px 16px", 
+            backgroundColor: "#6c757d", 
+            color: "white", 
+            border: "none", 
+            borderRadius: 4, 
+            cursor: "pointer" 
+          }}
+        >
+          Clear Filters
+        </button>
+        
+        {dataLoaded && (
           <button 
-            disabled={currentPage === 1} 
-            onClick={() => setCurrentPage(p => p - 1)}
+            onClick={exportToExcel}
+            disabled={filteredCount === 0}
             style={{ 
-              padding: "8px 12px", 
-              backgroundColor: currentPage === 1 ? "#e9ecef" : "#007bff", 
-              color: currentPage === 1 ? "#6c757d" : "white", 
+              padding: "8px 16px", 
+              backgroundColor: filteredCount === 0 ? "#6c757d" : "#28a745", 
+              color: "white", 
               border: "none", 
               borderRadius: 4, 
-              cursor: currentPage === 1 ? "not-allowed" : "pointer" 
+              cursor: filteredCount === 0 ? "not-allowed" : "pointer" 
             }}
           >
-            Prev
+            Export Excel ({filteredCount})
           </button>
+        )}
+      </div>
 
-          {[...Array(totalPages)].map((_, i) => (
-            <button
-              key={i}
-              onClick={() => setCurrentPage(i + 1)}
+      {/* Loading indicator */}
+      {loading && (
+        <div style={{ textAlign: "center", padding: 20 }}>
+          Loading data...
+        </div>
+      )}
+
+      {/* Data table */}
+      {!loading && dataLoaded && (
+        <>
+          {isAdmin && selectedIds.length > 0 && (
+            <button 
+              onClick={handleDeleteSelected} 
               style={{ 
-                padding: "8px 12px", 
-                backgroundColor: currentPage === i + 1 ? "#0056b3" : "#007bff", 
+                marginTop: 10, 
+                padding: "8px 16px", 
+                backgroundColor: "#dc3545", 
                 color: "white", 
                 border: "none", 
                 borderRadius: 4, 
-                cursor: "pointer",
-                fontWeight: currentPage === i + 1 ? "bold" : "normal" 
+                cursor: "pointer" 
               }}
             >
-              {i + 1}
+              Delete Selected ({selectedIds.length})
             </button>
-          ))}
+          )}
 
-          <button
-            disabled={currentPage === totalPages}
-            onClick={() => setCurrentPage(p => p + 1)}
-            style={{ 
-              padding: "8px 12px", 
-              backgroundColor: currentPage === totalPages ? "#e9ecef" : "#007bff", 
-              color: currentPage === totalPages ? "#6c757d" : "white", 
-              border: "none", 
-              borderRadius: 4, 
-              cursor: currentPage === totalPages ? "not-allowed" : "pointer" 
-            }}
-          >
-            Next
-          </button>
+          <div style={{ overflowX: "auto", marginTop: 20 }}>
+            <table border="1" width="100%" style={{ borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ backgroundColor: "#f2f2f2" }}>
+                  {isAdmin && (
+                    <th style={{ padding: 10 }}>
+                      <input
+                        type="checkbox"
+                        checked={isAllSelected}
+                        onChange={handleSelectAll}
+                      />
+                    </th>
+                  )}
+                  {COLUMN_SEQUENCE.map(col => (
+                    <th key={col} style={{ padding: 10, textAlign: "left" }}>{col}</th>
+                  ))}
+                  {isAdmin && <th style={{ padding: 10 }}>Action</th>}
+                </tr>
+              </thead>
+
+              <tbody>
+                {paginatedDispatches.length > 0 ? (
+                  paginatedDispatches.map(d => (
+                    <tr key={d.id} style={{ borderBottom: "1px solid #ddd" }}>
+                      {isAdmin && (
+                        <td style={{ padding: 10, textAlign: "center" }}>
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.includes(d.id)}
+                            onChange={() => handleCheckboxChange(d.id)}
+                          />
+                        </td>
+                      )}
+
+                      {COLUMN_SEQUENCE.map(col => (
+                        <td key={col} style={{ padding: 10 }}>
+                          {col === "ChallanNo" && editId === d.id ? (
+                            <input
+                              value={editChallan}
+                              onChange={e => setEditChallan(e.target.value)}
+                              style={{ padding: 4, width: "100%" }}
+                            />
+                          ) : col === "DispatchDate" ? (
+                            formatShortDate(d[col])
+                          ) : (
+                            d[col]
+                          )}
+                        </td>
+                      ))}
+
+                      {isAdmin && (
+                        <td style={{ padding: 10 }}>
+                          {editId === d.id ? (
+                            <>
+                              <button 
+                                onClick={() => handleSave(d.id)}
+                                style={{ marginRight: 5, padding: "5px 10px", backgroundColor: "#28a745", color: "white", border: "none", borderRadius: 3, cursor: "pointer" }}
+                              >
+                                Save
+                              </button>
+                              <button 
+                                onClick={handleCancel}
+                                style={{ padding: "5px 10px", backgroundColor: "#6c757d", color: "white", border: "none", borderRadius: 3, cursor: "pointer" }}
+                              >
+                                Cancel
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button 
+                                onClick={() => handleEdit(d)}
+                                style={{ marginRight: 5, padding: "5px 10px", backgroundColor: "#007bff", color: "white", border: "none", borderRadius: 3, cursor: "pointer" }}
+                              >
+                                Edit
+                              </button>
+                              <button 
+                                onClick={() => handleDelete(d.id)}
+                                style={{ padding: "5px 10px", backgroundColor: "#dc3545", color: "white", border: "none", borderRadius: 3, cursor: "pointer" }}
+                              >
+                                Delete
+                              </button>
+                            </>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td 
+                      colSpan={isAdmin ? COLUMN_SEQUENCE.length + 2 : COLUMN_SEQUENCE.length} 
+                      style={{ padding: 20, textAlign: "center" }}
+                    >
+                      No records found for the selected filters
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div style={{ marginTop: 20, fontWeight: "bold", color: "#333" }}>
+            Showing {filteredCount === 0 ? 0 : startIndex + 1}–{endIndex} of{" "}
+            {filteredCount} records
+          </div>
+
+          {totalPages > 1 && (
+            <div style={{ marginTop: 20, display: "flex", alignItems: "center", gap: 5 }}>
+              <button 
+                disabled={currentPage === 1} 
+                onClick={() => setCurrentPage(p => p - 1)}
+                style={{ 
+                  padding: "8px 12px", 
+                  backgroundColor: currentPage === 1 ? "#e9ecef" : "#007bff", 
+                  color: currentPage === 1 ? "#6c757d" : "white", 
+                  border: "none", 
+                  borderRadius: 4, 
+                  cursor: currentPage === 1 ? "not-allowed" : "pointer" 
+                }}
+              >
+                Prev
+              </button>
+
+              {[...Array(totalPages)].map((_, i) => (
+                <button
+                  key={i}
+                  onClick={() => setCurrentPage(i + 1)}
+                  style={{ 
+                    padding: "8px 12px", 
+                    backgroundColor: currentPage === i + 1 ? "#0056b3" : "#007bff", 
+                    color: "white", 
+                    border: "none", 
+                    borderRadius: 4, 
+                    cursor: "pointer",
+                    fontWeight: currentPage === i + 1 ? "bold" : "normal" 
+                  }}
+                >
+                  {i + 1}
+                </button>
+              ))}
+
+              <button
+                disabled={currentPage === totalPages}
+                onClick={() => setCurrentPage(p => p + 1)}
+                style={{ 
+                  padding: "8px 12px", 
+                  backgroundColor: currentPage === totalPages ? "#e9ecef" : "#007bff", 
+                  color: currentPage === totalPages ? "#6c757d" : "white", 
+                  border: "none", 
+                  borderRadius: 4, 
+                  cursor: currentPage === totalPages ? "not-allowed" : "pointer" 
+                }}
+              >
+                Next
+              </button>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Initial state - no data loaded yet */}
+      {!loading && !dataLoaded && (
+        <div style={{ 
+          textAlign: "center", 
+          padding: 40, 
+          backgroundColor: "#f8f9fa", 
+          borderRadius: 8,
+          marginTop: 20
+        }}>
+          <p style={{ fontSize: 16, color: "#6c757d" }}>
+            No data loaded yet. Please set your filters and click "Apply Filters" to load data.
+          </p>
+          <p style={{ fontSize: 14, color: "#6c757d", marginTop: 10 }}>
+            This reduces unnecessary database reads and improves performance.
+          </p>
         </div>
       )}
     </div>

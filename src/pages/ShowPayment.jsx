@@ -1,7 +1,9 @@
-﻿import React, { useEffect, useState } from "react";
-import { collection, getDocs, query, where, Timestamp } from "firebase/firestore";
+﻿// ShowPayment.jsx
+import React, { useEffect, useState } from "react";
+import { collection, getDocs, query, where, Timestamp, updateDoc, doc, serverTimestamp } from "firebase/firestore";
 import { db } from "../firebaseConfig";
 import * as XLSX from 'xlsx';
+import './ShowPayment.css';
 
 /* ===== HELPER FUNCTIONS ===== */
 const toDate = (v) => {
@@ -42,7 +44,10 @@ const formatCurrency = (amount) => {
   }).format(amount);
 };
 
-const ShowPayment = () => {
+const ShowPayment = ({ userRole }) => {
+  // Check if user is admin
+  const isAdmin = userRole === "admin";
+  
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [selectedPayments, setSelectedPayments] = useState([]);
@@ -444,28 +449,24 @@ const ShowPayment = () => {
   const confirmDelete = async () => {
     setLoading(true);
     try {
-      // Note: You need to import updateDoc and doc from firebase/firestore
-      // and add to your imports: import { updateDoc, doc, serverTimestamp } from "firebase/firestore";
-      
-      alert(`Would reset ${selectedPayments.length} payments (firebase update code would go here)`);
-      
-      // Example update code:
-      // for (const billId of selectedPayments) {
-      //   await updateDoc(doc(db, "BillTable", billId), {
-      //     PaymentReceived: 0,
-      //     ActualAmount: 0,
-      //     Tds: 0,
-      //     Gst: 0,
-      //     PId: null,
-      //     PaymentNumber: null,
-      //     UpdatedAt: serverTimestamp()
-      //   });
-      // }
+      // Reset payment information for selected bills
+      for (const billId of selectedPayments) {
+        await updateDoc(doc(db, "BillTable", billId), {
+          PaymentReceived: 0,
+          ActualAmount: 0,
+          Tds: 0,
+          Gst: 0,
+          PId: null,
+          PaymentNumber: null,
+          UpdatedAt: serverTimestamp()
+        });
+      }
       
       // Reload data
       await load();
       setSelectedPayments([]);
       setSelectAll(false);
+      alert(`Successfully reset ${selectedPayments.length} payments`);
     } catch (error) {
       console.error("Error resetting payments:", error);
       alert(`Error resetting payments: ${error.message}`);
@@ -476,27 +477,18 @@ const ShowPayment = () => {
   };
 
   return (
-    <div style={{ padding: 20 }}>
+    <div className="container">
       <h1>Show Payment Report</h1>
       
       {/* ===== FILTER BAR ===== */}
-      <div style={{ 
-        marginBottom: 15, 
-        padding: 15, 
-        backgroundColor: '#f5f5f5', 
-        borderRadius: 5,
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: 10,
-        alignItems: 'center'
-      }}>
+      <div className="filter-bar">
         <div>
           <input
             type="text"
             placeholder="Search factory, bill no, payment no"
             value={searchTerm}
             onChange={e => setSearchTerm(e.target.value)}
-            style={{ width: 250, padding: 8 }}
+            className="filter-input"
           />
         </div>
 
@@ -504,7 +496,7 @@ const ShowPayment = () => {
           <select
             value={factoryFilter}
             onChange={e => setFactoryFilter(e.target.value)}
-            style={{ padding: 8, width: 200 }}
+            className="filter-select"
           >
             <option value="">Select Factory</option>
             {factories.map(f => (
@@ -517,7 +509,7 @@ const ShowPayment = () => {
           <select
             value={paymentTypeFilter}
             onChange={e => setPaymentTypeFilter(e.target.value)}
-            style={{ padding: 8, width: 200 }}
+            className="filter-select"
           >
             <option value="">All Payments</option>
             {paymentTypes.map(pt => (
@@ -526,7 +518,7 @@ const ShowPayment = () => {
           </select>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+        <div className="date-filter-container">
           <label>From:</label>
           <input
             type="date"
@@ -536,7 +528,7 @@ const ShowPayment = () => {
           />
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+        <div className="date-filter-container">
           <label>To:</label>
           <input
             type="date"
@@ -550,73 +542,35 @@ const ShowPayment = () => {
           <button 
             onClick={applyFilters}
             disabled={loading}
-            style={{ 
-              padding: '8px 16px', 
-              backgroundColor: '#4CAF50', 
-              color: 'white', 
-              border: 'none', 
-              borderRadius: 4,
-              cursor: loading ? 'not-allowed' : 'pointer',
-              opacity: loading ? 0.7 : 1
-            }}
+            className="filter-button apply-button"
           >
             {loading ? 'Loading...' : 'Apply Filters'}
           </button>
           <button 
             onClick={clearFilters}
             disabled={loading}
-            style={{ 
-              padding: '8px 16px', 
-              backgroundColor: '#f44336', 
-              color: 'white', 
-              border: 'none', 
-              borderRadius: 4,
-              cursor: loading ? 'not-allowed' : 'pointer',
-              opacity: loading ? 0.7 : 1
-            }}
+            className="filter-button clear-button"
           >
             Clear Filters
           </button>
         </div>
 
         {/* ===== EXPORT BUTTONS ===== */}
-        <div style={{ display: 'flex', gap: 10, marginLeft: 'auto' }}>
+        <div className="export-button-group">
           <button 
             onClick={exportToExcel}
             disabled={exporting || filteredRows.length === 0}
-            style={{ 
-              padding: '8px 16px', 
-              backgroundColor: '#2196F3', 
-              color: 'white', 
-              border: 'none', 
-              borderRadius: 4,
-              cursor: (exporting || filteredRows.length === 0) ? 'not-allowed' : 'pointer',
-              opacity: (exporting || filteredRows.length === 0) ? 0.7 : 1,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 5
-            }}
+            className="export-button export-all-button"
             title="Export all filtered payments to Excel"
           >
             {exporting ? 'Exporting...' : 'Export All to Excel'}
           </button>
           
-          {selectedPayments.length > 0 && (
+          {isAdmin && selectedPayments.length > 0 && (
             <button 
               onClick={exportSelectedToExcel}
               disabled={exporting}
-              style={{ 
-                padding: '8px 16px', 
-                backgroundColor: '#FF9800', 
-                color: 'white', 
-                border: 'none', 
-                borderRadius: 4,
-                cursor: exporting ? 'not-allowed' : 'pointer',
-                opacity: exporting ? 0.7 : 1,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 5
-              }}
+              className="export-button export-selected-button"
               title={`Export ${selectedPayments.length} selected payments to Excel`}
             >
               {exporting ? 'Exporting...' : `Export Selected (${selectedPayments.length})`}
@@ -626,17 +580,8 @@ const ShowPayment = () => {
       </div>
 
       {/* ===== RECORDS PER PAGE SELECTOR ===== */}
-      <div style={{ 
-        marginBottom: 15, 
-        padding: 10, 
-        backgroundColor: '#f8f9fa', 
-        borderRadius: 5,
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        border: '1px solid #dee2e6'
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div className="records-selector">
+        <div className="records-controls">
           <span style={{ fontWeight: 'bold' }}>Records per page:</span>
           <select 
             value={recordsPerPage} 
@@ -661,139 +606,118 @@ const ShowPayment = () => {
         </div>
       </div>
 
-      {/* ===== DELETE & EXPORT CONTROLS ===== */}
-      <div style={{ 
-        marginBottom: 15, 
-        padding: 10, 
-        backgroundColor: selectedPayments.length > 0 ? '#fff3cd' : '#e9ecef',
-        borderRadius: 5,
-        border: selectedPayments.length > 0 ? '1px solid #ffc107' : '1px solid #dee2e6',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center'
-      }}>
-        <div>
-          <span style={{ marginRight: 10 }}>
-            <input
-              type="checkbox"
-              checked={selectAll && currentRecords.length > 0}
-              onChange={handleSelectAll}
-              disabled={currentRecords.length === 0 || loading}
-              style={{ marginRight: 5 }}
-            />
-            Select All ({selectedPayments.length} selected)
-          </span>
-          <span style={{ color: '#666', fontSize: '14px', marginLeft: '20px' }}>
-            Page Payments: {currentRecords.length}
-          </span>
+      {/* ===== DELETE & EXPORT CONTROLS (Only for Admin) ===== */}
+      {isAdmin && (
+        <div className={`selection-controls ${selectedPayments.length > 0 ? 'selection-controls-with-selection' : 'selection-controls-without-selection'}`}>
+          <div>
+            <span style={{ marginRight: 10 }}>
+              <input
+                type="checkbox"
+                checked={selectAll && currentRecords.length > 0}
+                onChange={handleSelectAll}
+                disabled={currentRecords.length === 0 || loading}
+                style={{ marginRight: 5 }}
+              />
+              Select All ({selectedPayments.length} selected)
+            </span>
+            <span style={{ color: '#666', fontSize: '14px', marginLeft: '20px' }}>
+              Page Payments: {currentRecords.length}
+            </span>
+          </div>
+          
+          <div style={{ display: 'flex', gap: 10 }}>
+            {selectedPayments.length > 0 && (
+              <>
+                <button
+                  onClick={exportSelectedToExcel}
+                  disabled={exporting}
+                  className="export-button export-selected-button"
+                >
+                  {exporting ? 'Exporting...' : `Export ${selectedPayments.length} Selected`}
+                </button>
+                <button
+                  onClick={deleteSelectedPayments}
+                  disabled={loading}
+                  className="filter-button delete-button"
+                  style={{ backgroundColor: '#dc3545', fontWeight: 'bold' }}
+                >
+                  {loading ? 'Resetting...' : `Reset Selected (${selectedPayments.length})`}
+                </button>
+              </>
+            )}
+          </div>
         </div>
-        
-        <div style={{ display: 'flex', gap: 10 }}>
-          {selectedPayments.length > 0 && (
-            <>
-              <button
-                onClick={exportSelectedToExcel}
-                disabled={exporting}
-                style={{
-                  padding: '8px 16px',
-                  backgroundColor: '#FF9800',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: 4,
-                  cursor: exporting ? 'not-allowed' : 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 5
-                }}
-              >
-                {exporting ? 'Exporting...' : `Export ${selectedPayments.length} Selected`}
-              </button>
-              <button
-                onClick={deleteSelectedPayments}
-                disabled={loading}
-                style={{
-                  padding: '8px 16px',
-                  backgroundColor: '#dc3545',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: 4,
-                  cursor: loading ? 'not-allowed' : 'pointer',
-                  fontWeight: 'bold'
-                }}
-              >
-                {loading ? 'Resetting...' : `Reset Selected (${selectedPayments.length})`}
-              </button>
-            </>
-          )}
-        </div>
-      </div>
+      )}
 
-      {loading && <div style={{ textAlign: 'center', padding: 20 }}>Loading payment data...</div>}
-      {exporting && <div style={{ textAlign: 'center', padding: 10, color: '#2196F3' }}>Exporting to Excel...</div>}
+      {loading && <div className="loading-message">Loading payment data...</div>}
+      {exporting && <div className="exporting-message">Exporting to Excel...</div>}
 
       {/* ===== PAYMENT TABLE ===== */}
-      <div style={{ overflowX: 'auto' }}>
-        <table border="1" width="100%" style={{ borderCollapse: 'collapse' }}>
+      <div className="table-container">
+        <table className="data-table">
           <thead>
-            <tr style={{ backgroundColor: '#f2f2f2' }}>
-              <th style={{ padding: 10, textAlign: 'center', width: '40px' }}>
-                <input
-                  type="checkbox"
-                  checked={selectAll && currentRecords.length > 0}
-                  onChange={handleSelectAll}
-                  disabled={currentRecords.length === 0 || loading}
-                />
-              </th>
-              <th style={{ padding: 10 }}>Factory Name</th>
-              <th style={{ padding: 10 }}>Bill Number</th>
-              <th style={{ padding: 10 }}>Bill Date</th>
-              <th style={{ padding: 10 }}>Payment Number</th>
-              <th style={{ padding: 10 }}>Payment Date</th>
-              <th style={{ padding: 10 }}>Actual Amount</th>
-              <th style={{ padding: 10 }}>TDS</th>
-              <th style={{ padding: 10 }}>GST</th>
-              <th style={{ padding: 10 }}>Payment Received</th>
-              <th style={{ padding: 10 }}>Shortage</th>
-              <th style={{ padding: 10 }}>Bill Type</th>
+            <tr>
+              {/* Only show checkbox column for admin */}
+              {isAdmin && (
+                <th className="table-header" style={{ textAlign: 'center', width: '40px' }}>
+                  <input
+                    type="checkbox"
+                    checked={selectAll && currentRecords.length > 0}
+                    onChange={handleSelectAll}
+                    disabled={currentRecords.length === 0 || loading}
+                  />
+                </th>
+              )}
+              <th className="table-header">Factory Name</th>
+              <th className="table-header">Bill Number</th>
+              <th className="table-header">Bill Date</th>
+              <th className="table-header">Payment Number</th>
+              <th className="table-header">Payment Date</th>
+              <th className="table-header">Actual Amount</th>
+              <th className="table-header">TDS</th>
+              <th className="table-header">GST</th>
+              <th className="table-header">Payment Received</th>
+              <th className="table-header">Shortage</th>
+              <th className="table-header">Bill Type</th>
             </tr>
           </thead>
           <tbody>
             {!loading && currentRecords.length > 0 ? (
               currentRecords.map((r, i) => (
-                <tr key={i} style={{ 
-                  textAlign: 'center',
-                  backgroundColor: selectedPayments.includes(r.id) ? '#f8d7da' : 'inherit'
-                }}>
-                  <td style={{ padding: 8, textAlign: 'center' }}>
-                    <input
-                      type="checkbox"
-                      checked={selectedPayments.includes(r.id)}
-                      onChange={() => handleSelectPayment(r.id)}
-                      disabled={loading}
-                    />
-                  </td>
-                  <td style={{ padding: 8 }}>{r.FactoryName}</td>
-                  <td style={{ padding: 8 }}>{r.BillNum}</td>
-                  <td style={{ padding: 8 }}>{r.BillDate ? formatDate(r.BillDate) : "N/A"}</td>
-                  <td style={{ padding: 8, fontWeight: r.PaymentNumber ? 'bold' : 'normal' }}>
+                <tr key={i} className={isAdmin && selectedPayments.includes(r.id) ? 'selected-row' : ''}>
+                  {/* Only show checkbox for admin */}
+                  {isAdmin && (
+                    <td className="table-cell">
+                      <input
+                        type="checkbox"
+                        checked={selectedPayments.includes(r.id)}
+                        onChange={() => handleSelectPayment(r.id)}
+                        disabled={loading}
+                      />
+                    </td>
+                  )}
+                  <td className="table-cell">{r.FactoryName}</td>
+                  <td className="table-cell">{r.BillNum}</td>
+                  <td className="table-cell">{r.BillDate ? formatDate(r.BillDate) : "N/A"}</td>
+                  <td className="table-cell" style={{ fontWeight: r.PaymentNumber ? 'bold' : 'normal' }}>
                     {r.PaymentNumber || "N/A"}
                   </td>
-                  <td style={{ padding: 8 }}>{r.PaymentDate ? formatDate(r.PaymentDate) : "N/A"}</td>
-                  <td style={{ padding: 8, textAlign: 'right' }}>{formatCurrency(r.ActualAmount)}</td>
-                  <td style={{ padding: 8, textAlign: 'right' }}>{formatCurrency(r.Tds)}</td>
-                  <td style={{ padding: 8, textAlign: 'right' }}>{formatCurrency(r.Gst)}</td>
-                  <td style={{ padding: 8, textAlign: 'right', fontWeight: 'bold', color: '#28a745' }}>
+                  <td className="table-cell">{r.PaymentDate ? formatDate(r.PaymentDate) : "N/A"}</td>
+                  <td className="table-cell amount-cell">{formatCurrency(r.ActualAmount)}</td>
+                  <td className="table-cell amount-cell">{formatCurrency(r.Tds)}</td>
+                  <td className="table-cell amount-cell">{formatCurrency(r.Gst)}</td>
+                  <td className="table-cell amount-cell currency-positive">
                     {formatCurrency(r.PaymentReceived)}
                   </td>
-                  <td style={{ padding: 8, textAlign: 'right', color: r.Shortage > 0 ? '#dc3545' : '#28a745' }}>
+                  <td className="table-cell amount-cell currency-negative">
                     {formatCurrency(r.Shortage)}
                   </td>
-                  <td style={{ padding: 8 }}>{r.BillType || "N/A"}</td>
+                  <td className="table-cell">{r.BillType || "N/A"}</td>
                 </tr>
               ))
             ) : !loading && (
               <tr>
-                <td colSpan="12" style={{ textAlign: 'center', padding: 20 }}>
+                <td colSpan={isAdmin ? "12" : "11"} className="no-data-message">
                   No payment records found. Try adjusting your filters.
                 </td>
               </tr>
@@ -804,32 +728,15 @@ const ShowPayment = () => {
 
       {/* ===== PAGINATION CONTROLS ===== */}
       {!loading && totalRecords > 0 && (
-        <div style={{ 
-          marginTop: 20, 
-          padding: 15, 
-          backgroundColor: '#f8f9fa', 
-          borderRadius: 5,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          border: '1px solid #dee2e6'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+        <div className="pagination-container">
+          <div className="pagination-controls">
             <span style={{ fontWeight: 'bold', marginRight: 10 }}>Page {currentPage} of {totalPages}</span>
             
             {/* First and Previous buttons */}
             <button
               onClick={() => handlePageChange(1)}
               disabled={currentPage === 1}
-              style={{
-                padding: '8px 12px',
-                backgroundColor: currentPage === 1 ? '#e9ecef' : '#007bff',
-                color: currentPage === 1 ? '#6c757d' : 'white',
-                border: 'none',
-                borderRadius: 4,
-                cursor: currentPage === 1 ? 'not-allowed' : 'pointer',
-                fontWeight: 'bold'
-              }}
+              className={`page-button ${currentPage === 1 ? 'disabled-page-button' : ''}`}
               title="First Page"
             >
               ««
@@ -838,14 +745,7 @@ const ShowPayment = () => {
             <button
               onClick={() => handlePageChange(currentPage - 1)}
               disabled={currentPage === 1}
-              style={{
-                padding: '8px 12px',
-                backgroundColor: currentPage === 1 ? '#e9ecef' : '#007bff',
-                color: currentPage === 1 ? '#6c757d' : 'white',
-                border: 'none',
-                borderRadius: 4,
-                cursor: currentPage === 1 ? 'not-allowed' : 'pointer'
-              }}
+              className={`page-button ${currentPage === 1 ? 'disabled-page-button' : ''}`}
               title="Previous Page"
             >
               «
@@ -858,14 +758,7 @@ const ShowPayment = () => {
                 <>
                   <button
                     onClick={() => handlePageChange(1)}
-                    style={{
-                      padding: '8px 12px',
-                      backgroundColor: '#6c757d',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: 4,
-                      cursor: 'pointer'
-                    }}
+                    className="page-button"
                   >
                     1
                   </button>
@@ -892,15 +785,7 @@ const ShowPayment = () => {
                   <button
                     key={pageNum}
                     onClick={() => handlePageChange(pageNum)}
-                    style={{
-                      padding: '8px 12px',
-                      backgroundColor: currentPage === pageNum ? '#495057' : '#6c757d',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: 4,
-                      cursor: 'pointer',
-                      fontWeight: currentPage === pageNum ? 'bold' : 'normal'
-                    }}
+                    className={`page-button ${currentPage === pageNum ? 'current-page-button' : ''}`}
                   >
                     {pageNum}
                   </button>
@@ -913,14 +798,7 @@ const ShowPayment = () => {
                   {currentPage < totalPages - 3 && <span style={{ padding: '8px 0' }}>...</span>}
                   <button
                     onClick={() => handlePageChange(totalPages)}
-                    style={{
-                      padding: '8px 12px',
-                      backgroundColor: '#6c757d',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: 4,
-                      cursor: 'pointer'
-                    }}
+                    className="page-button"
                   >
                     {totalPages}
                   </button>
@@ -932,14 +810,7 @@ const ShowPayment = () => {
             <button
               onClick={() => handlePageChange(currentPage + 1)}
               disabled={currentPage === totalPages}
-              style={{
-                padding: '8px 12px',
-                backgroundColor: currentPage === totalPages ? '#e9ecef' : '#007bff',
-                color: currentPage === totalPages ? '#6c757d' : 'white',
-                border: 'none',
-                borderRadius: 4,
-                cursor: currentPage === totalPages ? 'not-allowed' : 'pointer'
-              }}
+              className={`page-button ${currentPage === totalPages ? 'disabled-page-button' : ''}`}
               title="Next Page"
             >
               »
@@ -948,15 +819,7 @@ const ShowPayment = () => {
             <button
               onClick={() => handlePageChange(totalPages)}
               disabled={currentPage === totalPages}
-              style={{
-                padding: '8px 12px',
-                backgroundColor: currentPage === totalPages ? '#e9ecef' : '#007bff',
-                color: currentPage === totalPages ? '#6c757d' : 'white',
-                border: 'none',
-                borderRadius: 4,
-                cursor: currentPage === totalPages ? 'not-allowed' : 'pointer',
-                fontWeight: 'bold'
-              }}
+              className={`page-button ${currentPage === totalPages ? 'disabled-page-button' : ''}`}
               title="Last Page"
             >
               »»
@@ -977,7 +840,7 @@ const ShowPayment = () => {
                   handlePageChange(page);
                 }
               }}
-                            onBlur={(e) => {
+              onBlur={(e) => {
                 const page = parseInt(e.target.value);
                 if (page >= 1 && page <= totalPages) {
                   handlePageChange(page);
@@ -985,39 +848,16 @@ const ShowPayment = () => {
                   e.target.value = currentPage;
                 }
               }}
-              style={{
-                padding: '8px',
-                width: '60px',
-                textAlign: 'center',
-                borderRadius: 4,
-                border: '1px solid #ccc'
-              }}
+              className="go-to-page-input"
             />
           </div>
         </div>
       )}
 
-      {/* ===== DELETE CONFIRMATION MODAL ===== */}
-      {showConfirmDelete && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.5)',
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center',
-          zIndex: 1000
-        }}>
-          <div style={{
-            backgroundColor: 'white',
-            padding: 30,
-            borderRadius: 8,
-            maxWidth: 500,
-            width: '90%'
-          }}>
+      {/* ===== DELETE CONFIRMATION MODAL (Only for Admin) ===== */}
+      {isAdmin && showConfirmDelete && (
+        <div className="modal-overlay">
+          <div className="modal-content">
             <h3 style={{ marginTop: 0, color: '#dc3545' }}>
               Confirm Reset Payments
             </h3>
@@ -1025,46 +865,21 @@ const ShowPayment = () => {
               Are you sure you want to reset {selectedPayments.length} selected payments? 
               This will reset their payment information to zero.
             </p>
-            <p style={{ 
-              backgroundColor: '#fff3cd', 
-              padding: 10, 
-              borderRadius: 4,
-              border: '1px solid #ffeaa7',
-              marginBottom: 20
-            }}>
+            <div className="warning-box">
               <strong>Note:</strong> This action cannot be undone.
-            </p>
-            <div style={{ 
-              display: 'flex', 
-              justifyContent: 'flex-end', 
-              gap: 10 
-            }}>
+            </div>
+            <div className="modal-buttons">
               <button
                 onClick={() => setShowConfirmDelete(false)}
                 disabled={loading}
-                style={{
-                  padding: '10px 20px',
-                  backgroundColor: '#6c757d',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: 4,
-                  cursor: loading ? 'not-allowed' : 'pointer'
-                }}
+                className="modal-button cancel-button"
               >
                 Cancel
               </button>
               <button
                 onClick={confirmDelete}
                 disabled={loading}
-                style={{
-                  padding: '10px 20px',
-                  backgroundColor: '#dc3545',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: 4,
-                  cursor: loading ? 'not-allowed' : 'pointer',
-                  fontWeight: 'bold'
-                }}
+                className="modal-button delete-button"
               >
                 {loading ? 'Resetting...' : 'Yes, Reset Payments'}
               </button>
