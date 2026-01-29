@@ -119,13 +119,20 @@ const ShowDispatch = () => {
       
       // Only add factory filter if selected
       if (appliedFilters.filterFactory) {
+        // Filter by normalized factory name
         conditions.push(where("FactoryName", "==", appliedFilters.filterFactory));
+        
+        // Also check for DisVid mapping if the factory is from factoryMap
+        const reverseMap = Object.entries(factoryMap).find(
+          ([, value]) => value === appliedFilters.filterFactory
+        );
+        if (reverseMap) {
+          const [disVid] = reverseMap;
+          // If we have DisVid, we could add an OR condition, but Firestore doesn't support OR in the same query easily
+          // We'll handle this in local filtering instead
+        }
       }
       
-      // Date filtering requires separate handling since Firestore doesn't support range with different fields
-      // We'll fetch and filter locally for dates
-      
-      // If we have conditions, create a query, otherwise fetch all
       let querySnapshot;
       if (conditions.length > 0) {
         const firestoreQuery = query(q, ...conditions);
@@ -150,12 +157,10 @@ const ShowDispatch = () => {
           );
         }
 
-        // Apply factory name fixes
+        // Normalize FactoryName consistently
         if (row.FactoryName) {
-          const fixedName = FACTORY_NAME_FIXES[row.FactoryName.toUpperCase()];
-          if (fixedName) {
-            row.FactoryName = fixedName;
-          }
+          const upperFactory = row.FactoryName.toUpperCase();
+          row.FactoryName = FACTORY_NAME_FIXES[upperFactory] || upperFactory;
         } else if (row.DisVid) {
           row.FactoryName = factoryMap[row.DisVid] || "";
         }
@@ -163,8 +168,16 @@ const ShowDispatch = () => {
         return row;
       });
 
-      // Apply date filtering locally if needed
+      // Apply additional local filtering for DisVid mapping and dates
       let filteredData = data;
+      
+      // Additional factory filtering for DisVid mapped records
+      if (appliedFilters.filterFactory) {
+        filteredData = filteredData.filter(d => {
+          const recordFactory = d.FactoryName || "";
+          return recordFactory === appliedFilters.filterFactory;
+        });
+      }
       
       // Apply date range filtering
       if (appliedFilters.fromDate || appliedFilters.toDate) {
@@ -201,17 +214,36 @@ const ShowDispatch = () => {
 
   /* ================= APPLY FILTERS ================= */
   const applyFilters = () => {
+    // Normalize factory name to match data normalization
+    let normalizedFactory = "";
+    if (filterFactory) {
+      // First check for direct match in fixes
+      const fixedName = FACTORY_NAME_FIXES[filterFactory.toUpperCase()];
+      if (fixedName) {
+        normalizedFactory = fixedName;
+      } else {
+        // Use the factory name as-is but uppercase for consistency
+        normalizedFactory = filterFactory.toUpperCase();
+      }
+    }
+
     // Set applied filters
     setAppliedFilters({
       searchTerm,
-      filterFactory,
+      filterFactory: normalizedFactory,
       fromDate,
       toDate
     });
     
-    // Fetch data with filters
-    fetchDispatches();
+    // Don't fetch here - let useEffect handle it
   };
+
+  // Fetch data when appliedFilters changes
+  useEffect(() => {
+    if (appliedFilters.filterFactory !== "" || appliedFilters.fromDate || appliedFilters.toDate) {
+      fetchDispatches();
+    }
+  }, [appliedFilters]);
 
   /* ================= CLEAR FILTERS ================= */
   const clearFilters = () => {

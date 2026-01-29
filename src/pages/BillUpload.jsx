@@ -24,28 +24,62 @@ const safeNum = (v) => {
   return isNaN(n) ? 0 : n;
 };
 
-/* ===== PARSE dd-mm-yy FORMAT ===== */
-const parseDDMMYY = (v) => {
+/* ===== ENHANCED DATE PARSER ===== */
+const parseExcelDate = (v, factory) => {
   if (!v) return null;
 
+  // If it's already a Date object
   if (v instanceof Date) return v;
+  
+  // Excel serial number (for dates stored as numbers)
   if (typeof v === "number") {
     return new Date(Math.round((v - 25569) * 86400 * 1000));
   }
 
   const str = String(v).trim();
-  const match = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})$/);
-
-  if (match) {
-    const d = parseInt(match[1], 10);
-    const m = parseInt(match[2], 10) - 1;
-    let y = parseInt(match[3], 10);
+  
+  // Try multiple date formats
+  // Format 1: dd-mm-yy or dd/mm/yy
+  const match1 = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})$/);
+  if (match1) {
+    const d = parseInt(match1[1], 10);
+    const m = parseInt(match1[2], 10) - 1;
+    let y = parseInt(match1[3], 10);
     if (y < 100) y = y <= 50 ? y + 2000 : y + 1900;
     const dt = new Date(y, m, d);
     if (!isNaN(dt.getTime())) return dt;
   }
+  
+  // Format 2: dd-mmm-yy (e.g., "29-Jan-26" for JSW)
+  const match2 = str.match(/^(\d{1,2})[-/](\w{3})[-/](\d{2,4})$/i);
+  if (match2) {
+    const d = parseInt(match2[1], 10);
+    const monthStr = match2[2].toLowerCase();
+    let y = parseInt(match2[3], 10);
+    if (y < 100) y = y <= 50 ? y + 2000 : y + 1900;
+    
+    const months = {
+      'jan': 0, 'feb': 1, 'mar': 2, 'apr': 3, 'may': 4, 'jun': 5,
+      'jul': 6, 'aug': 7, 'sep': 8, 'oct': 9, 'nov': 10, 'dec': 11
+    };
+    
+    const m = months[monthStr];
+    if (m !== undefined) {
+      const dt = new Date(y, m, d);
+      if (!isNaN(dt.getTime())) return dt;
+    }
+  }
 
   return null;
+};
+
+/* ===== GET BILL TYPE ===== */
+const getBillType = (billTypeOrLR, factory) => {
+  if (factory === "JSW") {
+    // For JSW, use a default value or extract from other logic
+    return "Regular"; // or whatever default makes sense
+  }
+  return String(billTypeOrLR || "").trim();
 };
 
 /* =====================================================
@@ -122,12 +156,15 @@ const BillUpload = () => {
           const unitPrice = safeNum(row[6]);
           const finalPrice = safeNum(row[7]);
           const billNum = String(row[8] || "").trim();
-          const billDate = parseDDMMYY(row[9]);
-          const billType = String(row[10] || "").trim();
+          const billDate = parseExcelDate(row[9], factory);
+          const billTypeOrLR = String(row[10] || "").trim();
           const deliveryNum = String(row[11] || "").trim();
 
+          // For JSW, we need to handle the LR number in billTypeOrLR column
+          const billType = getBillType(billTypeOrLR, factory);
+
           if (!challanNo || !billNum || !billDate) {
-            addLog(`Row ${i}: Missing required fields`, "warning");
+            addLog(`Row ${i}: Missing required fields (ChallanNo: ${challanNo}, BillNum: ${billNum}, BillDate: ${row[9]})`, "warning");
             skipped++;
             continue;
           }
@@ -141,7 +178,7 @@ const BillUpload = () => {
 
             const ds = await getDocs(dq);
             if (ds.empty) {
-              addLog(`Row ${i}: Dispatch not found for challan ${challanNo}`, "warning");
+              addLog(`Row ${i}: Dispatch not found for challan ${challanNo} in ${factory}`, "warning");
               skipped++;
               continue;
             }
@@ -161,18 +198,26 @@ const BillUpload = () => {
               billId = bs.docs[0].id;
               addLog(`Row ${i}: Using existing bill ${billNum}`, "info");
             } else {
-              const billRef = await addDoc(collection(db, "BillTable"), {
+              // For JSW, store LR number in a separate field if needed
+              const billData = {
                 BillNum: billNum,
                 BillDate: billDate,
                 BillType: billType,
                 FactoryName: factory,
                 CreatedOn: serverTimestamp()
-              });
+              };
+              
+              // Add LR number for JSW if present
+              if (factory === "JSW" && billTypeOrLR) {
+                billData.LRNumber = billTypeOrLR;
+              }
+              
+              const billRef = await addDoc(collection(db, "BillTable"), billData);
               billId = billRef.id;
               addLog(`Row ${i}: Created new bill ${billNum}`, "success");
             }
 
-            await updateDoc(doc(db, "TblDispatch", dispatchDoc.id), {
+            const updateData = {
               DispatchQuantity: quantity,
               UnitPrice: unitPrice,
               FinalPrice: finalPrice,
@@ -180,7 +225,14 @@ const BillUpload = () => {
               BillID: billId,
               BillNum: billNum,
               UpdatedAt: serverTimestamp()
-            });
+            };
+            
+            // Add LR number to dispatch for JSW if needed
+            if (factory === "JSW" && billTypeOrLR) {
+              updateData.LRNumber = billTypeOrLR;
+            }
+            
+            await updateDoc(doc(db, "TblDispatch", dispatchDoc.id), updateData);
 
             success++;
             addLog(`Row ${i}: Successfully updated challan ${challanNo}`, "success");
@@ -288,6 +340,15 @@ const BillUpload = () => {
             </div>
           </div>
 
+          <div className="factory-specific-note">
+            {factory === "JSW" && (
+              <div className="note-jsw">
+                <strong>⚠️ JSW Format Note:</strong>
+                <p>Column K should contain LR numbers. BillType will be set to "Regular" by default.</p>
+              </div>
+            )}
+          </div>
+
           {loading && (
             <div className="progress-container">
               <div className="progress-bar">
@@ -344,17 +405,18 @@ const BillUpload = () => {
                   <th>Column</th>
                   <th>Field</th>
                   <th>Required</th>
+                  <th>JSW Specific</th>
                 </tr>
               </thead>
               <tbody>
-                <tr><td>A</td><td>ChallanNo</td><td>✅</td></tr>
-                <tr><td>E</td><td>Quantity</td><td>✅</td></tr>
-                <tr><td>G</td><td>UnitPrice</td><td>✅</td></tr>
-                <tr><td>H</td><td>FinalPrice</td><td>✅</td></tr>
-                <tr><td>I</td><td>BillNum</td><td>✅</td></tr>
-                <tr><td>J</td><td>BillDate (dd-mm-yy)</td><td>✅</td></tr>
-                <tr><td>K</td><td>BillType</td><td>✅</td></tr>
-                <tr><td>L</td><td>DeliveryNum</td><td>✅</td></tr>
+                <tr><td>A</td><td>ChallanNo</td><td>✅</td><td>-</td></tr>
+                <tr><td>E</td><td>Quantity</td><td>✅</td><td>-</td></tr>
+                <tr><td>G</td><td>UnitPrice</td><td>✅</td><td>-</td></tr>
+                <tr><td>H</td><td>FinalPrice</td><td>✅</td><td>-</td></tr>
+                <tr><td>I</td><td>BillNum</td><td>✅</td><td>-</td></tr>
+                <tr><td>J</td><td>BillDate</td><td>✅</td><td>Accepts dd-mmm-yy (29-Jan-26)</td></tr>
+                <tr><td>K</td><td>BillType</td><td>✅</td><td>For JSW: Contains LR numbers</td></tr>
+                <tr><td>L</td><td>DeliveryNum</td><td>✅</td><td>-</td></tr>
               </tbody>
             </table>
           </div>

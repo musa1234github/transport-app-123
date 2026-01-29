@@ -1,11 +1,13 @@
-/* ShowPayment.css */
+/* ShowPayment.css - Updated for better filter bar layout */
 
 /* Container Styles */
 .container {
   padding: 20px;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
-/* Filter Bar Styles */
+/* Filter Bar Styles - Updated for better responsiveness */
 .filter-bar {
   margin-bottom: 15px;
   padding: 15px;
@@ -15,22 +17,55 @@
   flex-wrap: wrap;
   gap: 10px;
   align-items: center;
+  justify-content: space-between;
 }
 
+/* Filter inputs and selects */
 .filter-input {
-  width: 250px;
+  min-width: 180px;
+  max-width: 250px;
   padding: 8px;
+  flex: 1;
 }
 
 .filter-select {
+  min-width: 150px;
+  max-width: 180px;
   padding: 8px;
-  width: 200px;
+  flex: 1;
 }
 
+/* Date filters */
 .date-filter-container {
   display: flex;
   align-items: center;
   gap: 5px;
+  min-width: 180px;
+  flex: 1;
+}
+
+.date-filter-container label {
+  white-space: nowrap;
+  font-weight: bold;
+  color: #495057;
+  font-size: 14px;
+}
+
+.date-filter-container input[type="date"] {
+  flex: 1;
+  min-width: 120px;
+  padding: 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+/* Filter buttons container */
+.filter-buttons-container {
+  display: flex;
+  gap: 10px;
+  min-width: 220px;
+  flex: 1;
+  justify-content: flex-start;
 }
 
 .filter-button {
@@ -40,6 +75,9 @@
   border-radius: 4px;
   cursor: pointer;
   opacity: 1;
+  white-space: nowrap;
+  min-width: 120px;
+  font-weight: bold;
 }
 
 .filter-button:disabled {
@@ -55,11 +93,15 @@
   background-color: #f44336;
 }
 
-/* Export Button Styles */
+/* Export Button Styles - Moved to separate row */
 .export-button-group {
   display: flex;
   gap: 10px;
-  margin-left: auto;
+  width: 100%;
+  margin-top: 10px;
+  justify-content: flex-end;
+  border-top: 1px solid #ddd;
+  padding-top: 10px;
 }
 
 .export-button {
@@ -72,6 +114,7 @@
   gap: 5px;
   cursor: pointer;
   opacity: 1;
+  white-space: nowrap;
 }
 
 .export-button:disabled {
@@ -85,6 +128,30 @@
 
 .export-selected-button {
   background-color: #FF9800;
+}
+
+/* For smaller screens - responsive layout */
+@media (max-width: 1200px) {
+  .filter-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .filter-input,
+  .filter-select,
+  .date-filter-container,
+  .filter-buttons-container {
+    max-width: 100%;
+    width: 100%;
+  }
+  
+  .date-filter-container {
+    justify-content: space-between;
+  }
+  
+  .filter-buttons-container {
+    justify-content: center;
+  }
 }
 
 /* Records Per Page Selector */
@@ -253,17 +320,27 @@
 .loading-message {
   text-align: center;
   padding: 20px;
+  background-color: #e7f3fe;
+  border-radius: 5px;
+  margin: 20px 0;
+  border-left: 4px solid #2196F3;
 }
 
 .exporting-message {
   text-align: center;
   padding: 10px;
   color: #2196F3;
+  background-color: #e7f3fe;
+  border-radius: 5px;
+  margin: 20px 0;
 }
 
 .no-data-message {
   text-align: center;
   padding: 20px;
+  color: #6c757d;
+  background-color: #f8f9fa;
+  border-radius: 5px;
 }
 
 /* Helper Classes */
@@ -282,4 +359,30 @@
 
 .currency-negative {
   color: #dc3545;
+}
+
+/* Data Prompt Styles */
+.data-prompt {
+  margin: 30px 0;
+  padding: 40px 20px;
+  background-color: #f8f9fa;
+  border-radius: 8px;
+  border: 2px dashed #dee2e6;
+  text-align: center;
+}
+
+.prompt-content {
+  max-width: 500px;
+  margin: 0 auto;
+}
+
+.prompt-content h3 {
+  color: #495057;
+  margin-bottom: 15px;
+}
+
+.prompt-content p {
+  color: #6c757d;
+  margin-bottom: 10px;
+  line-height: 1.5;
 }

@@ -34,8 +34,8 @@ const Home = ({ user, userRole }) => {
               {userRole === "admin"
                 ? "Admin"
                 : userRole === "dispatcher"
-                ? "Dispatcher"
-                : "User"}
+                  ? "Dispatcher"
+                  : "User"}
               )
             </span>
           </div>
@@ -74,6 +74,14 @@ const Home = ({ user, userRole }) => {
               <li><Link to="/vehicle-master" style={menuLink}>🚛 Vehicle Master</Link></li>
             </>
           )}
+          {isAdmin && (
+            <li>
+              <Link to="/show-billed-challan" style={menuLink}>
+                🗺️ Show Billed Challan
+              </Link>
+            </li>
+          )}
+
 
           <li><Link to="/factories" style={menuLink}>🏭 Factories</Link></li>
           <li><Link to="/show-dispatch" style={menuLink}>📦 Show Dispatch</Link></li>
