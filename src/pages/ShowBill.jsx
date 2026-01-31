@@ -106,6 +106,8 @@ const ShowBill = ({ userRole }) => {
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [dataLoaded, setDataLoaded] = useState(false); // Track if data has been loaded
+  const [factories, setFactories] = useState([]); // Separate state for factories
+  const [loadingFactories, setLoadingFactories] = useState(true); // Track factory loading
 
   // Check if user is admin
   const isAdmin = userRole === "admin";
@@ -127,6 +129,31 @@ const ShowBill = ({ userRole }) => {
     searchBill: "",
     factoryFilter: ""
   });
+
+  /* ================= LOAD FACTORIES ON MOUNT ================= */
+  const loadFactories = async () => {
+    setLoadingFactories(true);
+    try {
+      const billQuery = query(collection(db, "BillTable"));
+      const billSnap = await getDocs(billQuery);
+      
+      // Extract unique factory names from all bills
+      const factorySet = new Set();
+      billSnap.docs.forEach(b => {
+        const data = b.data();
+        if (data.FactoryName) {
+          factorySet.add(data.FactoryName);
+        }
+      });
+      
+      const factoriesList = Array.from(factorySet).sort();
+      setFactories(factoriesList);
+    } catch (error) {
+      console.error("Error loading factories:", error);
+    } finally {
+      setLoadingFactories(false);
+    }
+  };
 
   /* ================= LOAD DATA ================= */
   const load = async () => {
@@ -281,6 +308,11 @@ const ShowBill = ({ userRole }) => {
     }
   };
 
+  /* ===== LOAD FACTORIES ON COMPONENT MOUNT ===== */
+  useEffect(() => {
+    loadFactories();
+  }, []);
+
   /* ===== LOAD WHEN APPLIED FILTERS CHANGE ===== */
   useEffect(() => {
     // Only load data if appliedFilters have changed and data hasn't been loaded yet
@@ -319,12 +351,6 @@ const ShowBill = ({ userRole }) => {
     setDataLoaded(false);
     setSelectedBills([]);
   };
-
-  /* ===== FACTORY LIST ===== */
-  const factories = useMemo(
-    () => [...new Set(rows.map(r => r["Factory Name"]).filter(Boolean))],
-    [rows]
-  );
 
   /* ================= PAGINATION CALCULATIONS ================= */
   const filteredRows = useMemo(() => {
@@ -665,12 +691,18 @@ const ShowBill = ({ userRole }) => {
             value={factoryFilter}
             onChange={e => setFactoryFilter(e.target.value)}
             className="filter-select"
+            disabled={loadingFactories}
           >
             <option value="">Select Factory</option>
-            {dataLoaded && factories.map(f => (
-              <option key={f} value={f}>{f}</option>
-            ))}
+            {loadingFactories ? (
+              <option value="" disabled>Loading factories...</option>
+            ) : (
+              factories.map(f => (
+                <option key={f} value={f}>{f}</option>
+              ))
+            )}
           </select>
+          {loadingFactories && <span className="loading-text">Loading factories...</span>}
         </div>
 
         <div className="flex items-center gap-5">
