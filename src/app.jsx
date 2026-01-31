@@ -74,7 +74,9 @@ const App = () => {
     );
   }
 
-  const canUpload = userRole === "admin" || userRole === "dispatcher";
+  const canUploadDispatch = userRole === "admin" || userRole === "dispatcher";
+  const canUploadBilling = userRole === "admin";
+
   const canSeeCrudControls = userRole === "admin"; // Only admin should see CRUD controls
 
   return (
@@ -116,17 +118,16 @@ const App = () => {
           }
         >
           {/* ===== UPLOAD / MASTER (ADMIN + DISPATCHER) ===== */}
-          {canUpload && (
+          {/* ===== DISPATCH UPLOAD ===== */}
+          {canUploadDispatch && (
+            <Route path="upload-dispatch" element={<UploadDispatch />} />
+          )}
+
+          {/* ===== BILL + PAYMENT (ADMIN ONLY) ===== */}
+          {canUploadBilling && (
             <>
-              <Route path="upload-dispatch" element={<UploadDispatch />} />
               <Route path="bill-upload" element={<BillUpload />} />
               <Route path="payment-upload" element={<PaymentUpload />} />
-              <Route path="destination-master" element={<DestinationMaster />} />
-              <Route path="delete-dispatch" element={<DeleteDispatch />} />
-              <Route
-                path="delete-duplicate-challan"
-                element={<DeleteDuplicateChallan />}
-              />
             </>
           )}
 
@@ -135,12 +136,12 @@ const App = () => {
           <Route path="factories" element={<FactoryList />} />
           <Route path="show-dispatch" element={<ShowDispatch />} />
           <Route path="vehicle-master" element={<VehicleMaster />} />
-          <Route 
-            path="show-bill" 
+          <Route
+            path="show-bill"
             element={<ShowBill userRole={userRole} />}
           />
-          <Route 
-            path="show-payment" 
+          <Route
+            path="show-payment"
             element={<ShowPayment userRole={userRole} />}
           />
           <Route path="show-billed-challan" element={<ShoBilledChallan />} />

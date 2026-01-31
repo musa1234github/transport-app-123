@@ -3,9 +3,11 @@ import { signOut } from "firebase/auth";
 import { Link, Outlet } from "react-router-dom";
 import { auth } from "../firebaseConfig";
 
-const Home = ({ user, userRole }) => {
-  const canUpload = userRole === "admin" || userRole === "dispatcher";
+  const Home = ({ user, userRole }) => {
+  const canUploadDispatch = userRole === "admin" || userRole === "dispatcher";
+  const canUploadBilling = userRole === "admin";
   const isAdmin = userRole === "admin";
+
 
   const handleLogout = async () => {
     await signOut(auth);
@@ -60,11 +62,26 @@ const Home = ({ user, userRole }) => {
             flexWrap: "wrap"
           }}
         >
-          {canUpload && (
+          {canUploadDispatch && (
+            <li>
+              <Link to="/upload-dispatch" style={menuLink}>
+                🚚 Dispatch Upload
+              </Link>
+            </li>
+          )}
+
+          {canUploadBilling && (
             <>
-              <li><Link to="/upload-dispatch" style={menuLink}>🚚 Dispatch Upload</Link></li>
-              <li><Link to="/bill-upload" style={menuLink}>🧾 Bill Upload</Link></li>
-              <li><Link to="/payment-upload" style={menuLink}>🧾 Payment Upload</Link></li>
+              <li>
+                <Link to="/bill-upload" style={menuLink}>
+                  🧾 Bill Upload
+                </Link>
+              </li>
+              <li>
+                <Link to="/payment-upload" style={menuLink}>
+                  🧾 Payment Upload
+                </Link>
+              </li>
             </>
           )}
 
