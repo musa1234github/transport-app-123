@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useState } from "react";
 import { db } from "../firebaseConfig";
-import { collection, getDocs } from "firebase/firestore";
+import { collection, query, where, getDocs, orderBy } from "firebase/firestore";
 
 const ShowQtyByMonth = () => {
   const [monthlyData, setMonthlyData] = useState([]);
@@ -21,12 +21,26 @@ const ShowQtyByMonth = () => {
       try {
         setLoading(true);
         
-        // Fetch dispatch data from TblDispatch
-        const dispatchSnapshot = await getDocs(collection(db, "TblDispatch"));
+        // Calculate date range for the selected year
+        const startDate = new Date(selectedYear, 0, 1); // Jan 1 of selected year
+        const endDate = new Date(selectedYear + 1, 0, 1); // Jan 1 of next year
+        
+        // Create query with date range filter - IMPORTANT: This reduces reads!
+        const dispatchQuery = query(
+          collection(db, "TblDispatch"),
+          where("DispatchDate", ">=", startDate),
+          where("DispatchDate", "<", endDate),
+          orderBy("DispatchDate") // Ordering is required when using inequality filters
+        );
+        
+        // Fetch only documents within the selected year
+        const dispatchSnapshot = await getDocs(dispatchQuery);
+        
+        console.log(`Fetched ${dispatchSnapshot.size} documents for year ${selectedYear}`);
         
         // Collect unique factory names
         const factoryNamesSet = new Set();
-        const factoryDataMap = new Map(); // Store factory data for processing
+        const factoryDataMap = new Map();
         
         const dispatchData = dispatchSnapshot.docs.map(doc => {
           const data = doc.data();
@@ -37,13 +51,17 @@ const ShowQtyByMonth = () => {
             dispatchDate = new Date(data.DispatchDate.seconds * 1000);
           } else if (data.DispatchDate) {
             dispatchDate = new Date(data.DispatchDate);
+          } else if (data.Date?.seconds) {
+            dispatchDate = new Date(data.Date.seconds * 1000);
+          } else if (data.Date) {
+            dispatchDate = new Date(data.Date);
           }
           
           // Parse quantities
           const dispatchQuantity = parseFloat(data.DispatchQuantity) || 0;
           const unitPrice = parseFloat(data.UnitPrice) || parseFloat(data.Rate) || 0;
           
-          // Get factory name - try different possible field names
+          // Get factory name
           let factoryName = "Unknown";
           if (data.FactoryName) {
             factoryName = data.FactoryName;
@@ -84,14 +102,17 @@ const ShowQtyByMonth = () => {
         const factoryNamesArray = Array.from(factoryNamesSet).sort();
         setAllFactories(factoryNamesArray);
         
-        // Log factory names for debugging
-        console.log("Available factories:", factoryNamesArray);
-        console.log("Factory mapping:", Array.from(factoryDataMap.entries()));
-        
         // Process data
         processMonthlyData(dispatchData, selectedYear);
       } catch (error) {
         console.error("Error fetching data:", error);
+        
+        // Fallback: If query fails due to missing index, fetch minimal data
+        // or prompt user to create the index
+        if (error.code === 'failed-precondition') {
+          console.error("Firestore index missing! Please create a composite index for TblDispatch with fields: DispatchDate ASC");
+          alert("Database index is being created. Please try again in a moment.");
+        }
       } finally {
         setLoading(false);
       }
@@ -107,12 +128,8 @@ const ShowQtyByMonth = () => {
     } else {
       const searchTerm = factorySearch.toLowerCase().trim();
       const filtered = monthlyData.filter(item => {
-        // Search in factory name
         const factoryMatch = item.Factory && item.Factory.toLowerCase().includes(searchTerm);
-        
-        // Also search in month name if needed
         const monthMatch = item.MonthName && item.MonthName.toLowerCase().includes(searchTerm);
-        
         return factoryMatch || monthMatch;
       });
       setFilteredData(filtered);
@@ -120,13 +137,14 @@ const ShowQtyByMonth = () => {
   }, [factorySearch, monthlyData]);
 
   const processMonthlyData = (dispatchData, year) => {
+    // Filter out items without valid dates
+    const validData = dispatchData.filter(item => item.DispatchDate instanceof Date);
+    
     // Group data by factory and month
     const groupedData = {};
     
     // Initialize structure for grouping
-    dispatchData.forEach(item => {
-      if (!item.DispatchDate) return;
-      
+    validData.forEach(item => {
       const itemYear = item.DispatchDate.getFullYear();
       if (itemYear !== year) return;
       
@@ -153,7 +171,6 @@ const ShowQtyByMonth = () => {
       groupedData[key].totalQty += item.DispatchQuantity;
       
       // Add to bill quantity only if UnitPrice > 0
-      // Note: Check different possible field names for billing
       const isBilled = item.UnitPrice > 0 || 
                       item.BillStatus === true || 
                       item.IsBilled === true ||
@@ -200,10 +217,21 @@ const ShowQtyByMonth = () => {
     }, { totalQty: 0, BillQty: 0, Balance: 0 });
   };
 
+  // Add a refresh button with confirmation
+  const handleRefresh = () => {
+    if (window.confirm("Refresh data for the current year?")) {
+      setLoading(true);
+      // The useEffect will automatically run when selectedYear changes
+      // Force a re-fetch by updating the year to itself
+      setSelectedYear(prev => prev);
+    }
+  };
+
   if (loading) {
     return (
       <div style={{ padding: 20, textAlign: "center" }}>
         <h3>Loading monthly quantity report...</h3>
+        <p>Fetching data for {selectedYear}...</p>
       </div>
     );
   }
@@ -222,8 +250,24 @@ const ShowQtyByMonth = () => {
         marginBottom: "20px",
         fontSize: "14px"
       }}>
+        <p><strong>Selected Year:</strong> {selectedYear}</p>
         <p><strong>Available Factories:</strong> {allFactories.join(", ")}</p>
-        <p><strong>Total Records:</strong> {monthlyData.length}</p>
+        <p><strong>Total Records:</strong> {monthlyData.length} monthly entries</p>
+        <button 
+          onClick={handleRefresh}
+          style={{
+            padding: "5px 10px",
+            backgroundColor: "#007bff",
+            color: "white",
+            border: "none",
+            borderRadius: "3px",
+            cursor: "pointer",
+            fontSize: "12px",
+            marginTop: "5px"
+          }}
+        >
+          Refresh Data
+        </button>
       </div>
       
       {/* Controls */}
@@ -291,6 +335,7 @@ const ShowQtyByMonth = () => {
         </div>
       </div>
       
+      {/* Rest of your component remains the same */}
       {filteredData.length === 0 ? (
         <div style={{ 
           padding: 40, 

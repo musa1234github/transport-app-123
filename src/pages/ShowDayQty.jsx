@@ -1,6 +1,6 @@
 ﻿import React, { useState, useEffect } from "react";
 import { db } from "../firebaseConfig";
-import { collection, getDocs } from "firebase/firestore";
+import { collection, query, where, getDocs, orderBy, limit } from "firebase/firestore";
 import "./ShowDayQty.css";
 
 const ShowDayQty = () => {
@@ -19,7 +19,13 @@ const ShowDayQty = () => {
     const fetchFactoryNames = async () => {
       try {
         setLoadingFactories(true);
-        const dispatchSnapshot = await getDocs(collection(db, "TblDispatch"));
+        // Try to fetch factory names with optimized query
+        const factoryQuery = query(
+          collection(db, "TblDispatch"),
+          limit(100) // Only fetch first 100 documents for factory names
+        );
+        
+        const dispatchSnapshot = await getDocs(factoryQuery);
 
         if (dispatchSnapshot.empty) {
           setAllFactories([]);
@@ -32,6 +38,7 @@ const ShowDayQty = () => {
           const data = doc.data();
           let factoryName = "Unknown";
 
+          // Check various possible factory name fields
           if (data.FactoryName) {
             factoryName = data.FactoryName;
           } else if (data.Factory) {
@@ -53,7 +60,7 @@ const ShowDayQty = () => {
 
         const sortedFactories = Array.from(factoryNamesSet).sort();
         setAllFactories(sortedFactories);
-        console.log("Loaded factories:", sortedFactories);
+        console.log("Loaded factories:", sortedFactories.length, "factories");
 
       } catch (error) {
         console.error("Error fetching factory names:", error);
@@ -64,7 +71,7 @@ const ShowDayQty = () => {
     };
 
     fetchFactoryNames();
-  }, []); // Empty dependency array means this runs once on mount
+  }, []);
 
   const parseDate = (dateValue) => {
     if (!dateValue) return null;
@@ -90,6 +97,40 @@ const ShowDayQty = () => {
     }
   };
 
+  const parseDateString = (dateStr) => {
+    if (!dateStr.trim()) return { startDate: null, endDate: null, isValid: false };
+    
+    try {
+      const parts = dateStr.split('/');
+      if (parts.length === 3) {
+        const day = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10) - 1;
+        const year = parseInt(parts[2], 10);
+        
+        if (isNaN(day) || isNaN(month) || isNaN(year)) {
+          return { startDate: null, endDate: null, isValid: false };
+        }
+        
+        // Create date at start of day
+        const startDate = new Date(year, month, day, 0, 0, 0);
+        
+        // Create date at end of day
+        const endDate = new Date(year, month, day + 1, 0, 0, 0);
+        
+        return { 
+          startDate: startDate, 
+          endDate: endDate, 
+          startTimestamp: Math.floor(startDate.getTime() / 1000),
+          endTimestamp: Math.floor(endDate.getTime() / 1000),
+          isValid: true 
+        };
+      }
+    } catch (err) {
+      console.error("Error parsing date string:", err);
+    }
+    return { startDate: null, endDate: null, isValid: false };
+  };
+
   const fetchData = async () => {
     if (!selectedDate && !selectedFactory) {
       setError("Please select at least a factory or date to filter");
@@ -103,10 +144,72 @@ const ShowDayQty = () => {
 
       console.log("Fetching data with filters:", { selectedDate, selectedFactory });
 
-      const dispatchSnapshot = await getDocs(collection(db, "TblDispatch"));
+      // Build query dynamically based on selected filters
+      let firestoreQuery;
+      let queryConditions = [];
+      
+      // Option 1: If date is selected, use Firestore query with date filter
+      if (selectedDate.trim()) {
+        const { startTimestamp, endTimestamp, isValid } = parseDateString(selectedDate);
+        
+        if (!isValid) {
+          setError("Invalid date format. Please use DD/MM/YYYY");
+          setLoading(false);
+          return;
+        }
+        
+        console.log("Using timestamp query for date:", { startTimestamp, endTimestamp });
+        
+        // Try query with Timestamp first
+        try {
+          firestoreQuery = query(
+            collection(db, "TblDispatch"),
+            where("DispatchDate", ">=", startTimestamp),
+            where("DispatchDate", "<", endTimestamp),
+            orderBy("DispatchDate")
+          );
+        } catch (queryError) {
+          console.log("Timestamp query failed, trying date object query");
+          
+          // Fallback to Date object query
+          const { startDate, endDate } = parseDateString(selectedDate);
+          firestoreQuery = query(
+            collection(db, "TblDispatch"),
+            where("DispatchDate", ">=", startDate),
+            where("DispatchDate", "<", endDate),
+            orderBy("DispatchDate")
+          );
+        }
+      } 
+      // Option 2: If no date but factory is selected, fetch limited recent data
+      else if (selectedFactory) {
+        // Fetch only recent data for performance
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        
+        firestoreQuery = query(
+          collection(db, "TblDispatch"),
+          where("DispatchDate", ">=", thirtyDaysAgo),
+          orderBy("DispatchDate", "desc"),
+          limit(1000)
+        );
+      }
+      // Option 3: Default fallback (shouldn't reach here due to validation)
+      else {
+        firestoreQuery = query(
+          collection(db, "TblDispatch"),
+          orderBy("DispatchDate", "desc"),
+          limit(500)
+        );
+      }
+
+      console.log("Executing Firestore query...");
+      const dispatchSnapshot = await getDocs(firestoreQuery);
+      console.log(`Fetched ${dispatchSnapshot.size} documents with filters`);
 
       if (dispatchSnapshot.empty) {
-        setError("No dispatch records found in the database.");
+        setError("No matching dispatch records found.");
+        setFilteredData([]);
         setLoading(false);
         return;
       }
@@ -134,6 +237,11 @@ const ShowDayQty = () => {
           factoryName = "Ultratech";
         } else if (data.DisVid) {
           factoryName = `Factory ${data.DisVid}`;
+        }
+
+        // Apply factory filter at application level if selected
+        if (selectedFactory && selectedFactory !== factoryName && selectedFactory !== "") {
+          return;
         }
 
         const dispatchQuantity = parseFloat(data.DispatchQuantity) || 0;
@@ -169,73 +277,47 @@ const ShowDayQty = () => {
 
       resultArray.sort((a, b) => {
         if (a.Factory === b.Factory) {
-          return b.Date - a.Date;
+          return b.Date - a.Date; // Most recent first
         }
         return a.Factory.localeCompare(b.Factory);
       });
 
       setDailyData(resultArray);
-
-      // Apply filters to the fetched data
-      applyFilters(resultArray, selectedDate, selectedFactory);
+      setFilteredData(resultArray);
 
     } catch (error) {
       console.error("Error fetching data:", error);
-      setError(`Failed to fetch data: ${error.message}`);
+      
+      // Handle specific errors
+      if (error.code === 'failed-precondition') {
+        setError("Database index is being created. Please try again in a moment or contact administrator.");
+      } else if (error.code === 'permission-denied') {
+        setError("Permission denied. Please check your Firebase rules.");
+      } else {
+        setError(`Failed to fetch data: ${error.message}`);
+      }
+      
+      // Clear data on error
+      setFilteredData([]);
     } finally {
       setLoading(false);
     }
   };
 
-  const applyFilters = (data, date, factory) => {
-    let filtered = [...data];
-
-    if (date.trim()) {
-      try {
-        const parts = date.split('/');
-        if (parts.length === 3) {
-          const day = parseInt(parts[0], 10);
-          const month = parseInt(parts[1], 10) - 1;
-          const year = parseInt(parts[2], 10);
-
-          const filterDate = new Date(year, month, day);
-
-          if (!isNaN(filterDate.getTime())) {
-            filtered = filtered.filter(item => {
-              const itemDate = item.Date;
-              return itemDate.getDate() === filterDate.getDate() &&
-                itemDate.getMonth() === filterDate.getMonth() &&
-                itemDate.getFullYear() === filterDate.getFullYear();
-            });
-          }
-        }
-      } catch (err) {
-        console.error("Error filtering by date:", err);
-      }
-    }
-
-    if (factory) {
-      filtered = filtered.filter(item => item.Factory === factory);
-    }
-
-    setFilteredData(filtered);
-  };
-
   const handleSearch = () => {
-    if (dailyData.length === 0) {
-      fetchData();
-    } else {
-      applyFilters(dailyData, selectedDate, selectedFactory);
-    }
+    // Clear existing data and fetch fresh with filters
+    setDailyData([]);
+    setFilteredData([]);
+    fetchData();
   };
 
   const handleClear = () => {
     setSelectedDate("");
     setSelectedFactory("");
     setFilteredData([]);
+    setDailyData([]);
     setHasSearched(false);
     setError(null);
-    setDailyData([]);
   };
 
   const handleTodayDate = () => {
@@ -253,11 +335,19 @@ const ShowDayQty = () => {
     }, { totalQty: 0, BillQty: 0, Balance: 0 });
   };
 
+  // Handle Enter key press for search
+  const handleKeyPress = (e) => {
+    if (e.key === 'Enter') {
+      handleSearch();
+    }
+  };
+
   if (loading) {
     return (
       <div className="loading-container">
         <h3>Loading data...</h3>
         <div className="loading-spinner"></div>
+        <p>Fetching data with optimized query...</p>
       </div>
     );
   }
@@ -268,13 +358,27 @@ const ShowDayQty = () => {
     <div className="container">
       <h1 className="title">Daily Quantity Report</h1>
 
+      {/* Debug Info */}
+      <div className="debug-panel">
+        <div className="debug-content">
+          <div>
+            <strong>Optimized Query Active:</strong> Using Firestore filters to reduce reads
+          </div>
+          <div style={{ fontSize: '12px', color: '#2c3e50' }}>
+            {selectedDate && `Date filter: ${selectedDate}`}
+            {selectedFactory && selectedDate && ' | '}
+            {selectedFactory && `Factory filter: ${selectedFactory}`}
+          </div>
+        </div>
+      </div>
+
       {/* Controls Section */}
       <div className="controls">
         <div className="controls-row">
           <div className="form-group">
             <label className="form-label">Select Factory:</label>
             {loadingFactories ? (
-              <div className="form-input" style={{ color: '#666', fontStyle: 'italic' }}>
+              <div className="form-input disabled" style={{ color: '#666', fontStyle: 'italic' }}>
                 Loading factories...
               </div>
             ) : (
@@ -295,32 +399,35 @@ const ShowDayQty = () => {
 
           <div className="form-group">
             <label className="form-label">Enter Date (DD/MM/YYYY):</label>
-            <input
-              type="text"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              placeholder="DD/MM/YYYY"
-              className="form-input"
-            />
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <input
+                type="text"
+                value={selectedDate}
+                onChange={(e) => setSelectedDate(e.target.value)}
+                onKeyPress={handleKeyPress}
+                placeholder="DD/MM/YYYY"
+                className="form-input"
+                style={{ flex: 1 }}
+              />
+              <button
+                onClick={handleTodayDate}
+                className="button button-secondary"
+                style={{ padding: '10px 15px', whiteSpace: 'nowrap' }}
+              >
+                Today
+              </button>
+            </div>
+            <small style={{ color: '#666', marginTop: '5px', display: 'block' }}>
+              Tip: Select a date for the most efficient query (reduces Firestore reads)
+            </small>
           </div>
         </div>
 
         <div className="controls-buttons">
           <button
-            onClick={handleTodayDate}
-            className="button button-secondary"
-          >
-            Today's Date
-          </button>
-
-          <button
             onClick={handleSearch}
-            className="button button-primary"
+            className={`button button-primary ${(!selectedDate && !selectedFactory) || loadingFactories ? 'disabled' : ''}`}
             disabled={(!selectedDate && !selectedFactory) || loadingFactories}
-            style={{
-              opacity: (!selectedDate && !selectedFactory) || loadingFactories ? 0.5 : 1,
-              cursor: (!selectedDate && !selectedFactory) || loadingFactories ? 'not-allowed' : 'pointer'
-            }}
           >
             Search
           </button>
@@ -329,8 +436,31 @@ const ShowDayQty = () => {
             onClick={handleClear}
             className="button button-secondary"
           >
-            Clear
+            Clear All
           </button>
+        </div>
+        
+        {/* Query Info */}
+        <div style={{ 
+          marginTop: '15px', 
+          fontSize: '12px', 
+          color: '#666', 
+          textAlign: 'center',
+          padding: '8px',
+          backgroundColor: '#e8f4f8',
+          borderRadius: '4px'
+        }}>
+          {hasSearched && filteredData.length > 0 ? (
+            <span>
+              <strong>✓ Query Successful:</strong> Loaded {filteredData.length} daily records 
+              {selectedDate && ` for ${selectedDate}`}
+              {selectedFactory && ` from ${selectedFactory}`}
+            </span>
+          ) : hasSearched ? (
+            <span>No records found with current filters</span>
+          ) : (
+            <span>Select filters and click Search to begin</span>
+          )}
         </div>
       </div>
 
@@ -342,17 +472,9 @@ const ShowDayQty = () => {
           <button
             onClick={() => setError(null)}
             className="retry-button"
-            style={{ marginTop: '10px' }}
           >
             Dismiss
           </button>
-        </div>
-      )}
-
-      {/* Loading factories message */}
-      {loadingFactories && !error && (
-        <div style={{ textAlign: 'center', padding: '20px', color: '#666' }}>
-          Loading factory list...
         </div>
       )}
 
@@ -368,57 +490,58 @@ const ShowDayQty = () => {
       {hasSearched && filteredData.length === 0 && !error && allFactories.length > 0 && (
         <div className="no-data">
           <h3 className="no-data-title">No matching records found</h3>
-          <p className="no-data-text">Try different filters or clear all filters to start over.</p>
+          <p className="no-data-text">
+            {selectedDate && `No records found for date: ${selectedDate}`}
+            {selectedFactory && selectedDate && ' and '}
+            {selectedFactory && !selectedDate && `No records found for factory: ${selectedFactory}`}
+            {!selectedDate && !selectedFactory && 'No records found with current filters'}
+          </p>
+          <p style={{ marginTop: '10px' }}>
+            <button 
+              onClick={handleClear}
+              className="button button-secondary"
+              style={{ padding: '8px 16px' }}
+            >
+              Clear Filters
+            </button>
+          </p>
         </div>
       )}
 
-      {/* Data Table */}
       {/* Data Table */}
       {filteredData.length > 0 && (
         <>
           <div className="table-container">
             <table className="data-table">
               <thead>
-                <tr style={{
-                  backgroundColor: '#2c3e50',
-                  color: 'white',
-                  fontWeight: '600'
-                }}>
-                  <th style={{
-                    padding: '12px 15px',
-                    border: '1px solid #34495e',
-                    textAlign: 'left'
-                  }}>Factory</th>
-                  <th style={{
-                    padding: '12px 15px',
-                    border: '1px solid #34495e',
-                    textAlign: 'left'
-                  }}>Date</th>
-                  <th style={{
-                    padding: '12px 15px',
-                    border: '1px solid #34495e',
-                    textAlign: 'right'
-                  }}>Total Quantity</th>
-                  <th style={{
-                    padding: '12px 15px',
-                    border: '1px solid #34495e',
-                    textAlign: 'right'
-                  }}>Bill Quantity</th>
-                  <th style={{
-                    padding: '12px 15px',
-                    border: '1px solid #34495e',
-                    textAlign: 'right'
-                  }}>Balance</th>
+                <tr className="table-header">
+                  <th style={{ width: '25%' }}>Factory</th>
+                  <th style={{ width: '20%' }}>Date</th>
+                  <th style={{ width: '18%' }} className="text-right">Total Quantity</th>
+                  <th style={{ width: '18%' }} className="text-right">Bill Quantity</th>
+                  <th style={{ width: '19%' }} className="text-right">Balance</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredData.map((item, index) => (
-                  <tr key={index} className="table-body">
-                    <td>{item.Factory}</td>
+                  <tr 
+                    key={`${item.Factory}_${item.FormattedDate}_${index}`} 
+                    className="table-body"
+                    style={{ 
+                      backgroundColor: index % 2 === 0 ? '#ffffff' : '#f9f9f9',
+                      borderBottom: '1px solid #eee'
+                    }}
+                  >
+                    <td style={{ fontWeight: '600' }}>{item.Factory}</td>
                     <td>{item.FormattedDate}</td>
                     <td className="text-right">{Math.round(item.totalQty * 100) / 100}</td>
                     <td className="text-right">{Math.round(item.BillQty * 100) / 100}</td>
-                    <td className="text-right">{Math.round(item.Balance * 100) / 100}</td>
+                    <td className="text-right" style={{ 
+                      fontWeight: 'bold',
+                      color: item.Balance >= 0 ? '#28a745' : '#dc3545'
+                    }}>
+                      {Math.round(item.Balance * 100) / 100}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -430,14 +553,43 @@ const ShowDayQty = () => {
             <div className="summary">
               <h3>Summary</h3>
               <div className="summary-stats">
-                <div>
-                  <strong>Total Dispatch:</strong> {Math.round(totals.totalQty * 100) / 100}
+                <div style={{ 
+                  backgroundColor: '#e7f3ff', 
+                  padding: '10px', 
+                  borderRadius: '6px',
+                  flex: 1
+                }}>
+                  <strong style={{ color: '#007bff' }}>Total Dispatch:</strong>
+                  <div style={{ fontSize: '20px', fontWeight: 'bold', marginTop: '5px' }}>
+                    {Math.round(totals.totalQty * 100) / 100}
+                  </div>
                 </div>
-                <div>
-                  <strong>Total Billed:</strong> {Math.round(totals.BillQty * 100) / 100}
+                <div style={{ 
+                  backgroundColor: '#e7f8e6', 
+                  padding: '10px', 
+                  borderRadius: '6px',
+                  flex: 1
+                }}>
+                  <strong style={{ color: '#28a745' }}>Total Billed:</strong>
+                  <div style={{ fontSize: '20px', fontWeight: 'bold', marginTop: '5px' }}>
+                    {Math.round(totals.BillQty * 100) / 100}
+                  </div>
                 </div>
-                <div>
-                  <strong>Balance:</strong> {Math.round(totals.Balance * 100) / 100}
+                <div style={{ 
+                  backgroundColor: totals.Balance >= 0 ? '#e6f7f9' : '#fde8e8', 
+                  padding: '10px', 
+                  borderRadius: '6px',
+                  flex: 1
+                }}>
+                  <strong style={{ color: totals.Balance >= 0 ? '#17a2b8' : '#dc3545' }}>Balance:</strong>
+                  <div style={{ 
+                    fontSize: '20px', 
+                    fontWeight: 'bold', 
+                    marginTop: '5px',
+                    color: totals.Balance >= 0 ? '#17a2b8' : '#dc3545'
+                  }}>
+                    {Math.round(totals.Balance * 100) / 100}
+                  </div>
                 </div>
               </div>
             </div>
