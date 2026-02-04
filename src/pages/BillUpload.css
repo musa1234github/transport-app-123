@@ -142,45 +142,78 @@
   font-size: 14px;
 }
 
-/* Progress Bar */
+/* Factory Specific Notes */
+.factory-specific-note {
+  margin: 20px 0;
+  padding: 16px;
+  background: #f8fafc;
+  border-radius: 8px;
+  border-left: 4px solid #3498db;
+}
+
+.note-jsw {
+  color: #2c3e50;
+}
+
+.note-mp-birla {
+  color: #2c3e50;
+}
+
+.factory-specific-note strong {
+  color: #3498db;
+}
+
+.factory-specific-note p {
+  margin: 8px 0 0 0;
+  font-size: 14px;
+  color: #7f8c8d;
+}
+
+/* Simple Progress Bar */
 .progress-container {
-  margin: 30px 0;
+  margin: 20px 0;
+}
+
+.progress-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.progress-label {
+  font-size: 14px;
+  color: #2c3e50;
+  font-weight: 500;
+}
+
+.progress-percent {
+  font-size: 14px;
+  font-weight: 600;
+  color: #3498db;
 }
 
 .progress-bar {
-  height: 8px;
+  height: 6px;
   background: #e1e8ed;
-  border-radius: 4px;
+  border-radius: 3px;
   overflow: hidden;
-  margin-bottom: 8px;
 }
 
 .progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #3498db, #2ecc71);
-  border-radius: 4px;
+  background: #3498db;
+  border-radius: 3px;
   transition: width 0.3s ease;
-}
-
-.progress-text {
-  display: block;
-  text-align: center;
-  color: #3498db;
-  font-weight: 600;
-  font-size: 14px;
 }
 
 /* Buttons */
 .button-group {
-  display: flex;
-  gap: 16px;
-  margin: 40px 0;
-  flex-wrap: wrap;
+  margin: 30px 0;
 }
 
 .btn {
-  flex: 1;
-  min-width: 200px;
+  width: 100%;
   padding: 16px 24px;
   border: none;
   border-radius: 10px;
@@ -209,15 +242,25 @@
   box-shadow: 0 8px 20px rgba(52, 152, 219, 0.3);
 }
 
-.btn-secondary {
-  background: white;
-  color: #3498db;
-  border: 2px solid #3498db;
+.btn-danger {
+  background: linear-gradient(135deg, #c53030, #9b2c2c);
+  color: white;
+  padding: 10px 20px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  transition: all 0.3s;
+  min-width: auto;
 }
 
-.btn-secondary:hover:not(:disabled) {
-  background: #f8fafc;
+.btn-danger:hover {
   transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(197, 48, 48, 0.3);
 }
 
 .btn-icon {
@@ -232,55 +275,119 @@
   animation: spin 1s linear infinite;
 }
 
+.spinner circle {
+  stroke-dasharray: 63;
+  stroke-dashoffset: 0;
+  stroke-linecap: round;
+  transform-origin: 50% 50%;
+  animation: dash 1.4s ease-in-out infinite;
+}
+
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
 
-/* Template Note */
-.template-note {
-  background: #f8fafc;
+@keyframes dash {
+  0% {
+    stroke-dashoffset: 63;
+    transform: rotate(0deg);
+  }
+  50% {
+    stroke-dashoffset: 15;
+    transform: rotate(180deg);
+  }
+  100% {
+    stroke-dashoffset: 63;
+    transform: rotate(360deg);
+  }
+}
+
+/* Failed Challans Section */
+.failed-container {
+  background: #fff5f5;
+  border: 1px solid #feb2b2;
   border-radius: 12px;
   padding: 24px;
-  margin-top: 40px;
+  margin: 30px 0;
 }
 
-.template-note h4 {
-  color: #2c3e50;
-  margin-bottom: 16px;
-  font-size: 18px;
-}
-
-.template-note p {
-  color: #7f8c8d;
+.failed-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   margin-bottom: 20px;
 }
 
-.format-table {
+.failed-header h4 {
+  color: #c53030;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  font-size: 18px;
+}
+
+.error-icon {
+  width: 22px;
+  height: 22px;
+  stroke: #c53030;
+}
+
+.failed-table {
   width: 100%;
   border-collapse: collapse;
   background: white;
   border-radius: 8px;
   overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
 }
 
-.format-table th {
-  background: #3498db;
-  color: white;
-  font-weight: 600;
+.failed-table th {
+  background: #fed7d7;
+  padding: 14px 16px;
   text-align: left;
-  padding: 12px 16px;
+  color: #742a2a;
+  font-weight: 600;
+  border-bottom: 2px solid #feb2b2;
 }
 
-.format-table td {
+.failed-table td {
   padding: 12px 16px;
-  border-bottom: 1px solid #e1e8ed;
+  border-bottom: 1px solid #fed7d7;
   color: #2c3e50;
 }
 
-.format-table tr:last-child td {
+.failed-table tr:last-child td {
   border-bottom: none;
+}
+
+.failed-row:hover {
+  background: #feebeb;
+}
+
+.challan-cell {
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-weight: 600;
+  color: #2c3e50;
+}
+
+.bill-cell {
+  font-weight: 500;
+}
+
+.error-cell {
+  color: #c53030;
+  max-width: 250px;
+  word-break: break-word;
+  font-size: 13px;
+}
+
+.reason-cell {
+  max-width: 150px;
+  word-break: break-word;
+  font-size: 13px;
+  color: #7f8c8d;
 }
 
 /* Log Container */
@@ -407,31 +514,34 @@
     font-size: 24px;
   }
   
-  .button-group {
-    flex-direction: column;
-  }
-  
   .btn {
-    min-width: 100%;
+    width: 100%;
   }
   
-  .format-table {
+  .failed-header {
+    flex-direction: column;
+    gap: 16px;
+    text-align: center;
+  }
+  
+  .failed-table {
     font-size: 14px;
   }
   
-  .format-table th,
-  .format-table td {
-    padding: 8px 12px;
+  .failed-table th,
+  .failed-table td {
+    padding: 10px 12px;
+  }
+  
+  .error-cell,
+  .reason-cell {
+    max-width: 120px;
   }
 }
 
 @media (max-width: 480px) {
   .upload-header {
     margin-bottom: 30px;
-  }
-  
-  .template-note {
-    padding: 16px;
   }
   
   .log-header {
@@ -447,5 +557,25 @@
   
   .log-time {
     min-width: auto;
+  }
+  
+  .failed-container {
+    padding: 16px;
+  }
+  
+  .failed-table {
+    display: block;
+    overflow-x: auto;
+  }
+  
+  .error-cell,
+  .reason-cell {
+    max-width: 100px;
+  }
+  
+  .progress-info {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
   }
 }

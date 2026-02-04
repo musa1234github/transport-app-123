@@ -14,7 +14,7 @@ import {
 import { db } from "../firebaseConfig";
 import "./BillUpload.css";
 
-const FACTORIES = ["MANIGARH", "ULTRATECH", "JSW"];
+const FACTORIES = ["MANIGARH", "ULTRATECH", "JSW", "MP BIRLA"];
 
 /* ===== SAFE NUMBER ===== */
 const safeNum = (v) => {
@@ -50,7 +50,7 @@ const parseExcelDate = (v, factory) => {
     if (!isNaN(dt.getTime())) return dt;
   }
   
-  // Format 2: dd-mmm-yy (e.g., "29-Jan-26" for JSW)
+  // Format 2: dd-mmm-yy (e.g., "17-Jul-25" for MP BIRLA)
   const match2 = str.match(/^(\d{1,2})[-/](\w{3})[-/](\d{2,4})$/i);
   if (match2) {
     const d = parseInt(match2[1], 10);
@@ -76,8 +76,12 @@ const parseExcelDate = (v, factory) => {
 /* ===== GET BILL TYPE ===== */
 const getBillType = (billTypeOrLR, factory) => {
   if (factory === "JSW") {
-    // For JSW, use a default value or extract from other logic
-    return "Regular"; // or whatever default makes sense
+    return "Regular";
+  }
+  // For MP BIRLA, column K contains bill type (like 5524.0, 5544.0)
+  if (factory === "MP BIRLA") {
+    const value = String(billTypeOrLR || "").trim();
+    return value.replace(/\.0$/, "");
   }
   return String(billTypeOrLR || "").trim();
 };
@@ -87,12 +91,14 @@ const getBillType = (billTypeOrLR, factory) => {
    ===================================================== */
 const BillUpload = () => {
   const { userRole } = useOutletContext();
-
   const [file, setFile] = useState(null);
   const [factory, setFactory] = useState("");
   const [loading, setLoading] = useState(false);
   const [uploadLog, setUploadLog] = useState([]);
+  const [failedChallans, setFailedChallans] = useState([]);
   const [progress, setProgress] = useState(0);
+  const [currentRow, setCurrentRow] = useState(0);
+  const [totalRows, setTotalRows] = useState(0);
 
   const canUpload = userRole === "admin";
 
@@ -118,6 +124,41 @@ const BillUpload = () => {
     );
   };
 
+  /* ===== DOWNLOAD FAILED CHALLANS AS CSV ===== */
+  const downloadFailedChallans = () => {
+    if (failedChallans.length === 0) {
+      alert("No failed challans to download");
+      return;
+    }
+
+    const headers = ["Row", "ChallanNo", "BillNum", "Error", "Reason"];
+    const csvContent = [
+      headers.join(","),
+      ...failedChallans.map(challan => 
+        [
+          challan.row,
+          `"${challan.challanNo}"`,
+          `"${challan.billNum}"`,
+          `"${challan.error}"`,
+          `"${challan.reason || ''}"`
+        ].join(",")
+      )
+    ].join("\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    
+    link.setAttribute("href", url);
+    link.setAttribute("download", `failed_challans_${factory}_${new Date().toISOString().slice(0,10)}.csv`);
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    addLog(`Downloaded ${failedChallans.length} failed challans as CSV`, "info");
+  };
+
   /* ===== UPLOAD HANDLER ===== */
   const handleUpload = async () => {
     if (!file || !factory) {
@@ -126,8 +167,11 @@ const BillUpload = () => {
     }
 
     setLoading(true);
-    setUploadLog([]);
     setProgress(0);
+    setCurrentRow(0);
+    setTotalRows(0);
+    setUploadLog([]);
+    setFailedChallans([]);
     addLog(`Starting upload for ${factory} factory...`, "info");
 
     const reader = new FileReader();
@@ -139,33 +183,72 @@ const BillUpload = () => {
         const rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
 
         let success = 0, skipped = 0, failed = 0;
-        const totalRows = rows.length - 1;
+        const totalRowsCount = rows.length - 1;
+        setTotalRows(totalRowsCount);
+        const failedList = [];
+
+        // Update progress: parsing complete
+        setProgress(5);
+        addLog(`Parsed ${totalRowsCount} rows from Excel file`, "info");
 
         for (let i = 1; i < rows.length; i++) {
           const row = rows[i];
+          setCurrentRow(i);
+          
+          // Calculate current progress percentage
+          const currentProgress = 5 + Math.floor((i / rows.length) * 90);
+          setProgress(currentProgress);
+          
           if (!row || row.every(v => v === null || v === "")) {
             skipped++;
             continue;
           }
 
-          // Update progress
-          setProgress(Math.round((i / totalRows) * 100));
+          // Map columns based on factory
+          let challanNo, quantity, unitPrice, finalPrice, billNum, billDate, billTypeOrLR, deliveryNum;
 
-          const challanNo = String(row[0] || "").trim();
-          const quantity = safeNum(row[4]);
-          const unitPrice = safeNum(row[6]);
-          const finalPrice = safeNum(row[7]);
-          const billNum = String(row[8] || "").trim();
-          const billDate = parseExcelDate(row[9], factory);
-          const billTypeOrLR = String(row[10] || "").trim();
-          const deliveryNum = String(row[11] || "").trim();
+          if (factory === "MP BIRLA") {
+            challanNo = String(row[0] || "").trim();
+            quantity = safeNum(row[4]);
+            unitPrice = safeNum(row[6]);
+            finalPrice = safeNum(row[7]);
+            billNum = String(row[8] || "").trim();
+            billDate = parseExcelDate(row[9], factory);
+            billTypeOrLR = String(row[10] || "").trim();
+            deliveryNum = String(row[11] || "").trim();
+          } else {
+            challanNo = String(row[0] || "").trim();
+            quantity = safeNum(row[4]);
+            unitPrice = safeNum(row[6]);
+            finalPrice = safeNum(row[7]);
+            billNum = String(row[8] || "").trim();
+            billDate = parseExcelDate(row[9], factory);
+            billTypeOrLR = String(row[10] || "").trim();
+            deliveryNum = String(row[11] || "").trim();
+          }
 
-          // For JSW, we need to handle the LR number in billTypeOrLR column
+          // For MP BIRLA, clean up challan number (remove .0 if present)
+          if (factory === "MP BIRLA" && challanNo.endsWith('.0')) {
+            challanNo = challanNo.replace(/\.0$/, '');
+          }
+
           const billType = getBillType(billTypeOrLR, factory);
 
+          // VALIDATION
           if (!challanNo || !billNum || !billDate) {
-            addLog(`Row ${i}: Missing required fields (ChallanNo: ${challanNo}, BillNum: ${billNum}, BillDate: ${row[9]})`, "warning");
-            skipped++;
+            const reason = !challanNo ? "Missing ChallanNo" : 
+                          !billNum ? "Missing BillNum" : "Invalid BillDate";
+            
+            failedList.push({
+              row: i + 1,
+              challanNo: challanNo || "Empty",
+              billNum: billNum || "Empty",
+              error: "Missing required fields",
+              reason: reason
+            });
+            
+            addLog(`Row ${i+1}: ${reason} (ChallanNo: ${challanNo || 'empty'}, BillNum: ${billNum || 'empty'})`, "warning");
+            failed++;
             continue;
           }
 
@@ -178,8 +261,15 @@ const BillUpload = () => {
 
             const ds = await getDocs(dq);
             if (ds.empty) {
-              addLog(`Row ${i}: Dispatch not found for challan ${challanNo} in ${factory}`, "warning");
-              skipped++;
+              failedList.push({
+                row: i + 1,
+                challanNo,
+                billNum,
+                error: "Dispatch not found",
+                reason: `Challan ${challanNo} not found in ${factory} factory`
+              });
+              addLog(`Row ${i+1}: Dispatch not found for challan ${challanNo} in ${factory}`, "warning");
+              failed++;
               continue;
             }
 
@@ -196,9 +286,8 @@ const BillUpload = () => {
 
             if (!bs.empty) {
               billId = bs.docs[0].id;
-              addLog(`Row ${i}: Using existing bill ${billNum}`, "info");
+              addLog(`Row ${i+1}: Using existing bill ${billNum}`, "info");
             } else {
-              // For JSW, store LR number in a separate field if needed
               const billData = {
                 BillNum: billNum,
                 BillDate: billDate,
@@ -207,14 +296,17 @@ const BillUpload = () => {
                 CreatedOn: serverTimestamp()
               };
               
-              // Add LR number for JSW if present
               if (factory === "JSW" && billTypeOrLR) {
                 billData.LRNumber = billTypeOrLR;
               }
               
+              if (factory === "MP BIRLA" && billTypeOrLR) {
+                billData.OriginalBillType = billTypeOrLR;
+              }
+              
               const billRef = await addDoc(collection(db, "BillTable"), billData);
               billId = billRef.id;
-              addLog(`Row ${i}: Created new bill ${billNum}`, "success");
+              addLog(`Row ${i+1}: Created new bill ${billNum}`, "success");
             }
 
             const updateData = {
@@ -227,7 +319,6 @@ const BillUpload = () => {
               UpdatedAt: serverTimestamp()
             };
             
-            // Add LR number to dispatch for JSW if needed
             if (factory === "JSW" && billTypeOrLR) {
               updateData.LRNumber = billTypeOrLR;
             }
@@ -235,49 +326,60 @@ const BillUpload = () => {
             await updateDoc(doc(db, "TblDispatch", dispatchDoc.id), updateData);
 
             success++;
-            addLog(`Row ${i}: Successfully updated challan ${challanNo}`, "success");
+            addLog(`Row ${i+1}: Successfully updated challan ${challanNo}`, "success");
 
           } catch (err) {
+            failedList.push({
+              row: i + 1,
+              challanNo: challanNo || "Unknown",
+              billNum: billNum || "Unknown",
+              error: err.message,
+              reason: "Processing error"
+            });
             failed++;
-            addLog(`Row ${i}: Error - ${err.message}`, "error");
-            console.error(`Error processing row ${i}:`, err);
+            addLog(`Row ${i+1}: Failed challan ${challanNo || 'Unknown'} - ${err.message}`, "error");
+            console.error(`Error processing row ${i+1}:`, err);
           }
         }
 
-        // Final progress update
+        // Update progress: processing complete
         setProgress(100);
-        
+
+        // Set failed challans after processing
+        setFailedChallans(failedList);
+
         // Show summary
+        const summaryMessage = `Upload completed\n✅ Success: ${success}\n⚠️ Skipped: ${skipped}\n❌ Failed: ${failed}`;
         addLog(`Upload completed - Success: ${success}, Skipped: ${skipped}, Failed: ${failed}`, "info");
         
+        if (failed > 0) {
+          addLog(`${failed} challans failed to upload. Check "Failed Challans" section below.`, "error");
+        }
+        
         setTimeout(() => {
-          alert(`Upload completed\n✅ Success: ${success}\n⚠️ Skipped: ${skipped}\n❌ Failed: ${failed}`);
-          setProgress(0);
+          if (failed > 0) {
+            alert(`${summaryMessage}\n\n${failed} challan(s) failed. Check the "Failed Challans" section below for details.`);
+          } else {
+            alert(summaryMessage);
+          }
         }, 500);
 
       } catch (err) {
+        setProgress(0);
         addLog(`Upload failed: ${err.message}`, "error");
         alert(err.message);
       } finally {
         setLoading(false);
+        // Reset progress after a delay
+        setTimeout(() => {
+          setProgress(0);
+          setCurrentRow(0);
+          setTotalRows(0);
+        }, 2000);
       }
     };
 
     reader.readAsBinaryString(file);
-  };
-
-  /* ===== TEMPLATE ===== */
-  const downloadTemplate = () => {
-    const data = [
-      ["ChallanNo", "col2", "col3", "col4", "Quantity", "col6", "UnitPrice", "FinalPrice", "BillNum", "BillDate", "BillType", "DeliveryNum"],
-      ["CH-001", "", "", "", 100, "", 50, 4800, "BILL-001", "09-01-26", "Regular", "DEL-001"]
-    ];
-    const ws = XLSX.utils.aoa_to_sheet(data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Template");
-    XLSX.writeFile(wb, "Bill_Upload_Template.xlsx");
-    
-    addLog("Template downloaded successfully", "info");
   };
 
   /* ===== UI ===== */
@@ -340,6 +442,22 @@ const BillUpload = () => {
             </div>
           </div>
 
+          {/* Simple Progress Bar */}
+          {loading && (
+            <div className="progress-container">
+              <div className="progress-info">
+                <span className="progress-label">Processing: {currentRow} of {totalRows} rows</span>
+                <span className="progress-percent">{progress}%</span>
+              </div>
+              <div className="progress-bar">
+                <div 
+                  className="progress-fill"
+                  style={{ width: `${progress}%` }}
+                ></div>
+              </div>
+            </div>
+          )}
+
           <div className="factory-specific-note">
             {factory === "JSW" && (
               <div className="note-jsw">
@@ -347,19 +465,13 @@ const BillUpload = () => {
                 <p>Column K should contain LR numbers. BillType will be set to "Regular" by default.</p>
               </div>
             )}
-          </div>
-
-          {loading && (
-            <div className="progress-container">
-              <div className="progress-bar">
-                <div 
-                  className="progress-fill" 
-                  style={{ width: `${progress}%` }}
-                ></div>
+            {factory === "MP BIRLA" && (
+              <div className="note-mp-birla">
+                <strong>⚠️ MP BIRLA Format Note:</strong>
+                <p>Column K contains BillType values (like 5524.0, 5544.0). ChallanNo may end with .0 which will be automatically cleaned.</p>
               </div>
-              <span className="progress-text">{progress}%</span>
-            </div>
-          )}
+            )}
+          </div>
 
           <div className="button-group">
             <button 
@@ -383,44 +495,55 @@ const BillUpload = () => {
                 </>
               )}
             </button>
-
-            <button 
-              className="btn btn-secondary"
-              onClick={downloadTemplate}
-              disabled={loading}
-            >
-              <svg className="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
-              Download Template
-            </button>
-          </div>
-
-          <div className="template-note">
-            <h4>Excel File Format:</h4>
-            <p>Make sure your Excel file follows this structure:</p>
-            <table className="format-table">
-              <thead>
-                <tr>
-                  <th>Column</th>
-                  <th>Field</th>
-                  <th>Required</th>
-                  <th>JSW Specific</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr><td>A</td><td>ChallanNo</td><td>✅</td><td>-</td></tr>
-                <tr><td>E</td><td>Quantity</td><td>✅</td><td>-</td></tr>
-                <tr><td>G</td><td>UnitPrice</td><td>✅</td><td>-</td></tr>
-                <tr><td>H</td><td>FinalPrice</td><td>✅</td><td>-</td></tr>
-                <tr><td>I</td><td>BillNum</td><td>✅</td><td>-</td></tr>
-                <tr><td>J</td><td>BillDate</td><td>✅</td><td>Accepts dd-mmm-yy (29-Jan-26)</td></tr>
-                <tr><td>K</td><td>BillType</td><td>✅</td><td>For JSW: Contains LR numbers</td></tr>
-                <tr><td>L</td><td>DeliveryNum</td><td>✅</td><td>-</td></tr>
-              </tbody>
-            </table>
           </div>
         </div>
+
+        {/* FAILED CHALLANS SECTION */}
+        {failedChallans.length > 0 && (
+          <div className="failed-container">
+            <div className="failed-header">
+              <h4>
+                <svg className="error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Failed Challans ({failedChallans.length})
+              </h4>
+              <button 
+                className="btn btn-danger"
+                onClick={downloadFailedChallans}
+              >
+                <svg className="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                Download as CSV
+              </button>
+            </div>
+            <div className="failed-content">
+              <table className="failed-table">
+                <thead>
+                  <tr>
+                    <th>Row #</th>
+                    <th>Challan No</th>
+                    <th>Bill Number</th>
+                    <th>Error</th>
+                    <th>Reason</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {failedChallans.map((challan, index) => (
+                    <tr key={index} className="failed-row">
+                      <td>{challan.row}</td>
+                      <td className="challan-cell">{challan.challanNo}</td>
+                      <td className="bill-cell">{challan.billNum}</td>
+                      <td className="error-cell">{challan.error}</td>
+                      <td className="reason-cell">{challan.reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
 
         {uploadLog.length > 0 && (
           <div className="log-container">

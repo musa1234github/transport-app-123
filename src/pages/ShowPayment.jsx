@@ -55,6 +55,8 @@ const ShowPayment = ({ userRole }) => {
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [hasLoadedData, setHasLoadedData] = useState(false); // Track if data has been loaded
+  const [factories, setFactories] = useState([]); // Separate state for factories
+  const [loadingFactories, setLoadingFactories] = useState(true); // Track factory loading
 
   /* ===== PAGINATION STATES ===== */
   const [currentPage, setCurrentPage] = useState(1);
@@ -75,6 +77,35 @@ const ShowPayment = ({ userRole }) => {
     factoryFilter: "",
     paymentTypeFilter: ""
   });
+
+  /* ================= LOAD FACTORIES ON MOUNT ================= */
+  const loadFactories = async () => {
+    setLoadingFactories(true);
+    try {
+      const billQuery = query(
+        collection(db, "BillTable"),
+        where("PaymentReceived", ">", 0)
+      );
+      
+      const billSnap = await getDocs(billQuery);
+      
+      // Extract unique factory names from bills with payments
+      const factorySet = new Set();
+      billSnap.docs.forEach(b => {
+        const data = b.data();
+        if (data.FactoryName) {
+          factorySet.add(data.FactoryName);
+        }
+      });
+      
+      const factoriesList = Array.from(factorySet).sort();
+      setFactories(factoriesList);
+    } catch (error) {
+      console.error("Error loading factories:", error);
+    } finally {
+      setLoadingFactories(false);
+    }
+  };
 
   /* ================= LOAD PAYMENT DATA ================= */
   const load = async () => {
@@ -159,6 +190,19 @@ const ShowPayment = ({ userRole }) => {
       setSelectAll(false);
       setCurrentPage(1);
       setHasLoadedData(true); // Mark that data has been loaded
+      
+      // Update factories with data from loaded rows
+      const loadedFactorySet = new Set();
+      billData.forEach(bill => {
+        if (bill.FactoryName) {
+          loadedFactorySet.add(bill.FactoryName);
+        }
+      });
+      
+      const loadedFactoriesList = Array.from(loadedFactorySet).sort();
+      if (loadedFactoriesList.length > 0) {
+        setFactories(loadedFactoriesList);
+      }
     } catch (error) {
       console.error("Error loading payment data:", error);
     } finally {
@@ -166,10 +210,10 @@ const ShowPayment = ({ userRole }) => {
     }
   };
 
-  /* ===== REMOVED: Don't load data on page load ===== */
-  // useEffect(() => {
-  //   load();
-  // }, [appliedFilters]);
+  /* ===== LOAD FACTORIES ON COMPONENT MOUNT ===== */
+  useEffect(() => {
+    loadFactories();
+  }, []);
 
   /* ===== APPLY FILTERS FUNCTION ===== */
   const applyFilters = () => {
@@ -203,10 +247,6 @@ const ShowPayment = ({ userRole }) => {
     });
     // Don't clear rows - keep the loaded data for faster filtering
   };
-
-  /* ===== FACTORY LIST ===== */
-  // Only generate factory list if we have data
-  const factories = hasLoadedData ? [...new Set(rows.map(r => r.FactoryName).filter(Boolean))] : [];
 
   /* ===== PAYMENT TYPE LIST ===== */
   const paymentTypes = ["Has Payment"];
@@ -514,13 +554,20 @@ const ShowPayment = ({ userRole }) => {
             value={factoryFilter}
             onChange={e => setFactoryFilter(e.target.value)}
             className="filter-select"
-            disabled={!hasLoadedData}
+            disabled={loadingFactories && !hasLoadedData}
           >
             <option value="">Select Factory</option>
-            {factories.map(f => (
-              <option key={f} value={f}>{f}</option>
-            ))}
+            {loadingFactories && !hasLoadedData ? (
+              <option value="" disabled>Loading factories...</option>
+            ) : (
+              factories.map(f => (
+                <option key={f} value={f}>{f}</option>
+              ))
+            )}
           </select>
+          {loadingFactories && !hasLoadedData && (
+            <span className="loading-text">Loading factories...</span>
+          )}
         </div>
 
         <div>

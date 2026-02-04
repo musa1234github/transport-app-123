@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { db, auth } from "../firebaseConfig";
 import {
   collection,
@@ -7,10 +7,10 @@ import {
   doc,
   updateDoc,
   query,
-  where,
-  orderBy
+  where
 } from "firebase/firestore";
 import * as XLSX from "xlsx";
+import './ShoBilledChallan.css';
 
 const factoryMap = {
   "10": "JSW",
@@ -69,8 +69,13 @@ const ShoBilledChallan = () => {
   const [loading, setLoading] = useState(false);
   const [dataLoaded, setDataLoaded] = useState(false);
   const [error, setError] = useState("");
+  const [clientSideFiltering, setClientSideFiltering] = useState(false);
+  
+  // For factory dropdown
+  const [factoryOptions, setFactoryOptions] = useState([]);
+  const [factoriesLoaded, setFactoriesLoaded] = useState(false);
 
-  /* âœ… MVC-style applied filters */
+  /* MVC-style applied filters */
   const [appliedFilters, setAppliedFilters] = useState({
     searchTerm: "",
     filterFactory: "",
@@ -84,241 +89,182 @@ const ShoBilledChallan = () => {
 
   const recordsPerPage = 10;
 
+  // Check admin status
   useEffect(() => {
     const checkAdmin = async () => {
       if (auth.currentUser) {
-        const token = await auth.currentUser.getIdTokenResult();
-        setIsAdmin(!!token.claims.admin);
+        try {
+          const token = await auth.currentUser.getIdTokenResult();
+          setIsAdmin(!!token.claims.admin);
+        } catch (error) {
+          console.error("Error checking admin status:", error);
+        }
       }
     };
     checkAdmin();
   }, []);
 
+  /* ================= FETCH FACTORY OPTIONS ================= */
+  useEffect(() => {
+    const fetchFactoryOptions = async () => {
+      try {
+        const snapshot = await getDocs(collection(db, "TblDispatch"));
+        const factoriesSet = new Set();
+        
+        snapshot.docs.slice(0, 50).forEach(ds => {
+          const row = ds.data();
+          const disVid = String(row.DisVid || "");
+          
+          if (factoryMap[disVid]) {
+            factoriesSet.add(factoryMap[disVid]);
+          } else if (row.FactoryName) {
+            factoriesSet.add(row.FactoryName);
+          }
+        });
+        
+        setFactoryOptions(Array.from(factoriesSet).sort());
+        setFactoriesLoaded(true);
+      } catch (error) {
+        console.error("Error fetching factory options:", error);
+        setFactoryOptions([]);
+        setFactoriesLoaded(true);
+      }
+    };
+    
+    fetchFactoryOptions();
+  }, []);
+
   /* ================= FETCH DATA WITH FILTERS ================= */
   const fetchFilteredData = async () => {
+    // Validate at least one filter is applied
+    if (!filterFactory && !fromDate && !toDate) {
+      setError("Please apply at least one filter to load data.");
+      setDataLoaded(false);
+      setDispatches([]);
+      return;
+    }
+
     setLoading(true);
     setError("");
+    setClientSideFiltering(false);
+    
     try {
       let q = collection(db, "TblDispatch");
-      let conditions = [];
+      let snapshot;
       
-      // STRATEGY 1: Try to use composite query (with single field or date-only)
-      // Firestore has limits on composite queries, so we need to be careful
+      // SIMPLE FILTERING APPROACH - Get all and filter client-side
+      // This avoids composite index errors completely
+      snapshot = await getDocs(q);
       
-      // Build query conditions - LIMIT TO SIMPLE QUERIES TO AVOID INDEX ERRORS
-      if (filterFactory && !fromDate && !toDate) {
-        // Only factory filter - this should work without composite index
-        const factoryId = Object.keys(factoryMap).find(key => factoryMap[key] === filterFactory);
-        if (factoryId) {
-          q = query(q, where("DisVid", "==", factoryId));
-        } else {
-          q = query(q, where("FactoryName", "==", filterFactory));
-        }
-      } else if (!filterFactory && (fromDate || toDate)) {
-        // Only date filters - try to handle dates
-        if (fromDate) {
-          const startDate = new Date(fromDate);
-          startDate.setHours(0, 0, 0, 0);
-          q = query(q, where("DispatchDate", ">=", startDate));
-        }
-        if (toDate) {
-          const endDate = new Date(toDate);
-          endDate.setHours(23, 59, 59, 999);
-          q = query(q, where("DispatchDate", "<=", endDate));
-        }
-      } else if (filterFactory && (fromDate || toDate)) {
-        // Factory + date combination - MOST LIKELY TO CAUSE INDEX ERROR
-        // We'll fetch all data and filter locally to avoid index issues
-        console.log("Complex filter detected - using client-side filtering");
-        // We'll handle this in the data processing step
-      }
-      
-      // Get all documents (or filtered ones)
-      const snapshot = await getDocs(q);
-      const allData = snapshot.docs.map(ds => {
+      // Process all data
+      let allData = snapshot.docs.map(ds => {
         const row = { id: ds.id, ...ds.data() };
-
         row.DisVid = String(row.DisVid || "");
-
+        
+        // Handle date conversion
         if (row.DispatchDate) {
-          const d = row.DispatchDate.seconds
-            ? new Date(row.DispatchDate.seconds * 1000)
-            : new Date(row.DispatchDate);
-
-          row.DispatchDate = new Date(
-            d.getFullYear(),
-            d.getMonth(),
-            d.getDate()
-          );
+          if (row.DispatchDate.toDate) {
+            // Firestore Timestamp
+            const dateObj = row.DispatchDate.toDate();
+            row.DispatchDate = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate());
+          } else if (row.DispatchDate.seconds) {
+            // Timestamp object
+            const dateObj = new Date(row.DispatchDate.seconds * 1000);
+            row.DispatchDate = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate());
+          } else {
+            // Already Date or string
+            const dateObj = new Date(row.DispatchDate);
+            row.DispatchDate = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate());
+          }
         }
-
+        
+        // Set FactoryName
         row.FactoryName = row.FactoryName || factoryMap[row.DisVid] || "";
-        row.BillNum = String(row.BillNum || "");
-
+        
+        // Normalize BillNum
+        row.BillNum = String(row.BillNum || "").trim();
+        
         return row;
       });
 
-      // Apply complex filters client-side if needed
-      let filteredData = allData;
-      
-      // If we have factory + date combination, filter client-side
-      if (filterFactory && (fromDate || toDate)) {
-        filteredData = allData.filter(row => {
-          // Factory filter
+      // Apply filters client-side
+      let filteredData = allData.filter(row => {
+        // Factory filter
+        if (filterFactory) {
           const matchesFactory = row.FactoryName === filterFactory || 
-                                factoryMap[row.DisVid] === filterFactory;
-          
+                                 factoryMap[row.DisVid] === filterFactory;
           if (!matchesFactory) return false;
-          
-          // Date filters
-          if (fromDate || toDate) {
-            const rowDate = normalizeDate(row.DispatchDate);
-            const from = fromDate ? normalizeDate(new Date(fromDate)) : null;
-            const to = toDate ? normalizeDate(new Date(toDate)) : null;
-            
-            let matchesFromDate = true;
-            let matchesToDate = true;
+        }
+        
+        // Date filters
+        if (fromDate || toDate) {
+          const rowDate = normalizeDate(row.DispatchDate);
+          const from = fromDate ? normalizeDate(new Date(fromDate)) : null;
+          const to = toDate ? normalizeDate(new Date(toDate)) : null;
 
-            if (from && rowDate) {
-              matchesFromDate = rowDate.getTime() >= from.getTime();
-            }
-            if (to && rowDate) {
-              const toEndOfDay = new Date(to);
-              toEndOfDay.setDate(toEndOfDay.getDate() + 1);
-              matchesToDate = rowDate.getTime() < toEndOfDay.getTime();
-            }
-            
-            return matchesFromDate && matchesToDate;
+          // Check from date
+          if (from && rowDate && rowDate.getTime() < from.getTime()) {
+            return false;
           }
           
-          return true;
-        });
-      }
+          // Check to date (include entire toDate)
+          if (to && rowDate) {
+            const toEndOfDay = new Date(to);
+            toEndOfDay.setDate(toEndOfDay.getDate() + 1);
+            if (rowDate.getTime() >= toEndOfDay.getTime()) {
+              return false;
+            }
+          }
+        }
+        
+        return true;
+      });
+
+      // Sort by date descending
+      filteredData.sort((a, b) => {
+        const dateA = a.DispatchDate ? new Date(a.DispatchDate).getTime() : 0;
+        const dateB = b.DispatchDate ? new Date(b.DispatchDate).getTime() : 0;
+        return dateB - dateA;
+      });
 
       setDispatches(filteredData);
       setDataLoaded(true);
+      setClientSideFiltering(true);
       
-      // Show warning if we're doing client-side filtering
-      if (filterFactory && (fromDate || toDate)) {
-        setError("Note: Using client-side filtering for complex queries. For better performance, create Firestore composite indexes.");
+      if (filteredData.length === 0) {
+        setError("No records found with the current filters.");
+      } else {
+        setError("Using client-side filtering for better performance with combined filters.");
       }
       
     } catch (error) {
       console.error("Error fetching data:", error);
-      
-      // Check if it's an index error
-      if (error.code === 'failed-precondition' && error.message.includes('index')) {
-        setError(`Firestore Index Required: ${error.message.split('You can create it here:')[1] || 'Please create the required index in Firebase Console'}`);
-      } else {
-        setError(`Error fetching data: ${error.message}. Trying alternative approach...`);
-        
-        // Fallback: Try to fetch all data and filter client-side
-        try {
-          const snapshot = await getDocs(collection(db, "TblDispatch"));
-          const allData = snapshot.docs.map(ds => {
-            const row = { id: ds.id, ...ds.data() };
-            row.DisVid = String(row.DisVid || "");
-            
-            if (row.DispatchDate) {
-              const d = row.DispatchDate.seconds
-                ? new Date(row.DispatchDate.seconds * 1000)
-                : new Date(row.DispatchDate);
-              row.DispatchDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-            }
-            
-            row.FactoryName = row.FactoryName || factoryMap[row.DisVid] || "";
-            row.BillNum = String(row.BillNum || "");
-            return row;
-          });
-          
-          // Filter client-side
-          let filteredData = allData;
-          if (filterFactory || fromDate || toDate) {
-            filteredData = allData.filter(row => {
-              // Factory filter
-              const matchesFactory = !filterFactory || 
-                row.FactoryName === filterFactory || 
-                factoryMap[row.DisVid] === filterFactory;
-              
-              if (!matchesFactory) return false;
-              
-              // Date filters
-              if (fromDate || toDate) {
-                const rowDate = normalizeDate(row.DispatchDate);
-                const from = fromDate ? normalizeDate(new Date(fromDate)) : null;
-                const to = toDate ? normalizeDate(new Date(toDate)) : null;
-                
-                let matchesFromDate = true;
-                let matchesToDate = true;
-
-                if (from && rowDate) {
-                  matchesFromDate = rowDate.getTime() >= from.getTime();
-                }
-                if (to && rowDate) {
-                  const toEndOfDay = new Date(to);
-                  toEndOfDay.setDate(toEndOfDay.getDate() + 1);
-                  matchesToDate = rowDate.getTime() < toEndOfDay.getTime();
-                }
-                
-                return matchesFromDate && matchesToDate;
-              }
-              
-              return true;
-            });
-          }
-          
-          setDispatches(filteredData);
-          setDataLoaded(true);
-          setError("Using client-side filtering due to Firestore index limitations. For better performance with combined filters, create composite indexes in Firebase Console.");
-          
-        } catch (fallbackError) {
-          setError(`Failed to load data: ${fallbackError.message}`);
-        }
-      }
+      setError(`Failed to load data: ${error.message}`);
+      setDataLoaded(false);
+      setDispatches([]);
     } finally {
       setLoading(false);
     }
   };
 
-  /* ================= FETCH ALL DATA (for dropdowns) ================= */
-  const fetchAllForDropdowns = async () => {
-    try {
-      const snapshot = await getDocs(collection(db, "TblDispatch"));
-      const data = snapshot.docs.slice(-100).map(ds => {
-        const row = { id: ds.id, ...ds.data() };
-        row.DisVid = String(row.DisVid || "");
-        row.FactoryName = row.FactoryName || factoryMap[row.DisVid] || "";
-        row.BillNum = String(row.BillNum || "");
-        return row;
-      });
-      setDispatches(data);
-    } catch (error) {
-      console.error("Error fetching dropdown data:", error);
-      setError(`Error loading initial data: ${error.message}`);
+  /* ================= APPLY FILTERS ================= */
+  const applyFilters = () => {
+    // Validate at least one filter is applied
+    if (!filterFactory && !fromDate && !toDate) {
+      setError("Please select at least one filter (Factory, From Date, or To Date) to load data.");
+      return;
     }
-  };
 
-  // Fetch dropdown data on initial load
-  useEffect(() => {
-    fetchAllForDropdowns();
-  }, []);
-
-  /* ================= GET UNIQUE FACTORIES FOR DROPDOWN ================= */
-  const getUniqueFactories = () => {
-    const factories = new Set();
-    dispatches.forEach(d => {
-      if (d.DisVid && factoryMap[d.DisVid]) {
-        factories.add(factoryMap[d.DisVid]);
-      } else if (d.FactoryName) {
-        factories.add(d.FactoryName);
+    // Validate date range
+    if (fromDate && toDate) {
+      const from = new Date(fromDate);
+      const to = new Date(toDate);
+      if (from > to) {
+        setError("From Date cannot be after To Date.");
+        return;
       }
-    });
-    return Array.from(factories).sort();
-  };
+    }
 
-  /* ================= APPLY FILTER (MVC BUTTON) ================= */
-  const applyFilters = async () => {
-    await fetchFilteredData();
     setAppliedFilters({
       searchTerm,
       filterFactory,
@@ -326,10 +272,14 @@ const ShoBilledChallan = () => {
       toDate
     });
     setCurrentPage(1);
+    setSelectedIds([]);
+    
+    // Fetch data
+    fetchFilteredData();
   };
 
   /* ================= CLEAR FILTERS ================= */
-  const clearFilters = async () => {
+  const clearFilters = () => {
     setSearchTerm("");
     setFilterFactory("");
     setFromDate("");
@@ -342,14 +292,52 @@ const ShoBilledChallan = () => {
     });
     setCurrentPage(1);
     setSelectedIds([]);
-    setError("");
-    
-    // Reload minimal data for dropdowns only
+    setDispatches([]);
     setDataLoaded(false);
-    await fetchAllForDropdowns();
+    setError("");
+    setClientSideFiltering(false);
   };
 
-  /* ================= EDIT ================= */
+  /* ================= CLIENT-SIDE SEARCH FILTER ================= */
+  const filteredDispatches = useMemo(() => {
+    if (!dataLoaded) return [];
+    
+    return dispatches.filter(d => {
+      const { searchTerm } = appliedFilters;
+
+      // Search term filtering
+      if (searchTerm) {
+        const terms = searchTerm.toLowerCase().trim().split(/\s+/).filter(Boolean);
+        const matchesSearch = terms.every(term => {
+          return Object.values(d).some(v => {
+            if (!v) return false;
+            if (v instanceof Date) {
+              return formatShortDate(v).toLowerCase().includes(term);
+            }
+            return v.toString().toLowerCase().includes(term);
+          });
+        });
+        if (!matchesSearch) return false;
+      }
+
+      return true;
+    });
+  }, [dispatches, appliedFilters, dataLoaded]);
+
+  /* ================= PAGINATION ================= */
+  const totalRecords = dispatches.length;
+  const filteredCount = filteredDispatches.length;
+  const totalPages = Math.ceil(filteredCount / recordsPerPage);
+  
+  const startIndex = (currentPage - 1) * recordsPerPage;
+  const endIndex = Math.min(startIndex + recordsPerPage, filteredCount);
+  
+  const paginatedDispatches = filteredDispatches.slice(startIndex, endIndex);
+  
+  const isAllSelected = paginatedDispatches.length > 0 &&
+    paginatedDispatches.every(d => selectedIds.includes(d.id));
+
+  /* ================= HANDLERS ================= */
   const handleEdit = (row) => {
     setEditId(row.id);
     setEditChallan(row.ChallanNo || "");
@@ -357,29 +345,34 @@ const ShoBilledChallan = () => {
   };
 
   const handleSave = async (id) => {
-    const updates = {
-      ChallanNo: editChallan
-    };
-    
-    if (isAdmin && editBillNum !== undefined) {
-      updates.BillNum = editBillNum;
+    try {
+      const updates = {
+        ChallanNo: editChallan
+      };
+      
+      if (isAdmin && editBillNum !== undefined) {
+        updates.BillNum = editBillNum;
+      }
+      
+      await updateDoc(doc(db, "TblDispatch", id), updates);
+
+      setDispatches(prev =>
+        prev.map(d =>
+          d.id === id ? { 
+            ...d, 
+            ChallanNo: editChallan,
+            BillNum: isAdmin ? editBillNum : d.BillNum
+          } : d
+        )
+      );
+
+      setEditId(null);
+      setEditChallan("");
+      setEditBillNum("");
+    } catch (error) {
+      console.error("Error saving:", error);
+      setError(`Failed to save changes: ${error.message}`);
     }
-    
-    await updateDoc(doc(db, "TblDispatch", id), updates);
-
-    setDispatches(prev =>
-      prev.map(d =>
-        d.id === id ? { 
-          ...d, 
-          ChallanNo: editChallan,
-          BillNum: isAdmin ? editBillNum : d.BillNum
-        } : d
-      )
-    );
-
-    setEditId(null);
-    setEditChallan("");
-    setEditBillNum("");
   };
 
   const handleCancel = () => {
@@ -388,29 +381,36 @@ const ShoBilledChallan = () => {
     setEditBillNum("");
   };
 
-  /* ================= DELETE ================= */
   const handleDelete = async (id) => {
     if (!isAdmin) return;
     if (!window.confirm("Delete this record?")) return;
 
-    await deleteDoc(doc(db, "TblDispatch", id));
-    setDispatches(prev => prev.filter(d => d.id !== id));
-    setSelectedIds(prev => prev.filter(sid => sid !== id));
+    try {
+      await deleteDoc(doc(db, "TblDispatch", id));
+      setDispatches(prev => prev.filter(d => d.id !== id));
+      setSelectedIds(prev => prev.filter(sid => sid !== id));
+    } catch (error) {
+      console.error("Error deleting:", error);
+      setError(`Failed to delete record: ${error.message}`);
+    }
   };
 
   const handleDeleteSelected = async () => {
     if (!isAdmin || !selectedIds.length) return;
-    if (!window.confirm(`Delete ${selectedIds.length} records?`)) return;
+    if (!window.confirm(`Delete ${selectedIds.length} record(s)?`)) return;
 
-    for (let id of selectedIds) {
-      await deleteDoc(doc(db, "TblDispatch", id));
+    try {
+      for (let id of selectedIds) {
+        await deleteDoc(doc(db, "TblDispatch", id));
+      }
+      setDispatches(prev => prev.filter(d => !selectedIds.includes(d.id)));
+      setSelectedIds([]);
+    } catch (error) {
+      console.error("Error deleting selected:", error);
+      setError(`Failed to delete records: ${error.message}`);
     }
-
-    setDispatches(prev => prev.filter(d => !selectedIds.includes(d.id)));
-    setSelectedIds([]);
   };
 
-  /* ================= CHECKBOX ================= */
   const handleCheckboxChange = (id) => {
     setSelectedIds(prev =>
       prev.includes(id)
@@ -418,74 +418,6 @@ const ShoBilledChallan = () => {
         : [...prev, id]
     );
   };
-
-  /* ================= FILTER (APPLIED ONLY ON BUTTON CLICK) ================= */
-  const filteredDispatches = dispatches.filter(d => {
-    const liveSearch = String(searchTerm ?? "");
-    const { filterFactory, fromDate, toDate } = appliedFilters;
-
-    if (!searchTerm && !filterFactory && !fromDate && !toDate) {
-      return true;
-    }
-
-    const terms = liveSearch
-      .toLowerCase()
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean);
-
-    const matchesSearch =
-      terms.length === 0
-        ? true
-        : terms.every(term =>
-          Object.values(d).some(v => {
-            if (!v) return false;
-            if (v instanceof Date) {
-              return formatShortDate(v).toLowerCase().includes(term);
-            }
-            return v.toString().toLowerCase().includes(term);
-          })
-        );
-
-    // Factory filtering
-    const matchesFactory = filterFactory ? 
-      (d.FactoryName === filterFactory || factoryMap[d.DisVid] === filterFactory) : true;
-
-    // Date filtering logic
-    const rowDate = normalizeDate(d.DispatchDate);
-    const from = fromDate ? normalizeDate(new Date(fromDate)) : null;
-    const to = toDate ? normalizeDate(new Date(toDate)) : null;
-
-    let matchesFromDate = true;
-    let matchesToDate = true;
-
-    if (from && rowDate) {
-      matchesFromDate = rowDate.getTime() >= from.getTime();
-    }
-    if (to && rowDate) {
-      const toEndOfDay = new Date(to);
-      toEndOfDay.setDate(toEndOfDay.getDate() + 1);
-      matchesToDate = rowDate.getTime() < toEndOfDay.getTime();
-    }
-
-    return matchesSearch && matchesFactory && matchesFromDate && matchesToDate;
-  });
-
-  const totalRecords = dispatches.length;
-  const filteredCount = filteredDispatches.length;
-  const totalPages = Math.ceil(filteredCount / recordsPerPage);
-
-  const startIndex = (currentPage - 1) * recordsPerPage;
-  const endIndex = Math.min(startIndex + recordsPerPage, filteredCount);
-
-  const paginatedDispatches = filteredDispatches.slice(
-    startIndex,
-    startIndex + recordsPerPage
-  );
-
-  const isAllSelected =
-    paginatedDispatches.length > 0 &&
-    paginatedDispatches.every(d => selectedIds.includes(d.id));
 
   const handleSelectAll = () => {
     if (isAllSelected) {
@@ -499,9 +431,12 @@ const ShoBilledChallan = () => {
     }
   };
 
-  /* ================= EXCEL ================= */
+  /* ================= EXPORT TO EXCEL ================= */
   const exportToExcel = () => {
-    if (!filteredDispatches.length) return;
+    if (!filteredDispatches.length) {
+      setError("No data to export. Please apply filters first.");
+      return;
+    }
 
     const excelData = filteredDispatches.map(d => {
       const row = {};
@@ -514,324 +449,196 @@ const ShoBilledChallan = () => {
     const ws = XLSX.utils.json_to_sheet(excelData);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Billed Challan");
-    XLSX.writeFile(wb, "Billed_Challan_Data.xlsx");
+    XLSX.writeFile(wb, `Billed_Challan_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
-  /* ================= UI ================= */
-  const uniqueFactories = getUniqueFactories();
+  /* ================= DATE HANDLERS ================= */
+  const handleFromDateChange = (e) => {
+    const value = e.target.value;
+    if (value) {
+      const [year, month, day] = value.split('-');
+      setFromDate(new Date(year, month - 1, day));
+    } else {
+      setFromDate("");
+    }
+  };
+
+  const handleToDateChange = (e) => {
+    const value = e.target.value;
+    if (value) {
+      const [year, month, day] = value.split('-');
+      setToDate(new Date(year, month - 1, day));
+    } else {
+      setToDate("");
+    }
+  };
+
+  /* ================= UI RENDER ================= */
+  const billedCount = dispatches.filter(d => d.BillNum && d.BillNum.trim() !== "").length;
+  const unbilledCount = dispatches.filter(d => !d.BillNum || d.BillNum.trim() === "").length;
 
   return (
-    <div style={{ padding: 20 }}>
+    <div className="container">
       <h2>Billed Challan Data</h2>
 
-      {/* ===== ERROR MESSAGE ===== */}
+      {/* Instructions */}
+      <div className="instructions">
+        <strong>Instructions:</strong> Select at least one filter (Factory Name, From Date, or To Date) and click "Apply Filters" to load data.
+      </div>
+
+      {/* Error/Warning Message */}
       {error && (
-        <div style={{ 
-          marginBottom: 15, 
-          padding: 15, 
-          backgroundColor: error.includes("Index Required") ? '#fff3cd' : '#f8d7da',
-          borderRadius: 5,
-          border: error.includes("Index Required") ? '1px solid #ffc107' : '1px solid #f5c6cb',
-          color: error.includes("Index Required") ? '#856404' : '#721c24',
-          fontSize: 14
-        }}>
-          <strong>{error.includes("Index Required") ? "⚠️ Index Notice" : "⚠️ Error"}:</strong> {error}
-          {error.includes("You can create it here:") && (
-            <div style={{ marginTop: 10 }}>
-              <a 
-                href={error.split('You can create it here:')[1]?.trim()} 
-                target="_blank" 
-                rel="noopener noreferrer"
-                style={{ 
-                  color: '#007bff',
-                  textDecoration: 'underline'
-                }}
-              >
-                Click here to create the required index
-              </a>
-            </div>
-          )}
+        <div className={`message ${error.includes("Please select") || error.includes("cannot be after") ? 'info' : error.includes("client-side") ? 'warning' : 'error'}`}>
+          <strong>
+            {error.includes("Please select") || error.includes("cannot be after") ? "ℹ️ Information" : 
+             error.includes("client-side") ? "⚠️ Performance Notice" : "⚠️ Error"}
+          </strong> {error}
         </div>
       )}
 
-      {/* ===== FILTER CONTROLS ===== */}
-      <div style={{ 
-        display: "flex", 
-        gap: 10, 
-        flexWrap: "wrap", 
-        alignItems: "center", 
-        marginBottom: 15,
-        padding: 15,
-        backgroundColor: '#f5f5f5',
-        borderRadius: 5
-      }}>
-        <input
-          placeholder="Search in results..."
-          value={searchTerm}
-          onChange={e => setSearchTerm(e.target.value)}
-          disabled={!dataLoaded}
-          style={{ 
-            padding: 8, 
-            border: "1px solid #ccc", 
-            borderRadius: 4,
-            width: 200,
-            backgroundColor: !dataLoaded ? '#f0f0f0' : 'white'
-          }}
-        />
+      {/* Filter Controls */}
+      <div className="filter-container">
+        <div className="filter-group">
+          <div className="filter-input">
+            <label>Factory Name</label>
+            <select
+              value={filterFactory}
+              onChange={e => setFilterFactory(e.target.value)}
+              disabled={!factoriesLoaded}
+            >
+              <option value="">Select Factory</option>
+              {factoryOptions.map(factory => (
+                <option key={factory} value={factory}>
+                  {factory}
+                </option>
+              ))}
+            </select>
+            {!factoriesLoaded && <span className="loading-text">Loading factories...</span>}
+          </div>
 
-        {/* Factory Name Dropdown */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <label style={{ fontSize: 12, color: '#666' }}>Factory Name</label>
-          <select
-            value={filterFactory}
-            onChange={e => setFilterFactory(e.target.value)}
-            style={{ 
-              padding: 8, 
-              border: "1px solid #ccc", 
-              borderRadius: 4,
-              minWidth: 150
-            }}
-          >
-            <option value="">All Factories</option>
-            {uniqueFactories.map(factory => (
-              <option key={factory} value={factory}>
-                {factory}
-              </option>
-            ))}
-          </select>
+          <div className="filter-input">
+            <label>From Date (Dispatch Date)</label>
+            <input
+              type="date"
+              value={fromDate ? formatDateForInput(fromDate) : ""}
+              onChange={handleFromDateChange}
+            />
+          </div>
+
+          <div className="filter-input">
+            <label>To Date (Dispatch Date)</label>
+            <input
+              type="date"
+              value={toDate ? formatDateForInput(toDate) : ""}
+              onChange={handleToDateChange}
+            />
+          </div>
+
+          <div className="filter-input">
+            <label>Search in Results</label>
+            <input
+              type="text"
+              placeholder="Search loaded data..."
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+              disabled={!dataLoaded}
+            />
+          </div>
         </div>
 
-        {/* Date Filters */}
-        <div style={{ display: "flex", flexDirection: 'column', gap: 2 }}>
-          <label style={{ fontSize: 12, color: '#666' }}>From Date</label>
-          <input
-            type="date"
-            value={formatDateForInput(fromDate)}
-            onChange={(e) => {
-              const selectedDate = e.target.value;
-              if (selectedDate) {
-                const [year, month, day] = selectedDate.split('-');
-                const localDate = new Date(year, month - 1, day);
-                setFromDate(localDate);
-              } else {
-                setFromDate("");
-              }
-            }}
-            style={{ 
-              padding: 8, 
-              border: "1px solid #ccc", 
-              borderRadius: 4 
-            }}
-          />
-        </div>
-
-        <div style={{ display: "flex", flexDirection: 'column', gap: 2 }}>
-          <label style={{ fontSize: 12, color: '#666' }}>To Date</label>
-          <input
-            type="date"
-            value={formatDateForInput(toDate)}
-            onChange={(e) => {
-              const selectedDate = e.target.value;
-              if (selectedDate) {
-                const [year, month, day] = selectedDate.split('-');
-                const localDate = new Date(year, month - 1, day);
-                setToDate(localDate);
-              } else {
-                setToDate("");
-              }
-            }}
-            style={{ 
-              padding: 8, 
-              border: "1px solid #ccc", 
-              borderRadius: 4 
-            }}
-          />
-        </div>
-
-        {/* Action Buttons */}
-        <div style={{ display: "flex", gap: 10, marginLeft: 'auto', alignItems: 'flex-end' }}>
+        <div className="filter-actions">
           <button
             onClick={applyFilters}
-            disabled={loading}
-            style={{ 
-              padding: "8px 16px", 
-              backgroundColor: loading ? "#ccc" : "#4CAF50", 
-              color: "white", 
-              border: "none", 
-              borderRadius: 4, 
-              cursor: loading ? "not-allowed" : "pointer",
-              height: 36,
-              minWidth: 120
-            }}
+            disabled={loading || (!filterFactory && !fromDate && !toDate)}
+            className="btn btn-primary"
           >
             {loading ? "Loading..." : "Apply Filters"}
           </button>
 
           <button
             onClick={clearFilters}
-            style={{ 
-              padding: "8px 16px", 
-              backgroundColor: "#f44336", 
-              color: "white", 
-              border: "none", 
-              borderRadius: 4, 
-              cursor: "pointer",
-              height: 36
-            }}
+            disabled={loading}
+            className="btn btn-secondary"
           >
             Clear Filters
           </button>
 
           <button
             onClick={exportToExcel}
-            disabled={filteredCount === 0}
-            style={{ 
-              padding: "8px 16px", 
-              backgroundColor: filteredCount === 0 ? "#ccc" : "#2196F3", 
-              color: "white", 
-              border: "none", 
-              borderRadius: 4, 
-              cursor: filteredCount === 0 ? "not-allowed" : "pointer",
-              height: 36
-            }}
-            title={filteredCount === 0 ? "No data to export" : "Export to Excel"}
+            disabled={!dataLoaded || filteredCount === 0}
+            className="btn btn-export"
           >
-            Export Excel
+            📊 Export Excel
           </button>
         </div>
       </div>
 
-      {/* ===== LOADING INDICATOR ===== */}
+      {/* Loading Indicator */}
       {loading && (
-        <div style={{ 
-          marginBottom: 15, 
-          padding: 10, 
-          backgroundColor: '#e8f5e8', 
-          borderRadius: 5,
-          fontSize: 14,
-          color: '#2e7d32',
-          textAlign: 'center'
-        }}>
+        <div className="loading-indicator">
+          <div className="spinner"></div>
           <strong>Loading data...</strong> Please wait.
         </div>
       )}
 
-      {/* ===== DATA NOT LOADED MESSAGE ===== */}
-      {!dataLoaded && !loading && !error && (
-        <div style={{ 
-          marginBottom: 15, 
-          padding: 20, 
-          backgroundColor: '#fff3cd', 
-          borderRadius: 5,
-          border: '1px solid #ffc107',
-          textAlign: 'center',
-          fontSize: 16,
-          color: '#856404'
-        }}>
-          <strong>No data loaded.</strong> Please apply filters to load data.
-        </div>
-      )}
-
-      {/* ===== APPLIED FILTERS INDICATOR ===== */}
+      {/* Applied Filters Indicator */}
       {dataLoaded && (appliedFilters.filterFactory || appliedFilters.fromDate || appliedFilters.toDate) && (
-        <div style={{ 
-          marginBottom: 15, 
-          padding: 10, 
-          backgroundColor: '#e8f5e8', 
-          borderRadius: 5,
-          fontSize: 14,
-          color: '#2e7d32'
-        }}>
+        <div className="active-filters">
           <strong>Active Filters:</strong>
-          {appliedFilters.filterFactory && <span style={{ marginLeft: 10 }}>Factory: {appliedFilters.filterFactory}</span>}
+          {appliedFilters.filterFactory && <span className="filter-tag">Factory: {appliedFilters.filterFactory}</span>}
           {(appliedFilters.fromDate || appliedFilters.toDate) && (
-            <span style={{ marginLeft: 10 }}>
-              Date: {appliedFilters.fromDate ? formatShortDate(appliedFilters.fromDate) : 'Any'} 
+            <span className="filter-tag">
+              Dispatch Date: {appliedFilters.fromDate ? formatShortDate(appliedFilters.fromDate) : 'Any'} 
               to {appliedFilters.toDate ? formatShortDate(appliedFilters.toDate) : 'Any'}
             </span>
           )}
-          <span style={{ marginLeft: 10, float: 'right' }}>
+          {clientSideFiltering && <span className="client-filter-tag">(Client-side filtering)</span>}
+          <span className="loaded-records">
             <strong>Loaded Records:</strong> {totalRecords}
           </span>
         </div>
       )}
 
-      {/* ===== DATA TABLE ===== */}
+      {/* Data Table Section */}
       {dataLoaded && !loading && (
         <>
-          {/* ===== SELECTED RECORDS DELETE BUTTON ===== */}
+          {/* Selected Records Delete Button */}
           {isAdmin && selectedIds.length > 0 && (
-            <div style={{ 
-              marginBottom: 15, 
-              padding: 10, 
-              backgroundColor: '#fff3cd', 
-              borderRadius: 5,
-              border: '1px solid #ffc107',
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center'
-            }}>
+            <div className="selection-banner">
               <span>
                 <strong>{selectedIds.length}</strong> record(s) selected
               </span>
               <button
                 onClick={handleDeleteSelected}
-                style={{
-                  padding: "8px 16px",
-                  backgroundColor: "#dc3545",
-                  color: "white",
-                  border: "none",
-                  borderRadius: 4,
-                  cursor: "pointer",
-                  fontWeight: 'bold'
-                }}
+                className="btn btn-danger"
               >
                 Delete Selected
               </button>
             </div>
           )}
 
-          {/* ===== STATISTICS ===== */}
-          <div style={{ 
-            marginBottom: 15, 
-            padding: 10, 
-            backgroundColor: '#e3f2fd', 
-            borderRadius: 5,
-            fontSize: 14,
-            color: '#1565c0'
-          }}>
+          {/* Statistics */}
+          <div className="statistics">
             <strong>Statistics:</strong>
-            <span style={{ marginLeft: 10 }}>
-              Total Records: {totalRecords} | 
-            </span>
-            <span style={{ marginLeft: 10 }}>
-              Billed Records: {dispatches.filter(d => d.BillNum && d.BillNum.trim() !== "").length} | 
-            </span>
-            <span style={{ marginLeft: 10 }}>
-              Unbilled Records: {dispatches.filter(d => !d.BillNum || d.BillNum.trim() === "").length}
-            </span>
+            <span className="stat-item">Total Records: {totalRecords}</span>
+            <span className="stat-item">Filtered Records: {filteredCount}</span>
+            <span className="stat-item billed">Billed Records: {billedCount}</span>
+            <span className="stat-item unbilled">Unbilled Records: {unbilledCount}</span>
           </div>
 
-          {/* ===== RECORD COUNT ===== */}
-          <div style={{ 
-            marginBottom: 10, 
-            padding: 8, 
-            backgroundColor: '#f8f9fa', 
-            borderRadius: 5,
-            border: '1px solid #dee2e6',
-            fontSize: 14,
-            color: '#495057'
-          }}>
-            Showing {filteredCount === 0 ? 0 : startIndex + 1}â€“{endIndex} of{" "}
+          {/* Record Count */}
+          <div className="record-count">
+            Showing {filteredCount === 0 ? 0 : startIndex + 1}–{endIndex} of{" "}
             <strong>{filteredCount}</strong> filtered records
           </div>
 
-          <div style={{ overflowX: "auto" }}>
-            <table border="1" width="100%" style={{ borderCollapse: "collapse" }}>
+          {/* Table */}
+          <div className="table-container">
+            <table className="data-table">
               <thead>
-                <tr style={{ backgroundColor: "#f2f2f2" }}>
+                <tr>
                   {isAdmin && (
-                    <th style={{ padding: 10, width: '50px' }}>
+                    <th className="checkbox-column">
                       <input
                         type="checkbox"
                         checked={isAllSelected}
@@ -841,21 +648,18 @@ const ShoBilledChallan = () => {
                     </th>
                   )}
                   {COLUMN_SEQUENCE.map(col => (
-                    <th key={col} style={{ padding: 10, textAlign: "left" }}>{col}</th>
+                    <th key={col}>{col}</th>
                   ))}
-                  {isAdmin && <th style={{ padding: 10 }}>Action</th>}
+                  {isAdmin && <th className="action-column">Action</th>}
                 </tr>
               </thead>
 
               <tbody>
                 {paginatedDispatches.length > 0 ? (
                   paginatedDispatches.map(d => (
-                    <tr key={d.id} style={{ 
-                      borderBottom: "1px solid #ddd",
-                      backgroundColor: d.BillNum && d.BillNum.trim() !== "" ? '#f0fff0' : 'inherit'
-                    }}>
+                    <tr key={d.id} className={d.BillNum ? 'billed-row' : 'unbilled-row'}>
                       {isAdmin && (
-                        <td style={{ padding: 10, textAlign: "center" }}>
+                        <td className="checkbox-cell">
                           <input
                             type="checkbox"
                             checked={selectedIds.includes(d.id)}
@@ -865,72 +669,50 @@ const ShoBilledChallan = () => {
                       )}
 
                       {COLUMN_SEQUENCE.map(col => (
-                        <td key={col} style={{ padding: 10 }}>
+                        <td key={col}>
                           {col === "ChallanNo" && editId === d.id ? (
                             <input
+                              className="edit-input"
                               value={editChallan}
                               onChange={e => setEditChallan(e.target.value)}
-                              style={{ padding: 4, width: "100%" }}
                               autoFocus
                             />
                           ) : col === "BillNum" && editId === d.id && isAdmin ? (
                             <input
+                              className="edit-input"
                               value={editBillNum}
                               onChange={e => setEditBillNum(e.target.value)}
-                              style={{ padding: 4, width: "100%" }}
                               placeholder="Enter Bill Number"
                             />
                           ) : col === "DispatchDate" ? (
                             formatShortDate(d[col])
                           ) : col === "BillNum" ? (
-                            <span style={{ 
-                              fontWeight: d[col] ? 'bold' : 'normal',
-                              color: d[col] ? '#28a745' : '#dc3545',
-                              backgroundColor: d[col] ? '#f0fff0' : '#fff5f5',
-                              padding: '2px 8px',
-                              borderRadius: '4px',
-                              display: 'inline-block'
-                            }}>
+                            <span className={`bill-number ${d[col] ? 'has-bill' : 'no-bill'}`}>
                               {d[col] || "Unbilled"}
                             </span>
                           ) : col === "DispatchQuantity" ? (
-                            <span style={{ fontWeight: 'bold' }}>
+                            <span className="quantity">
                               {d[col] ? parseFloat(d[col]).toFixed(2) : "0.00"}
                             </span>
                           ) : (
-                            d[col] || "â€”"
+                            d[col] || "—"
                           )}
                         </td>
                       ))}
 
                       {isAdmin && (
-                        <td style={{ padding: 10, whiteSpace: 'nowrap' }}>
+                        <td className="action-cell">
                           {editId === d.id ? (
                             <>
                               <button
                                 onClick={() => handleSave(d.id)}
-                                style={{ 
-                                  marginRight: 5, 
-                                  padding: "5px 10px", 
-                                  backgroundColor: "#28a745", 
-                                  color: "white", 
-                                  border: "none", 
-                                  borderRadius: 3, 
-                                  cursor: "pointer" 
-                                }}
+                                className="btn-action btn-save"
                               >
                                 Save
                               </button>
                               <button
                                 onClick={handleCancel}
-                                style={{ 
-                                  padding: "5px 10px", 
-                                  backgroundColor: "#6c757d", 
-                                  color: "white", 
-                                  border: "none", 
-                                  borderRadius: 3, 
-                                  cursor: "pointer" 
-                                }}
+                                className="btn-action btn-cancel"
                               >
                                 Cancel
                               </button>
@@ -939,28 +721,13 @@ const ShoBilledChallan = () => {
                             <>
                               <button
                                 onClick={() => handleEdit(d)}
-                                style={{ 
-                                  marginRight: 5, 
-                                  padding: "5px 10px", 
-                                  backgroundColor: "#007bff", 
-                                  color: "white", 
-                                  border: "none", 
-                                  borderRadius: 3, 
-                                  cursor: "pointer" 
-                                }}
+                                className="btn-action btn-edit"
                               >
                                 Edit
                               </button>
                               <button
                                 onClick={() => handleDelete(d.id)}
-                                style={{ 
-                                  padding: "5px 10px", 
-                                  backgroundColor: "#dc3545", 
-                                  color: "white", 
-                                  border: "none", 
-                                  borderRadius: 3, 
-                                  cursor: "pointer" 
-                                }}
+                                className="btn-action btn-delete"
                               >
                                 Delete
                               </button>
@@ -974,9 +741,9 @@ const ShoBilledChallan = () => {
                   <tr>
                     <td
                       colSpan={isAdmin ? COLUMN_SEQUENCE.length + 2 : COLUMN_SEQUENCE.length}
-                      style={{ padding: 40, textAlign: "center", color: "#666" }}
+                      className="no-results"
                     >
-                      No records found. Try adjusting your filters.
+                      No dispatch records found with the current filters. Try adjusting your filters.
                     </td>
                   </tr>
                 )}
@@ -984,30 +751,14 @@ const ShoBilledChallan = () => {
             </table>
           </div>
 
-          {/* ===== PAGINATION ===== */}
+          {/* Pagination */}
           {totalPages > 1 && (
-            <div style={{ 
-              marginTop: 20, 
-              display: "flex", 
-              alignItems: "center", 
-              justifyContent: "space-between",
-              padding: 15,
-              backgroundColor: '#f8f9fa',
-              borderRadius: 5,
-              border: '1px solid #dee2e6'
-            }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <div className="pagination">
+              <div className="pagination-controls">
                 <button
                   disabled={currentPage === 1}
                   onClick={() => setCurrentPage(p => p - 1)}
-                  style={{
-                    padding: "8px 12px",
-                    backgroundColor: currentPage === 1 ? "#e9ecef" : "#007bff",
-                    color: currentPage === 1 ? "#6c757d" : "white",
-                    border: "none",
-                    borderRadius: 4,
-                    cursor: currentPage === 1 ? "not-allowed" : "pointer"
-                  }}
+                  className="btn-pagination"
                 >
                   Prev
                 </button>
@@ -1030,15 +781,7 @@ const ShoBilledChallan = () => {
                     <button
                       key={pageNum}
                       onClick={() => setCurrentPage(pageNum)}
-                      style={{
-                        padding: "8px 12px",
-                        backgroundColor: currentPage === pageNum ? "#0056b3" : "#007bff",
-                        color: "white",
-                        border: "none",
-                        borderRadius: 4,
-                        cursor: "pointer",
-                        fontWeight: currentPage === pageNum ? "bold" : "normal"
-                      }}
+                      className={`btn-pagination ${currentPage === pageNum ? 'active' : ''}`}
                     >
                       {pageNum}
                     </button>
@@ -1047,17 +790,10 @@ const ShoBilledChallan = () => {
 
                 {totalPages > 5 && currentPage < totalPages - 2 && (
                   <>
-                    <span style={{ padding: "0 5px" }}>...</span>
+                    <span className="ellipsis">...</span>
                     <button
                       onClick={() => setCurrentPage(totalPages)}
-                      style={{
-                        padding: "8px 12px",
-                        backgroundColor: "#007bff",
-                        color: "white",
-                        border: "none",
-                        borderRadius: 4,
-                        cursor: "pointer"
-                      }}
+                      className="btn-pagination"
                     >
                       {totalPages}
                     </button>
@@ -1067,24 +803,17 @@ const ShoBilledChallan = () => {
                 <button
                   disabled={currentPage === totalPages}
                   onClick={() => setCurrentPage(p => p + 1)}
-                  style={{
-                    padding: "8px 12px",
-                    backgroundColor: currentPage === totalPages ? "#e9ecef" : "#007bff",
-                    color: currentPage === totalPages ? "#6c757d" : "white",
-                    border: "none",
-                    borderRadius: 4,
-                    cursor: currentPage === totalPages ? "not-allowed" : "pointer"
-                  }}
+                  className="btn-pagination"
                 >
                   Next
                 </button>
               </div>
 
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ fontSize: 14, color: "#495057" }}>
+              <div className="page-navigation">
+                <span>
                   Page {currentPage} of {totalPages}
                 </span>
-                <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                <div className="goto-page">
                   <span>Go to:</span>
                   <input
                     type="number"
@@ -1103,19 +832,30 @@ const ShoBilledChallan = () => {
                         e.target.value = currentPage;
                       }
                     }}
-                    style={{
-                      width: "50px",
-                      padding: "5px",
-                      textAlign: "center",
-                      border: "1px solid #ccc",
-                      borderRadius: 4
-                    }}
+                    className="page-input"
                   />
                 </div>
               </div>
             </div>
           )}
         </>
+      )}
+
+      {/* No Data Loaded Message */}
+      {!dataLoaded && !loading && !error && (
+        <div className="no-data-placeholder">
+          <div className="placeholder-icon">📊</div>
+          <h3>No Data Loaded</h3>
+          <p>Select at least one filter and click "Apply Filters" to load dispatch data.</p>
+          <div className="placeholder-tips">
+            <div className="tip">
+              <strong>Tip:</strong> Use the factory dropdown to filter by factory name.
+            </div>
+            <div className="tip">
+              <strong>Tip:</strong> Use date filters to load dispatch data within a specific period.
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

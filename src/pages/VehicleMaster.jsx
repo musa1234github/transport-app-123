@@ -38,15 +38,36 @@ const VehicleMaster = () => {
 
   const vehicleRef = collection(db, "VehicleMaster");
 
-  // Fetch vehicles from Firestore - only when triggered
-  const fetchVehicles = useCallback(async () => {
+  // Fetch vehicles based on search term
+  const fetchVehiclesBySearch = useCallback(async (searchText = "") => {
     try {
       setLoading(true);
-      const snapshot = await getDocs(vehicleRef);
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setVehicles(data);
+      
+      if (!searchText.trim()) {
+        setVehicles([]);
+        setDataLoaded(false);
+        setMessage("Please enter a search term to load vehicles");
+        return;
+      }
+
+      // Create a query that searches both VehicleNo and OwnerName
+      const searchLower = searchText.toLowerCase().trim();
+      
+      // Fetch all vehicles that match the search term in either field
+      const q = query(vehicleRef);
+      const snapshot = await getDocs(q);
+      
+      // Filter client-side to match search in both fields
+      const allData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      const filteredData = allData.filter(v => 
+        v.VehicleNo.toLowerCase().includes(searchLower) ||
+        v.OwnerName.toLowerCase().includes(searchLower)
+      );
+      
+      setVehicles(filteredData);
       setDataLoaded(true);
-      setMessage(`✅ Loaded ${data.length} vehicles`);
+      setMessage(`✅ Found ${filteredData.length} vehicles matching "${searchText}"`);
+      
     } catch (error) {
       console.error("Error fetching vehicles:", error);
       setMessage("❌ Error loading vehicles");
@@ -55,10 +76,15 @@ const VehicleMaster = () => {
     }
   }, [vehicleRef]);
 
-  // Load data only when search filter is applied or manually triggered
-  useEffect(() => {
-    // Don't auto-load on component mount
-  }, []);
+  // Handle search form submission
+  const handleSearch = async (e) => {
+    e.preventDefault();
+    if (!searchTerm.trim()) {
+      setMessage("Please enter a search term");
+      return;
+    }
+    await fetchVehiclesBySearch(searchTerm);
+  };
 
   // Single entry
   const handleAddVehicle = async () => {
@@ -86,9 +112,10 @@ const VehicleMaster = () => {
     setVehicleNo("");
     setOwnerName("");
     setMessage("✅ Vehicle added successfully");
-    // Refresh data if already loaded
-    if (dataLoaded) {
-      fetchVehicles();
+    
+    // Refresh search results if data is loaded from a search
+    if (dataLoaded && searchTerm) {
+      await fetchVehiclesBySearch(searchTerm);
     }
   };
 
@@ -128,8 +155,10 @@ const VehicleMaster = () => {
       
       setMessage("✅ Vehicle updated successfully");
       setEditingId(null);
-      if (dataLoaded) {
-        fetchVehicles();
+      
+      // Refresh search results if data is loaded from a search
+      if (dataLoaded && searchTerm) {
+        await fetchVehiclesBySearch(searchTerm);
       }
     } catch (error) {
       alert("Error updating vehicle");
@@ -152,9 +181,12 @@ const VehicleMaster = () => {
       const vehicleDoc = doc(db, "VehicleMaster", id);
       await deleteDoc(vehicleDoc);
       setMessage("✅ Vehicle deleted successfully");
-      if (dataLoaded) {
-        fetchVehicles();
+      
+      // Refresh search results if data is loaded from a search
+      if (dataLoaded && searchTerm) {
+        await fetchVehiclesBySearch(searchTerm);
       }
+      
       // Remove from selected IDs if it's there
       setSelectedIds(selectedIds.filter(selectedId => selectedId !== id));
     } catch (error) {
@@ -201,8 +233,10 @@ const VehicleMaster = () => {
       setMessage(`✅ ${selectedIds.length} vehicle(s) deleted successfully`);
       setSelectedIds([]);
       setSelectAll(false);
-      if (dataLoaded) {
-        fetchVehicles();
+      
+      // Refresh search results if data is loaded from a search
+      if (dataLoaded && searchTerm) {
+        await fetchVehiclesBySearch(searchTerm);
       }
     } catch (error) {
       alert("Error deleting vehicles");
@@ -273,14 +307,11 @@ const VehicleMaster = () => {
           `✅ Excel upload completed. Added ${added} vehicles, Skipped ${skipped} duplicates.`
         );
 
-        if (dataLoaded) {
-          fetchVehicles();
-        }
+        setExcelFile(null);
       } catch (err) {
         console.error("Excel upload error:", err);
         alert("Excel upload failed. Check console.");
       } finally {
-        setExcelFile(null);
         setLoading(false);
       }
     };
@@ -288,7 +319,7 @@ const VehicleMaster = () => {
     reader.readAsArrayBuffer(excelFile);
   };
 
-  // Export to Excel
+  // Export to Excel - Only exports currently loaded (searched) data
   const handleExportExcel = () => {
     if (!vehicles.length) {
       alert("No data to export");
@@ -307,21 +338,12 @@ const VehicleMaster = () => {
     XLSX.writeFile(wb, `VehicleMaster_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
-  // Handle search/filter application
-  const handleApplyFilter = () => {
-    if (!dataLoaded) {
-      fetchVehicles();
-    }
-  };
-
   // Filtered & Paginated vehicles
-  const filteredVehicles = dataLoaded 
-    ? vehicles.filter(
-        (v) =>
-          v.VehicleNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          v.OwnerName.toLowerCase().includes(searchTerm.toLowerCase())
-      )
-    : [];
+  const filteredVehicles = vehicles.filter(
+    (v) =>
+      v.VehicleNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      v.OwnerName.toLowerCase().includes(searchTerm.toLowerCase())
+  );
 
   const totalRecords = vehicles.length;
   const filteredCount = filteredVehicles.length;
@@ -356,51 +378,46 @@ const VehicleMaster = () => {
         </div>
       )}
 
-      {/* Load Data Section */}
-      {!dataLoaded && (
-        <div className="data-load-section">
-          <div className="load-card">
-            <h4>📊 Load Vehicle Data</h4>
-            <p>No data loaded yet. Click below to load vehicles or use the search filter.</p>
-            <div className="load-actions">
-              <button 
-                onClick={fetchVehicles}
-                className="btn-load-data"
-                disabled={loading}
-              >
-                {loading ? "⏳ Loading..." : "📥 Load All Vehicles"}
-              </button>
-              <div className="load-search">
-                <input
-                  placeholder="🔍 Search Vehicle No or Owner Name"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="search-input"
-                />
-                <button 
-                  onClick={handleApplyFilter}
-                  className="btn-apply-filter"
-                >
-                  Search & Load
-                </button>
-              </div>
-            </div>
+      {/* Search Section */}
+      <div className="section-card search-section-card">
+        <h4>🔍 Search Vehicles</h4>
+        <form onSubmit={handleSearch} className="search-form">
+          <div className="search-input-group">
+            <input
+              type="text"
+              placeholder="Enter Vehicle No or Owner Name to search..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="search-input-large"
+            />
+            <button 
+              type="submit"
+              disabled={loading || !searchTerm.trim()}
+              className="btn-search"
+            >
+              {loading ? "⏳ Searching..." : "🔍 Search"}
+            </button>
           </div>
-        </div>
-      )}
+          <p className="search-hint">
+            {dataLoaded 
+              ? `Found ${vehicles.length} vehicles matching your search`
+              : "Enter search terms above to load vehicle data"}
+          </p>
+        </form>
+      </div>
 
       {/* Stats Card - Only show when data is loaded */}
       {dataLoaded && (
         <div className="stats-card">
           <div className="stats-header">
             <div>
-              <h4>📊 Vehicle Statistics</h4>
-              <p>Manage your vehicle database efficiently</p>
+              <h4>📊 Search Results</h4>
+              <p>Showing {vehicles.length} vehicles matching "{searchTerm}"</p>
             </div>
             <div className="stats-numbers">
               <div className="stat-item">
-                <div className="stat-value total">{totalRecords}</div>
-                <div className="stat-label">Total Vehicles</div>
+                <div className="stat-value total">{vehicles.length}</div>
+                <div className="stat-label">Found</div>
               </div>
               <div className="stat-divider"></div>
               <div className="stat-item">
@@ -462,16 +479,17 @@ const VehicleMaster = () => {
       </div>
 
       {/* Export to Excel */}
-      <div className="section-card">
-        <button 
-          onClick={handleExportExcel}
-          className="btn-export"
-          disabled={!dataLoaded}
-        >
-          📥 Export to Excel ({totalRecords} records)
-        </button>
-        {!dataLoaded && <p className="export-hint">Load data first to export</p>}
-      </div>
+      {dataLoaded && (
+        <div className="section-card">
+          <button 
+            onClick={handleExportExcel}
+            className="btn-export"
+          >
+            📥 Export Search Results ({vehicles.length} records)
+          </button>
+          <p className="export-hint">Only exports currently loaded search results</p>
+        </div>
+      )}
 
       {/* Message */}
       {message && (
@@ -480,187 +498,175 @@ const VehicleMaster = () => {
         </div>
       )}
 
-      {/* Search and Record Info - Only show when data is loaded */}
+      {/* Record Info - Only show when data is loaded */}
       {dataLoaded && (
-        <>
-          <div className="search-section">
-            <div>
-              <input
-                placeholder="🔍 Search Vehicle No or Owner Name"
-                value={searchTerm}
-                onChange={(e) => {
-                  setSearchTerm(e.target.value);
-                  setCurrentPage(1);
-                }}
-                className="search-input-large"
-              />
+        <div className="record-info-section">
+          <div className="record-info">
+            <div className="record-count">
+              📋 Displaying: <span>{filteredCount === 0 ? 0 : startIndex + 1}-{endIndex}</span> of {filteredCount} filtered records
             </div>
-            
-            <div className="record-info">
-              <div className="record-count">
-                📋 Displaying: <span>{filteredCount === 0 ? 0 : startIndex + 1}-{endIndex}</span> of {filteredCount} filtered records
-              </div>
-              <div className="record-details">
-                Page {currentPage} of {totalPages} | Total in database: {totalRecords}
-              </div>
+            <div className="record-details">
+              Page {currentPage} of {totalPages} | Total found: {vehicles.length}
             </div>
           </div>
+        </div>
+      )}
 
-          {/* Vehicle List */}
-          <div className="table-container">
-            <table className="vehicle-table">
-              <thead>
-                <tr>
-                  <th className="checkbox-header">
+      {/* Vehicle List */}
+      {dataLoaded && (
+        <div className="table-container">
+          <table className="vehicle-table">
+            <thead>
+              <tr>
+                <th className="checkbox-header">
+                  <input
+                    type="checkbox"
+                    checked={selectAll && paginatedVehicles.length > 0}
+                    onChange={handleSelectAll}
+                    disabled={paginatedVehicles.length === 0}
+                  />
+                </th>
+                <th>Vehicle No</th>
+                <th>Owner Name</th>
+                <th className="actions-header">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {paginatedVehicles.map((v) => (
+                <tr 
+                  key={v.id}
+                  className={selectedIds.includes(v.id) ? "row-selected" : ""}
+                >
+                  <td className="checkbox-cell">
                     <input
                       type="checkbox"
-                      checked={selectAll && paginatedVehicles.length > 0}
-                      onChange={handleSelectAll}
-                      disabled={paginatedVehicles.length === 0}
+                      checked={selectedIds.includes(v.id)}
+                      onChange={() => handleCheckboxChange(v.id)}
                     />
-                  </th>
-                  <th>Vehicle No</th>
-                  <th>Owner Name</th>
-                  <th className="actions-header">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {paginatedVehicles.map((v) => (
-                  <tr 
-                    key={v.id}
-                    className={selectedIds.includes(v.id) ? "row-selected" : ""}
-                  >
-                    <td className="checkbox-cell">
+                  </td>
+                  <td>
+                    {editingId === v.id ? (
                       <input
-                        type="checkbox"
-                        checked={selectedIds.includes(v.id)}
-                        onChange={() => handleCheckboxChange(v.id)}
+                        value={editVehicleNo}
+                        onChange={(e) => setEditVehicleNo(e.target.value)}
+                        className="edit-input"
                       />
-                    </td>
-                    <td>
-                      {editingId === v.id ? (
-                        <input
-                          value={editVehicleNo}
-                          onChange={(e) => setEditVehicleNo(e.target.value)}
-                          className="edit-input"
-                        />
-                      ) : (
-                        <span className="vehicle-number">{v.VehicleNo}</span>
-                      )}
-                    </td>
-                    <td>
-                      {editingId === v.id ? (
-                        <input
-                          value={editOwnerName}
-                          onChange={(e) => setEditOwnerName(e.target.value)}
-                          className="edit-input"
-                        />
-                      ) : (
-                        v.OwnerName
-                      )}
-                    </td>
-                    <td className="actions-cell">
-                      {editingId === v.id ? (
-                        <div className="edit-actions">
-                          <button 
-                            onClick={handleUpdate}
-                            className="btn-save"
-                          >
-                            💾 Save
-                          </button>
-                          <button 
-                            onClick={handleCancelEdit}
-                            className="btn-cancel"
-                          >
-                            ❌ Cancel
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="action-buttons">
-                          <button 
-                            onClick={() => handleEdit(v)}
-                            className="btn-edit"
-                          >
-                            ✏️ Edit
-                          </button>
-                          <button 
-                            onClick={() => handleDelete(v.id)}
-                            className="btn-delete"
-                          >
-                            🗑️ Delete
-                          </button>
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-                {paginatedVehicles.length === 0 && (
-                  <tr>
-                    <td colSpan={4} className="no-data">
-                      <div>
-                        📭 No vehicles found
-                        {searchTerm && <div className="no-data-hint">Try a different search term</div>}
+                    ) : (
+                      <span className="vehicle-number">{v.VehicleNo}</span>
+                    )}
+                  </td>
+                  <td>
+                    {editingId === v.id ? (
+                      <input
+                        value={editOwnerName}
+                        onChange={(e) => setEditOwnerName(e.target.value)}
+                        className="edit-input"
+                      />
+                    ) : (
+                      v.OwnerName
+                    )}
+                  </td>
+                  <td className="actions-cell">
+                    {editingId === v.id ? (
+                      <div className="edit-actions">
+                        <button 
+                          onClick={handleUpdate}
+                          className="btn-save"
+                        >
+                          💾 Save
+                        </button>
+                        <button 
+                          onClick={handleCancelEdit}
+                          className="btn-cancel"
+                        >
+                          ❌ Cancel
+                        </button>
                       </div>
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                    ) : (
+                      <div className="action-buttons">
+                        <button 
+                          onClick={() => handleEdit(v)}
+                          className="btn-edit"
+                        >
+                          ✏️ Edit
+                        </button>
+                        <button 
+                          onClick={() => handleDelete(v.id)}
+                          className="btn-delete"
+                        >
+                          🗑️ Delete
+                        </button>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {paginatedVehicles.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="no-data">
+                    <div>
+                      📭 No vehicles found in current search
+                      {searchTerm && <div className="no-data-hint">Try a different search term</div>}
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
 
-          {/* Pagination */}
-          {totalPages > 1 && (
-            <div className="pagination-container">
-              <div className="pagination-info">
-                Showing {filteredCount === 0 ? 0 : startIndex + 1} to {endIndex} of {filteredCount} entries
-              </div>
-              
-              <div className="pagination-controls">
-                <button
-                  disabled={currentPage === 1}
-                  onClick={() => setCurrentPage((p) => p - 1)}
-                  className={`pagination-btn ${currentPage === 1 ? 'disabled' : ''}`}
-                >
-                  ← Previous
-                </button>
-                
-                {[...Array(totalPages)].map((_, i) => {
-                  // Show only first, last, current, and adjacent pages
-                  if (
-                    i === 0 || 
-                    i === totalPages - 1 || 
-                    (i >= currentPage - 2 && i <= currentPage) ||
-                    (i <= currentPage + 2 && i >= currentPage)
-                  ) {
-                    return (
-                      <button
-                        key={i}
-                        onClick={() => setCurrentPage(i + 1)}
-                        className={`pagination-number ${currentPage === i + 1 ? 'active' : ''}`}
-                      >
-                        {i + 1}
-                      </button>
-                    );
-                  } else if (
-                    i === currentPage - 3 ||
-                    i === currentPage + 3
-                  ) {
-                    return <span key={i} className="pagination-ellipsis">...</span>;
-                  }
-                  return null;
-                })}
-                
-                <button
-                  disabled={currentPage === totalPages}
-                  onClick={() => setCurrentPage((p) => p + 1)}
-                  className={`pagination-btn ${currentPage === totalPages ? 'disabled' : ''}`}
-                >
-                  Next →
-                </button>
-              </div>
-            </div>
-          )}
-        </>
+      {/* Pagination */}
+      {dataLoaded && totalPages > 1 && (
+        <div className="pagination-container">
+          <div className="pagination-info">
+            Showing {filteredCount === 0 ? 0 : startIndex + 1} to {endIndex} of {filteredCount} entries
+          </div>
+          
+          <div className="pagination-controls">
+            <button
+              disabled={currentPage === 1}
+              onClick={() => setCurrentPage((p) => p - 1)}
+              className={`pagination-btn ${currentPage === 1 ? 'disabled' : ''}`}
+            >
+              ← Previous
+            </button>
+            
+            {[...Array(totalPages)].map((_, i) => {
+              // Show only first, last, current, and adjacent pages
+              if (
+                i === 0 || 
+                i === totalPages - 1 || 
+                (i >= currentPage - 2 && i <= currentPage) ||
+                (i <= currentPage + 2 && i >= currentPage)
+              ) {
+                return (
+                  <button
+                    key={i}
+                    onClick={() => setCurrentPage(i + 1)}
+                    className={`pagination-number ${currentPage === i + 1 ? 'active' : ''}`}
+                  >
+                    {i + 1}
+                  </button>
+                );
+              } else if (
+                i === currentPage - 3 ||
+                i === currentPage + 3
+              ) {
+                return <span key={i} className="pagination-ellipsis">...</span>;
+              }
+              return null;
+            })}
+            
+            <button
+              disabled={currentPage === totalPages}
+              onClick={() => setCurrentPage((p) => p + 1)}
+              className={`pagination-btn ${currentPage === totalPages ? 'disabled' : ''}`}
+            >
+              Next →
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -87,7 +87,7 @@ import { auth } from "../firebaseConfig";
 
           {isAdmin && (
             <>
-              <li><Link to="/destination-master" style={menuLink}>🗺️ Destination Master</Link></li>
+              <li><Link to="/vehicle-master" style={menuLink}>🗺️ Vehicle Master</Link></li>
               <li><Link to="/vehicle-master" style={menuLink}>🚛 Vehicle Master</Link></li>
             </>
           )}
