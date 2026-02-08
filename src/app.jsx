@@ -1,5 +1,4 @@
-﻿import ExportDispatchButton from "./components/ExportDispatchButton";
-import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useState } from "react";
 import { Routes, Route, BrowserRouter, Navigate } from "react-router-dom";
 import { onAuthStateChanged } from "firebase/auth";
 import Login from "./pages/Login.jsx";
@@ -18,9 +17,9 @@ import ShowQtyByMonth from "./pages/ShowQtyByMonth.jsx";
 import ShowDayQty from "./pages/ShowDayQty.jsx";
 import PaymentUpload from "./pages/PaymentUpload.jsx";
 import ShowPayment from "./pages/ShowPayment.jsx";
-
 import { auth, db } from "./firebaseConfig";
 import { doc, getDoc } from "firebase/firestore";
+import DispatchExport from "./pages/DispatchExport";
 
 const App = () => {
   const [user, setUser] = useState(null);
@@ -148,6 +147,7 @@ const App = () => {
           <Route path="show-billed-challan" element={<ShoBilledChallan />} />
           <Route path="monthly-qty-report" element={<ShowQtyByMonth />} />
           <Route path="daily-qty-report" element={<ShowDayQty />} />
+          <Route path="/dispatch-export" element={<DispatchExport />} />
         </Route>
 
         {/* ================= FALLBACK ================= */}

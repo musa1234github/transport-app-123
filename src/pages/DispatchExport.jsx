@@ -1,4 +1,4 @@
-﻿import React, { useState } from "react";
+import React, { useState } from "react";
 import { getAuth } from "firebase/auth";
 
 const DispatchExport = () => {
@@ -21,15 +21,14 @@ const DispatchExport = () => {
 
       if (!user) {
         alert("Please login first");
-        setLoading(false);
         return;
       }
 
       const token = await user.getIdToken();
 
-      // ✅ NEW 2nd Gen Function URL (from deploy output)
+      // 🔥 Pass filters in query string
       const response = await fetch(
-        `https://exportdispatches-jypg2nrwfa-uc.a.run.app?factory=${factory}&fromDate=${fromDate}&toDate=${toDate}`,
+        `https://us-central1-transport-app-c4674.cloudfunctions.net/exportDispatches?factory=${factory}&fromDate=${fromDate}&toDate=${toDate}`,
         {
           method: "GET",
           headers: {
@@ -38,8 +37,11 @@ const DispatchExport = () => {
         }
       );
 
+
       if (!response.ok) {
-        throw new Error("Export failed");
+        const text = await response.text();
+        alert("Backend error: " + text);
+        throw new Error(text);
       }
 
       const blob = await response.blob();
@@ -53,7 +55,6 @@ const DispatchExport = () => {
       a.remove();
 
       setLoading(false);
-
     } catch (err) {
       console.error(err);
       alert("Error downloading Excel");

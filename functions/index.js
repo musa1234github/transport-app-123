@@ -7,13 +7,23 @@ admin.initializeApp();
 exports.exportDispatches = onRequest(
   {
     region: "us-central1",
-    timeoutSeconds: 30,
-    memory: "256MiB",
+    timeoutSeconds: 60,
+    memory: "512MiB",
+    cors: true,
   },
   async (req, res) => {
+
+    // ✅ Allow preflight
+    if (req.method === "OPTIONS") {
+      return res.status(204).send("");
+    }
+
     try {
-      // 🔐 Auth check
+      // =========================
+      // 🔐 AUTH
+      // =========================
       const authHeader = req.headers.authorization;
+
       if (!authHeader || !authHeader.startsWith("Bearer ")) {
         return res.status(401).send("Unauthorized");
       }
@@ -21,17 +31,82 @@ exports.exportDispatches = onRequest(
       const token = authHeader.split("Bearer ")[1];
       await admin.auth().verifyIdToken(token);
 
-      // 🔥 Read Firestore
-      const snapshot = await admin
-        .firestore()
+      // =========================
+      // 📥 QUERY PARAMS
+      // =========================
+      const factory = req.query.factory;
+      const fromDate = req.query.fromDate;
+      const toDate = req.query.toDate;
+
+      if (!factory || !fromDate || !toDate) {
+        return res.status(400).send("Factory and date range required");
+      }
+
+      console.log("Factory:", factory);
+      console.log("From:", fromDate);
+      console.log("To:", toDate);
+
+      // =========================
+      // 🔄 DATE CONVERSION
+      // =========================
+      const fromJS = new Date(fromDate);
+      const toJS = new Date(toDate);
+      toJS.setHours(23, 59, 59, 999);
+
+      const from = admin.firestore.Timestamp.fromDate(fromJS);
+      const to = admin.firestore.Timestamp.fromDate(toJS);
+
+      // =========================
+      // 🔥 FIRESTORE QUERY
+      // =========================
+      const snapshot = await admin.firestore()
         .collection("TblDispatch")
-        .limit(5000)
+        .where("FactoryName", "==", factory)
+        .where("DispatchDate", ">=", from)
+        .where("DispatchDate", "<=", to)
         .get();
 
-      const rows = [];
-      snapshot.forEach(doc => rows.push(doc.data()));
+      console.log("Documents Found:", snapshot.size);
 
-      // 📊 Excel
+      if (snapshot.empty) {
+        return res.status(404).send("No records found");
+      }
+
+      // =========================
+      // 📦 SAFE DATA BUILD
+      // =========================
+      const rows = [];
+
+      snapshot.forEach(doc => {
+        const data = doc.data();
+
+        let dispatchDate = "";
+
+        if (data.DispatchDate) {
+          // If Firestore Timestamp
+          if (typeof data.DispatchDate.toDate === "function") {
+            dispatchDate = data.DispatchDate.toDate();
+          }
+          // If already JS Date
+          else if (data.DispatchDate instanceof Date) {
+            dispatchDate = data.DispatchDate;
+          }
+          // If string
+          else {
+            dispatchDate = new Date(data.DispatchDate);
+          }
+        }
+
+        rows.push({
+          id: doc.id,
+          ...data,
+          DispatchDate: dispatchDate
+        });
+      });
+
+      // =========================
+      // 📊 CREATE EXCEL
+      // =========================
       const worksheet = XLSX.utils.json_to_sheet(rows);
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, "Dispatches");
@@ -41,19 +116,24 @@ exports.exportDispatches = onRequest(
         bookType: "xlsx",
       });
 
+      // =========================
+      // 📤 RESPONSE
+      // =========================
       res.setHeader(
         "Content-Disposition",
-        "attachment; filename=dispatches.xlsx"
+        `attachment; filename=dispatch_${factory}_${fromDate}_to_${toDate}.xlsx`
       );
+
       res.setHeader(
         "Content-Type",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
       );
 
-      res.send(buffer);
+      res.status(200).send(buffer);
+
     } catch (err) {
-      console.error(err);
-      res.status(500).send("Error exporting Excel");
+      console.error("REAL ERROR:", err);
+      res.status(500).send(err.message);
     }
   }
 );

@@ -2,7 +2,7 @@
 import { signOut } from "firebase/auth";
 import { Link, Outlet } from "react-router-dom";
 import { auth } from "../firebaseConfig";
-import ExportDispatchButton from "../components/ExportDispatchButton";
+
 
 const Home = ({ user, userRole }) => {
   const canUploadDispatch = userRole === "admin" || userRole === "dispatcher";
@@ -99,6 +99,14 @@ const Home = ({ user, userRole }) => {
               </Link>
             </li>
           )}
+          {isAdmin && (
+            <>
+              <Link to="/dispatch-export">
+                <button>Dispatch Export</button>
+              </Link>
+            </>
+
+          )}
 
 
           <li><Link to="/factories" style={menuLink}>🏭 Factories</Link></li>
@@ -113,7 +121,7 @@ const Home = ({ user, userRole }) => {
       {/* ================= CONTENT ================= */}
       {isAdmin && (
         <div style={{ marginBottom: "20px" }}>
-          <ExportDispatchButton />
+          <Link to="/dispatch-export">Dispatch Export</Link>
         </div>
       )}
 

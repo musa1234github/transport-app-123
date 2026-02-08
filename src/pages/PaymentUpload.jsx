@@ -26,7 +26,7 @@ const safeNum = (v) => {
   return isNaN(n) ? 0 : n;
 };
 
-/* ===== IMPROVED DATE PARSING (MULTIPLE FORMATS) ===== */
+/* ===== UPDATED DATE PARSING FOR dd-mm-yy FORMAT ===== */
 const parseDate = (v) => {
   if (!v) return null;
 
@@ -50,13 +50,14 @@ const parseDate = (v) => {
 
   const str = String(v).trim();
 
-  // Try dd.mm.yyyy (with dots) - NEW FORMAT
-  const dotMatch = str.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2,4})$/);
-  if (dotMatch) {
-    const day = parseInt(dotMatch[1], 10);
-    const month = parseInt(dotMatch[2], 10) - 1;
-    let year = parseInt(dotMatch[3], 10);
+  // Primary format: dd-mm-yyyy or dd/mm/yyyy
+  const match = str.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{2,4})$/);
+  if (match) {
+    const day = parseInt(match[1], 10);
+    const month = parseInt(match[2], 10) - 1; // Months are 0-indexed in JS
+    let year = parseInt(match[3], 10);
 
+    // Handle 2-digit years
     if (year < 100) {
       year = year >= 0 && year <= 50 ? year + 2000 : year + 1900;
     }
@@ -67,12 +68,12 @@ const parseDate = (v) => {
     }
   }
 
-  // Try dd-mm-yyyy or dd/mm/yyyy
-  const match = str.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{2,4})$/);
-  if (match) {
-    const day = parseInt(match[1], 10);
-    const month = parseInt(match[2], 10) - 1;
-    let year = parseInt(match[3], 10);
+  // Try dd.mm.yyyy (with dots)
+  const dotMatch = str.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2,4})$/);
+  if (dotMatch) {
+    const day = parseInt(dotMatch[1], 10);
+    const month = parseInt(dotMatch[2], 10) - 1;
+    let year = parseInt(dotMatch[3], 10);
 
     if (year < 100) {
       year = year >= 0 && year <= 50 ? year + 2000 : year + 1900;
@@ -97,6 +98,23 @@ const parseDate = (v) => {
     }
   }
 
+  // Try mm-dd-yyyy (old format) as fallback
+  const usMatch = str.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{2,4})$/);
+  if (usMatch) {
+    const month = parseInt(usMatch[1], 10) - 1;
+    const day = parseInt(usMatch[2], 10);
+    let year = parseInt(usMatch[3], 10);
+
+    if (year < 100) {
+      year = year >= 0 && year <= 50 ? year + 2000 : year + 1900;
+    }
+
+    const date = new Date(year, month, day);
+    if (!isNaN(date.getTime()) && date.getDate() === day && date.getMonth() === month) {
+      return date;
+    }
+  }
+
   // Try standard Date parse as last resort
   const parsed = new Date(str);
   if (!isNaN(parsed.getTime())) {
@@ -114,14 +132,6 @@ const PaymentUpload = () => {
   const [factory, setFactory] = useState("");
   const [loading, setLoading] = useState(false);
   const [uploadLog, setUploadLog] = useState([]);
-  const [payments, setPayments] = useState([]);
-  const [selectedPayments, setSelectedPayments] = useState(new Set());
-
-  useEffect(() => {
-    if (factory) {
-      loadPayments();
-    }
-  }, [factory]);
 
   /* ===== ACCESS CONTROL ===== */
   const canUpload = userRole === "admin";
@@ -130,44 +140,9 @@ const PaymentUpload = () => {
     return <h3 style={{ color: "red" }}>Access Denied</h3>;
   }
 
-
-
   const addLog = (message, type = "info") => {
     const timestamp = new Date().toLocaleTimeString();
     setUploadLog(prev => [...prev, { timestamp, message, type }].slice(-20));
-  };
-
-  const loadPayments = async () => {
-    try {
-      // FIXED QUERY: Only query PaymentReceived > 0
-      const paymentsQuery = query(
-        collection(db, "BillTable"),
-        where("FactoryName", "==", factory),
-        where("PaymentReceived", ">", 0)
-      );
-
-      const querySnapshot = await getDocs(paymentsQuery);
-      const paymentsData = [];
-
-      querySnapshot.forEach((doc) => {
-        const data = doc.data();
-        paymentsData.push({
-          id: doc.id,
-          ...data,
-          BillDate: data.BillDate?.toDate ? data.BillDate.toDate() : data.BillDate
-        });
-      });
-
-      setPayments(paymentsData);
-      addLog(`Loaded ${paymentsData.length} payments for ${factory}`, "info");
-    } catch (error) {
-      if (error.message.includes("requires an index")) {
-        addLog(`Error loading payments: The query requires a Firestore index. Please create the composite index first.`, "error");
-        addLog(`Index needed: BillTable collection with fields: FactoryName (asc), PaymentReceived (asc)`, "error");
-      } else {
-        addLog(`Error loading payments: ${error.message}`, "error");
-      }
-    }
   };
 
   const handleUpload = async () => {
@@ -184,14 +159,14 @@ const PaymentUpload = () => {
 
     reader.onload = async (e) => {
       try {
-        const wb = XLSX.read(e.target.result, { type: "binary", cellDates: true }); // Added cellDates
+        const wb = XLSX.read(e.target.result, { type: "binary", cellDates: true });
         const ws = wb.Sheets[wb.SheetNames[0]];
-        const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false }); // Added raw: false
+        const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false });
 
         let success = 0;
         let skipped = 0;
         let failed = 0;
-        const paymentMap = new Map(); // To store unique payments by payment number
+        const paymentMap = new Map();
 
         addLog(`Found ${rows.length - 1} rows in Excel file`, "info");
 
@@ -199,26 +174,16 @@ const PaymentUpload = () => {
           const row = rows[i];
           if (!row || row.every(v => v === null || v === "")) continue;
 
-          /* ===== COLUMN MAPPING BASED ON .NET CONTROLLER ===== */
-          // Row[0] = BillNumber
-          // Row[1] = PaymentNumber
-          // Row[2] = PaymentReceivedDate
-          // Row[3] = ActualAmount
-          // Row[4] = TDS
-          // Row[5] = GST
-          // Row[6] = PaymentReceived
-          // Row[7] = Shortage
-
+          // Column mapping - Using dd-mm-yy format
           const billNumber = String(row[0] || "").trim();
           const paymentNumber = String(row[1] || "").trim();
-          const paymentDate = parseDate(row[2]);
+          const paymentDate = parseDate(row[2]); // Expecting dd-mm-yy format
           const actualAmount = safeNum(row[3]);
           const tds = safeNum(row[4]);
           const gst = safeNum(row[5]);
           const paymentReceived = safeNum(row[6]);
           const shortageStr = String(row[7] || "").trim();
 
-          // Clean shortage string (remove dashes)
           const shortageCleaned = shortageStr.replace(/[-â€“]/g, "").trim();
           const shortage = safeNum(shortageCleaned);
 
@@ -244,21 +209,18 @@ const PaymentUpload = () => {
           }
 
           if (!paymentDate) {
-            addLog(`Row ${i} skipped: Invalid Payment Date (${row[2]})`, "warning");
+            addLog(`Row ${i} skipped: Invalid Payment Date (${row[2]}) - Expected dd-mm-yy format`, "warning");
             skipped++;
             continue;
           }
 
           /* ===== FIND BILL ===== */
-          // FIX: Use a simpler query first to avoid index issues
           const billQuery = query(
             collection(db, "BillTable"),
             where("BillNum", "==", billNumber)
           );
 
           const billSnapshot = await getDocs(billQuery);
-
-          // Filter by factory client-side to avoid composite index error
           const billDoc = billSnapshot.docs.find(doc =>
             doc.data().FactoryName === factory
           );
@@ -275,7 +237,6 @@ const PaymentUpload = () => {
           let paymentId = null;
 
           if (!paymentMap.has(paymentNumber)) {
-            // Check if payment already exists in database
             const paymentQuery = query(
               collection(db, "PaymentTable"),
               where("DocNumber", "==", paymentNumber)
@@ -284,12 +245,17 @@ const PaymentUpload = () => {
             const paymentSnapshot = await getDocs(paymentQuery);
 
             if (!paymentSnapshot.empty) {
-              // Payment exists, use existing ID
               paymentId = paymentSnapshot.docs[0].id;
               paymentMap.set(paymentNumber, { id: paymentId, exists: true });
               addLog(`Row ${i}: Using existing payment ${paymentNumber}`, "info");
+              
+              // Update existing payment date if needed
+              await updateDoc(doc(db, "PaymentTable", paymentId), {
+                PayRecDate: paymentDate,
+                Shortage: shortage,
+                UpdatedAt: serverTimestamp()
+              });
             } else {
-              // Create new payment
               try {
                 const paymentRef = await addDoc(collection(db, "PaymentTable"), {
                   DocNumber: paymentNumber,
@@ -333,7 +299,6 @@ const PaymentUpload = () => {
         }
 
         setLoading(false);
-        await loadPayments(); // Refresh payments list
 
         const summary = `Upload completed:\nSuccess: ${success}\nSkipped: ${skipped}\nFailed: ${failed}`;
         addLog(summary, "info");
@@ -359,7 +324,7 @@ const PaymentUpload = () => {
       ["BillNumber", "PaymentNumber", "PaymentDate", "ActualAmount", "TDS", "GST", "PaymentReceived", "Shortage"],
       ["BILL-001", "PAY-001", "15-01-2026", 50000, 2500, 9000, 48000, "500"],
       ["BILL-002", "PAY-002", "16-01-2026", 75000, 3750, 13500, 72000, "250"],
-      ["BILL-003", "PAY-003", "17.01.2026", 60000, 3000, 10800, 57600, "-300"] // Added dot format example
+      ["BILL-003", "PAY-003", "17-01-2026", 60000, 3000, 10800, 57600, "-300"]
     ];
 
     const ws = XLSX.utils.aoa_to_sheet(sampleData);
@@ -370,79 +335,9 @@ const PaymentUpload = () => {
     addLog("Payment template downloaded", "info");
   };
 
-  const handleDeleteSelected = async () => {
-    if (selectedPayments.size === 0) {
-      alert("No payments selected for deletion");
-      return;
-    }
-
-    if (!confirm(`Are you sure you want to delete ${selectedPayments.size} payment(s)?`)) {
-      return;
-    }
-
-    try {
-      setLoading(true);
-      addLog(`Starting deletion of ${selectedPayments.size} payments...`, "info");
-
-      let deletedCount = 0;
-      let errorCount = 0;
-
-      for (const billId of selectedPayments) {
-        try {
-          // Reset payment fields in BillTable
-          await updateDoc(doc(db, "BillTable", billId), {
-            PaymentReceived: 0,
-            ActualAmount: 0,
-            Tds: 0,
-            Gst: 0,
-            PId: null,
-            PaymentNumber: null,
-            UpdatedAt: serverTimestamp()
-          });
-
-          deletedCount++;
-          addLog(`Reset payment for bill ID: ${billId}`, "success");
-        } catch (error) {
-          errorCount++;
-          addLog(`Failed to reset bill ${billId}: ${error.message}`, "error");
-        }
-      }
-
-      setSelectedPayments(new Set());
-      await loadPayments();
-
-      setLoading(false);
-      const summary = `Deletion completed:\nReset: ${deletedCount}\nErrors: ${errorCount}`;
-      addLog(summary, "info");
-      alert(summary);
-    } catch (error) {
-      setLoading(false);
-      addLog(`Deletion failed: ${error.message}`, "error");
-      alert(`Deletion failed: ${error.message}`);
-    }
-  };
-
-  const toggleSelectAll = (e) => {
-    if (e.target.checked) {
-      setSelectedPayments(new Set(payments.map(p => p.id)));
-    } else {
-      setSelectedPayments(new Set());
-    }
-  };
-
-  const toggleSelectOne = (billId) => {
-    const newSelected = new Set(selectedPayments);
-    if (newSelected.has(billId)) {
-      newSelected.delete(billId);
-    } else {
-      newSelected.add(billId);
-    }
-    setSelectedPayments(newSelected);
-  };
-
   return (
-    <div style={{ maxWidth: 1200, margin: "30px auto", padding: "0 20px" }}>
-      <h1 style={{ textAlign: "center", marginBottom: "30px" }}>Payments</h1>
+    <div style={{ maxWidth: 800, margin: "30px auto", padding: "0 20px" }}>
+      <h1 style={{ textAlign: "center", marginBottom: "30px" }}>Payment Upload</h1>
 
       {/* Factory Selection */}
       <div style={{ marginBottom: "25px", width: "200px" }}>
@@ -453,7 +348,6 @@ const PaymentUpload = () => {
           value={factory}
           onChange={e => {
             setFactory(e.target.value);
-            setSelectedPayments(new Set());
           }}
           style={{
             width: "100%",
@@ -483,7 +377,7 @@ const PaymentUpload = () => {
           Excel must have columns: BillNumber, PaymentNumber, PaymentDate, ActualAmount, TDS, GST, PaymentReceived, Shortage
         </p>
         <p style={{ margin: "10px 0", color: "#6c757d", fontSize: "14px" }}>
-          <strong>Note:</strong> Date formats accepted: dd.mm.yyyy, dd-mm-yyyy, dd/mm/yyyy, yyyy-mm-dd
+          <strong>Important:</strong> Date format must be <strong>dd-mm-yyyy</strong> (e.g., 15-01-2026)
         </p>
 
         <div style={{ marginBottom: "15px" }}>
@@ -561,7 +455,7 @@ const PaymentUpload = () => {
             Upload Log
           </div>
           <div style={{
-            maxHeight: "200px",
+            maxHeight: "300px",
             overflowY: "auto",
             backgroundColor: "#f8f9fa"
           }}>
@@ -584,88 +478,6 @@ const PaymentUpload = () => {
                 {log.message}
               </div>
             ))}
-          </div>
-        </div>
-      )}
-
-      {/* Payments Table */}
-      {factory && (
-        <div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px" }}>
-            <h4>Payment Records for {factory}</h4>
-            {selectedPayments.size > 0 && (
-              <button
-                onClick={handleDeleteSelected}
-                disabled={loading}
-                style={{
-                  padding: "8px 16px",
-                  backgroundColor: "#dc3545",
-                  color: "white",
-                  border: "none",
-                  borderRadius: "4px",
-                  cursor: loading ? "not-allowed" : "pointer",
-                  fontSize: "14px"
-                }}
-              >
-                {loading ? "Processing..." : `Delete Selected (${selectedPayments.size})`}
-              </button>
-            )}
-          </div>
-
-          <div style={{ overflowX: "auto" }}>
-            <table style={{
-              width: "100%",
-              borderCollapse: "collapse",
-              border: "1px solid #dee2e6"
-            }}>
-              <thead>
-                <tr style={{ backgroundColor: "#343a40", color: "white" }}>
-                  <th style={{ padding: "12px", textAlign: "left", border: "1px solid #dee2e6" }}>
-                    <input
-                      type="checkbox"
-                      id="selectAll"
-                      checked={payments.length > 0 && selectedPayments.size === payments.length}
-                      onChange={toggleSelectAll}
-                      disabled={payments.length === 0}
-                    /> Select All
-                  </th>
-                  <th style={{ padding: "12px", textAlign: "left", border: "1px solid #dee2e6" }}>Factory</th>
-                  <th style={{ padding: "12px", textAlign: "left", border: "1px solid #dee2e6" }}>Bill Number</th>
-                  <th style={{ padding: "12px", textAlign: "left", border: "1px solid #dee2e6" }}>Bill Date</th>
-                  <th style={{ padding: "12px", textAlign: "left", border: "1px solid #dee2e6" }}>Receive Amount</th>
-                  <th style={{ padding: "12px", textAlign: "left", border: "1px solid #dee2e6" }}>Payment Number</th>
-                </tr>
-              </thead>
-              <tbody>
-                {payments.map((payment) => (
-                  <tr key={payment.id} style={{ borderBottom: "1px solid #dee2e6" }}>
-                    <td style={{ padding: "12px", border: "1px solid #dee2e6" }}>
-                      <input
-                        type="checkbox"
-                        checked={selectedPayments.has(payment.id)}
-                        onChange={() => toggleSelectOne(payment.id)}
-                      />
-                    </td>
-                    <td style={{ padding: "12px", border: "1px solid #dee2e6" }}>{payment.FactoryName}</td>
-                    <td style={{ padding: "12px", border: "1px solid #dee2e6" }}>{payment.BillNum}</td>
-                    <td style={{ padding: "12px", border: "1px solid #dee2e6" }}>
-                      {payment.BillDate ? payment.BillDate.toLocaleDateString() : "N/A"}
-                    </td>
-                    <td style={{ padding: "12px", border: "1px solid #dee2e6" }}>
-                      {payment.PaymentReceived ? payment.PaymentReceived.toFixed(2) : "0.00"}
-                    </td>
-                    <td style={{ padding: "12px", border: "1px solid #dee2e6" }}>{payment.PaymentNumber || "N/A"}</td>
-                  </tr>
-                ))}
-                {payments.length === 0 && (
-                  <tr>
-                    <td colSpan="6" style={{ padding: "20px", textAlign: "center", color: "#6c757d" }}>
-                      No payment records found for {factory}
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
           </div>
         </div>
       )}
