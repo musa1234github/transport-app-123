@@ -6,7 +6,6 @@ import Login from "./pages/Login.jsx";
 import Home from "./pages/Home.jsx";
 import FactoryList from "./pages/FactoryList.jsx";
 import UploadDispatch from "./pages/UploadDispatch.jsx";
-import DestinationMaster from "./pages/DestinationMaster.jsx";
 import ShowDispatch from "./pages/ShowDispatch.jsx";
 import VehicleMaster from "./pages/VehicleMaster.jsx";
 import BillUpload from "./pages/BillUpload.jsx";
@@ -19,6 +18,7 @@ import ShowDayQty from "./pages/ShowDayQty.jsx";
 import PaymentUpload from "./pages/PaymentUpload.jsx";
 import ShowPayment from "./pages/ShowPayment.jsx";
 import DispatchExport from "./pages/DispatchExport.jsx"; // ADD THIS
+import GstUpload from "./pages/GstUpload.jsx";
 import { auth, db } from "./firebaseConfig";
 import { doc, getDoc } from "firebase/firestore";
 
@@ -129,6 +129,7 @@ const App = () => {
             <>
               <Route path="bill-upload" element={<BillUpload />} />
               <Route path="payment-upload" element={<PaymentUpload />} />
+              <Route path="gst-upload" element={<GstUpload />} />
             </>
           )}
 
