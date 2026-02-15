@@ -1,8 +1,35 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
+    
+    // Strict rules for Dispatch Data
+    // Enforces read limit to prevent scraping/high costs
+    match /TblDispatch/{document} {
+      allow read: if request.query.limit <= 50;
+      allow write: if request.auth != null;
+    }
+
+    // Other known collections - maintaining existing access level (permissive)
+    // You should restrict these as well based on your requirements
+    match /BillTable/{document} {
       allow read, write: if true;
+    }
+    
+    match /PaymentTable/{document} {
+      allow read, write: if true;
+    }
+    
+    match /VehicleMaster/{document} {
+      allow read, write: if true;
+    }
+    
+    match /factories/{document} {
+      allow read, write: if true;
+    }
+
+    // Default deny for any other unknown collections
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

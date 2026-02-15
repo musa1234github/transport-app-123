@@ -1,11 +1,17 @@
 ﻿import React, { useEffect, useState, useMemo } from "react";
 import { db } from "../firebaseConfig";
+import "./ShowBill.css";
+
 import {
   collection,
   getDocs,
   query,
   where,
   orderBy,
+  limit,
+  startAfter,
+  endBefore,
+  limitToLast,
   Timestamp,
   deleteDoc,
   doc,
@@ -34,17 +40,17 @@ const toNum = (v) => {
 /* ===== FORMAT DATE PROPERLY ===== */
 const formatDate = (date) => {
   if (!date) return "";
-  
+
   try {
     if (isNaN(date.getTime())) return "";
-    
+
     const day = String(date.getDate()).padStart(2, "0");
-    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", 
-                        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     const monthIndex = date.getMonth();
     const month = monthNames[monthIndex];
     const year = date.getFullYear();
-    
+
     return `${day}-${month}-${year}`;
   } catch (error) {
     console.error("Error formatting date:", date, error);
@@ -70,12 +76,12 @@ const formatDateForSort = (date) => {
 /* ===== GET DISPATCH MONTH FROM DISPATCH DATES ===== */
 const getDispatchMonth = (dispatchRows) => {
   if (!dispatchRows || dispatchRows.length === 0) return "";
-  
-  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", 
-                      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  
+
+  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
   const monthsSet = new Set();
-  
+
   dispatchRows.forEach(dispatch => {
     if (dispatch.DispatchDate) {
       const parts = dispatch.DispatchDate.split('-');
@@ -87,11 +93,11 @@ const getDispatchMonth = (dispatchRows) => {
       }
     }
   });
-  
-  const monthsArray = Array.from(monthsSet).sort((a, b) => 
+
+  const monthsArray = Array.from(monthsSet).sort((a, b) =>
     monthNames.indexOf(a) - monthNames.indexOf(b)
   );
-  
+
   return monthsArray.join(', ');
 };
 
@@ -112,10 +118,6 @@ const ShowBill = ({ userRole }) => {
   // Check if user is admin
   const isAdmin = userRole === "admin";
 
-  /* ===== PAGINATION STATES ===== */
-  const [currentPage, setCurrentPage] = useState(1);
-  const [recordsPerPage, setRecordsPerPage] = useState(20);
-
   /* ===== FILTER STATES ===== */
   const [searchBill, setSearchBill] = useState("");
   const [fromDate, setFromDate] = useState("");
@@ -130,13 +132,45 @@ const ShowBill = ({ userRole }) => {
     factoryFilter: ""
   });
 
-  /* ================= LOAD FACTORIES ON MOUNT ================= */
-  const loadFactories = async () => {
+  /* ===== CURSOR PAGINATION STATES ===== */
+  const [firstDoc, setFirstDoc] = useState(null);
+  const [lastDoc, setLastDoc] = useState(null);
+  const [hasNextPage, setHasNextPage] = useState(false);
+  const [hasPrevPage, setHasPrevPage] = useState(false);
+  const BILLS_PER_PAGE = 20;
+
+  /* ================= LOAD FACTORIES WITH CACHE ================= */
+  const loadFactories = async (forceRefresh = false) => {
     setLoadingFactories(true);
     try {
+      // Check cache first (24 hour expiry)
+      const CACHE_KEY = 'billFactoriesCache';
+      const CACHE_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+      if (!forceRefresh) {
+        const cached = localStorage.getItem(CACHE_KEY);
+        if (cached) {
+          try {
+            const { factories, timestamp } = JSON.parse(cached);
+            const age = Date.now() - timestamp;
+
+            if (age < CACHE_EXPIRY_MS) {
+              console.log('Using cached factories (age:', Math.round(age / 1000 / 60), 'minutes)');
+              setFactories(factories);
+              setLoadingFactories(false);
+              return;
+            }
+          } catch (e) {
+            console.error('Cache parse error:', e);
+          }
+        }
+      }
+
+      // Cache miss or expired - load from Firestore
+      console.log('Loading factories from Firestore...');
       const billQuery = query(collection(db, "BillTable"));
       const billSnap = await getDocs(billQuery);
-      
+
       // Extract unique factory names from all bills
       const factorySet = new Set();
       billSnap.docs.forEach(b => {
@@ -145,9 +179,16 @@ const ShowBill = ({ userRole }) => {
           factorySet.add(data.FactoryName);
         }
       });
-      
+
       const factoriesList = Array.from(factorySet).sort();
       setFactories(factoriesList);
+
+      // Cache for next time
+      localStorage.setItem(CACHE_KEY, JSON.stringify({
+        factories: factoriesList,
+        timestamp: Date.now()
+      }));
+      console.log('Cached', factoriesList.length, 'factories');
     } catch (error) {
       console.error("Error loading factories:", error);
     } finally {
@@ -155,14 +196,36 @@ const ShowBill = ({ userRole }) => {
     }
   };
 
-  /* ================= LOAD DATA ================= */
-  const load = async () => {
+  /* ================= LOAD DATA WITH CURSOR PAGINATION ================= */
+  const load = async (direction = 'initial', cursorDoc = null) => {
     setLoading(true);
     try {
-      // Create base query
-      let queryConstraints = [orderBy("BillDate", "asc")];
+      // 🔥 CRITICAL: Require at least one filter to prevent reading entire database
+      if (!appliedFilters.fromDate && !appliedFilters.toDate && !appliedFilters.factoryFilter && !appliedFilters.searchBill) {
+        alert("Please select at least a factory, date range, or search term to load data");
+        setLoading(false);
+        setDataLoaded(false);
+        setRows([]);
+        setDispatchRows({});
+        return;
+      }
 
-      // Add date filters if they exist in appliedFilters
+      // Create base query constraints
+      let queryConstraints = [];
+
+      const hasDateFilter = appliedFilters.fromDate || appliedFilters.toDate;
+
+      // Only add orderBy when we have date filters (to avoid unnecessary index requirements)
+      if (hasDateFilter) {
+        queryConstraints.push(orderBy("BillDate", "desc"));
+      }
+
+      // Add factory filter to Firestore query (server-side filtering)
+      if (appliedFilters.factoryFilter) {
+        queryConstraints.push(where("FactoryName", "==", appliedFilters.factoryFilter));
+      }
+
+      // Add date filters
       if (appliedFilters.fromDate) {
         const fromDateObj = new Date(appliedFilters.fromDate);
         fromDateObj.setHours(0, 0, 0, 0);
@@ -175,88 +238,156 @@ const ShowBill = ({ userRole }) => {
         queryConstraints.push(where("BillDate", "<=", Timestamp.fromDate(toDateObj)));
       }
 
-      const billQuery = query(collection(db, "BillTable"), ...queryConstraints);
+      // Build query with cursor pagination
+      let billQuery;
+      if (direction === 'next' && cursorDoc) {
+        billQuery = query(
+          collection(db, "BillTable"),
+          ...queryConstraints,
+          startAfter(cursorDoc),
+          limit(BILLS_PER_PAGE + 1)
+        );
+      } else if (direction === 'prev' && cursorDoc) {
+        billQuery = query(
+          collection(db, "BillTable"),
+          ...queryConstraints,
+          endBefore(cursorDoc),
+          limitToLast(BILLS_PER_PAGE + 1)
+        );
+      } else {
+        // Initial load
+        billQuery = query(
+          collection(db, "BillTable"),
+          ...queryConstraints,
+          limit(BILLS_PER_PAGE + 1)
+        );
+      }
 
       const billSnap = await getDocs(billQuery);
-      const dispSnap = await getDocs(collection(db, "TblDispatch"));
+      const docs = billSnap.docs;
 
+      // Check if there are more pages
+      const hasMore = docs.length > BILLS_PER_PAGE;
+      const displayDocs = hasMore ? docs.slice(0, BILLS_PER_PAGE) : docs;
+
+      // Update pagination cursors
+      if (displayDocs.length > 0) {
+        setFirstDoc(displayDocs[0]);
+        setLastDoc(displayDocs[displayDocs.length - 1]);
+
+        if (direction === 'next') {
+          setHasNextPage(hasMore);
+          setHasPrevPage(true);
+        } else if (direction === 'prev') {
+          setHasPrevPage(hasMore);
+          setHasNextPage(true);
+        } else {
+          setHasNextPage(hasMore);
+          setHasPrevPage(false);
+        }
+      } else {
+        setFirstDoc(null);
+        setLastDoc(null);
+        setHasNextPage(false);
+        setHasPrevPage(false);
+      }
+
+      // Create bill map
       const billMap = {};
-      billSnap.docs.forEach(b => (billMap[b.id] = b.data()));
+      displayDocs.forEach(b => (billMap[b.id] = b.data()));
 
-      const reportMap = {};
+      // Get bill IDs for this page
+      const billIds = displayDocs.map(b => b.id);
+
+      // 🔥 OPTIMIZATION: Only load dispatches for current page of bills
       const dispatchMap = {};
+      if (billIds.length > 0) {
+        // Firestore 'in' operator supports max 10 items, so batch requests
+        const batchSize = 10;
+        for (let i = 0; i < billIds.length; i += batchSize) {
+          const batchIds = billIds.slice(i, i + batchSize);
+          const dispQuery = query(
+            collection(db, "TblDispatch"),
+            where("BillID", "in", batchIds)
+          );
+          const dispSnap = await getDocs(dispQuery);
 
-      dispSnap.docs.forEach(d => {
-        const r = d.data();
-        if (!r.BillID || !billMap[r.BillID]) return;
+          dispSnap.docs.forEach(d => {
+            const r = d.data();
+            if (!r.BillID || !billMap[r.BillID]) return;
 
-        const bill = billMap[r.BillID];
+            const dispatchDateObj = toDate(r.DispatchDate);
+            const dispatchDateDisplay = formatDate(dispatchDateObj);
+            const dispatchDateSortKey = formatDateForSort(dispatchDateObj);
+
+            if (!dispatchMap[r.BillID]) dispatchMap[r.BillID] = [];
+
+            dispatchMap[r.BillID].push({
+              id: d.id,
+              ChallanNo: r.ChallanNo || "",
+              DispatchDate: dispatchDateDisplay,
+              DispatchDateSortKey: dispatchDateSortKey,
+              Quantity: toNum(r.DispatchQuantity),
+              UnitPrice: toNum(r.UnitPrice),
+              FinalPrice: toNum(r.FinalPrice),
+              VehicleNo: r.VehicleNo || "",
+              LRNo: r.LRNo || "",
+              DeliveryNum: r.DeliveryNum || ""
+            });
+          });
+        }
+      }
+
+      // Build report map
+      const reportMap = {};
+      Object.keys(billMap).forEach(billId => {
+        const bill = billMap[billId];
         const billDateObj = toDate(bill.BillDate);
         const billDateDisplay = formatDate(billDateObj);
         const billDateSortKey = formatDateForSort(billDateObj);
 
-        if (!dispatchMap[r.BillID]) dispatchMap[r.BillID] = [];
+        reportMap[billId] = {
+          BillID: billId,
+          "Dispatch Month": "",
+          "Factory Name": bill.FactoryName || "",
+          "Bill Num": bill.BillNum || "",
+          "LR Quantity": 0,
+          "Bill Quantity": 0,
+          "Taxable Amount": 0,
+          "Final Price": 0,
+          FINAL_RAW: 0,
+          "Actual Amount": 0,
+          "TDS": 0,
+          "GST": 0,
+          "Bill Date": billDateDisplay,
+          "Bill Type": bill.BillType || "",
+          BillDateObj: billDateObj,
+          BillDateSortKey: billDateSortKey,
+          HAS_ZERO_FINAL: false
+        };
 
-        const dispatchDateObj = toDate(r.DispatchDate);
-        const dispatchDateDisplay = formatDate(dispatchDateObj);
-        const dispatchDateSortKey = formatDateForSort(dispatchDateObj);
-        
-        dispatchMap[r.BillID].push({
-          id: d.id,
-          ChallanNo: r.ChallanNo || "",
-          DispatchDate: dispatchDateDisplay,
-          DispatchDateSortKey: dispatchDateSortKey,
-          Quantity: toNum(r.DispatchQuantity),
-          UnitPrice: toNum(r.UnitPrice),
-          FinalPrice: toNum(r.FinalPrice),
-          VehicleNo: r.VehicleNo || "",
-          LRNo: r.LRNo || "",
-          DeliveryNum: r.DeliveryNum || ""
-        });
-
-        if (!reportMap[r.BillID]) {
-          reportMap[r.BillID] = {
-            BillID: r.BillID,
-            "Dispatch Month": "",
-            "Factory Name": bill.FactoryName || "",
-            "Bill Num": bill.BillNum || "",
-            "LR Quantity": 0,
-            "Bill Quantity": 0,
-            "Taxable Amount": 0,
-            "Final Price": 0,
-            FINAL_RAW: 0,
-            "Actual Amount": 0,
-            "TDS": 0,
-            "GST": 0,
-            "Bill Date": billDateDisplay,
-            "Bill Type": bill.BillType || "",
-            BillDateObj: billDateObj,
-            BillDateSortKey: billDateSortKey,
-            HAS_ZERO_FINAL: false
-          };
-        }
-
-        reportMap[r.BillID]["LR Quantity"] += 1;
-        reportMap[r.BillID]["Bill Quantity"] += toNum(r.DispatchQuantity);
-
-        const taxable = toNum(r.DispatchQuantity) * toNum(r.UnitPrice);
-        const finalPrice = toNum(r.FinalPrice);
-
-        reportMap[r.BillID]["Taxable Amount"] += taxable;
-        reportMap[r.BillID].FINAL_RAW += finalPrice;
-
-        if (finalPrice === 0) {
-          reportMap[r.BillID].HAS_ZERO_FINAL = true;
-        }
-      });
-
-      // Calculate dispatch month for each bill
-      Object.keys(reportMap).forEach(billId => {
+        // Calculate aggregate from dispatches
         if (dispatchMap[billId]) {
+          dispatchMap[billId].forEach(dispatch => {
+            reportMap[billId]["LR Quantity"] += 1;
+            reportMap[billId]["Bill Quantity"] += dispatch.Quantity;
+
+            const taxable = dispatch.Quantity * dispatch.UnitPrice;
+            const finalPrice = dispatch.FinalPrice;
+
+            reportMap[billId]["Taxable Amount"] += taxable;
+            reportMap[billId].FINAL_RAW += finalPrice;
+
+            if (finalPrice === 0) {
+              reportMap[billId].HAS_ZERO_FINAL = true;
+            }
+          });
+
           reportMap[billId]["Dispatch Month"] = getDispatchMonth(dispatchMap[billId]);
         }
       });
 
+      // Calculate final values
       const result = Object.values(reportMap).map(r => {
         const totalTaxable = r["Taxable Amount"];
         const totalFinal = r.FINAL_RAW;
@@ -268,11 +399,10 @@ const ShowBill = ({ userRole }) => {
 
         const base = useFinal ? totalFinal : totalTaxable;
 
-        // Calculate values according to Excel format
         const tds = base * 0.00984;
         const gst = base * 0.18;
         const actualAmount = base + gst;
-        
+
         return {
           ...r,
           "LR Quantity": r["LR Quantity"],
@@ -285,28 +415,30 @@ const ShowBill = ({ userRole }) => {
         };
       });
 
-      // Sort by date (newest first by default)
-      result.sort((a, b) => {
-        if (a.BillDateObj && b.BillDateObj) {
-          return b.BillDateObj - a.BillDateObj;
-        }
-        return 0;
-      });
+      // Sort by date (newest first if using date ordering, otherwise by creation order)
+      if (hasDateFilter) {
+        result.sort((a, b) => {
+          if (a.BillDateObj && b.BillDateObj) {
+            return b.BillDateObj - a.BillDateObj;
+          }
+          return 0;
+        });
+      }
 
       setRows(result);
       setDispatchRows(dispatchMap);
-      setDataLoaded(true); // Mark data as loaded
-      
-      // Reset selected bills and pagination when data reloads
+      setDataLoaded(true);
+
       setSelectedBills([]);
       setSelectAll(false);
-      setCurrentPage(1);
     } catch (error) {
       console.error("Error loading data:", error);
+      alert(`Error loading data: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
+
 
   /* ===== LOAD FACTORIES ON COMPONENT MOUNT ===== */
   useEffect(() => {
@@ -352,11 +484,24 @@ const ShowBill = ({ userRole }) => {
     setSelectedBills([]);
   };
 
-  /* ================= PAGINATION CALCULATIONS ================= */
+  /* ===== PAGINATION NAVIGATION ===== */
+  const nextPage = () => {
+    if (hasNextPage && lastDoc) {
+      load('next', lastDoc);
+    }
+  };
+
+  const prevPage = () => {
+    if (hasPrevPage && firstDoc) {
+      load('prev', firstDoc);
+    }
+  };
+
+  /* ================= APPLY SEARCH FILTER (local) ================= */
   const filteredRows = useMemo(() => {
     let data = [...rows];
 
-    // Search filter
+    // Search filter (only client-side filter remaining)
     if (appliedFilters.searchBill.trim()) {
       const tokens = appliedFilters.searchBill.toLowerCase().split(/\s+/);
       data = data.filter(r =>
@@ -369,69 +514,13 @@ const ShowBill = ({ userRole }) => {
       );
     }
 
-    // Factory filter
-    if (appliedFilters.factoryFilter) {
-      data = data.filter(
-        r => (r["Factory Name"] || "").toLowerCase() === appliedFilters.factoryFilter.toLowerCase()
-      );
-    }
-
-    // Client-side date filtering (as backup)
-    if (appliedFilters.fromDate) {
-      const fromDateObj = new Date(appliedFilters.fromDate);
-      fromDateObj.setHours(0, 0, 0, 0);
-      data = data.filter(r => {
-        if (!r.BillDateObj) return false;
-        return r.BillDateObj >= fromDateObj;
-      });
-    }
-
-    if (appliedFilters.toDate) {
-      const toDateObj = new Date(appliedFilters.toDate);
-      toDateObj.setHours(23, 59, 59, 999);
-      data = data.filter(r => {
-        if (!r.BillDateObj) return false;
-        return r.BillDateObj <= toDateObj;
-      });
-    }
-
     return data;
-  }, [rows, appliedFilters]);
+  }, [rows, appliedFilters.searchBill]);
 
-  // Calculate pagination values
-  const totalRecords = filteredRows.length;
-  const totalPages = Math.ceil(totalRecords / recordsPerPage);
-  
-  // Ensure current page is valid
-  useEffect(() => {
-    if (currentPage > totalPages && totalPages > 0) {
-      setCurrentPage(totalPages);
-    }
-  }, [currentPage, totalPages]);
-
-  // Get current page data
-  const indexOfLastRecord = currentPage * recordsPerPage;
-  const indexOfFirstRecord = indexOfLastRecord - recordsPerPage;
-  const currentRecords = filteredRows.slice(indexOfFirstRecord, indexOfLastRecord);
-
+  // Display rows (all filtered rows are shown, pagination is server-side)
   const displayRows = selectedBillId
     ? filteredRows.filter(r => r.BillID === selectedBillId)
-    : currentRecords;
-
-  // Handle page change
-  const handlePageChange = (pageNumber) => {
-    if (pageNumber >= 1 && pageNumber <= totalPages) {
-      setCurrentPage(pageNumber);
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    }
-  };
-
-  // Handle records per page change
-  const handleRecordsPerPageChange = (e) => {
-    const newRecordsPerPage = parseInt(e.target.value);
-    setRecordsPerPage(newRecordsPerPage);
-    setCurrentPage(1);
-  };
+    : filteredRows;
 
   // Sort dispatch rows by date
   const getSortedDispatchRows = (billId) => {
@@ -495,7 +584,7 @@ const ShowBill = ({ userRole }) => {
 
       // Create worksheet
       const ws = XLSX.utils.json_to_sheet(exportData);
-      
+
       // Set column widths
       const wscols = [
         { wch: 15 }, { wch: 20 }, { wch: 20 }, { wch: 12 },
@@ -516,8 +605,8 @@ const ShowBill = ({ userRole }) => {
       }
 
       // Format number columns
-      const numberColumns = ["LR Quantity", "Bill Quantity", "Taxable Amount", "Final Price", 
-                           "Actual Amount", "TDS", "GST"];
+      const numberColumns = ["LR Quantity", "Bill Quantity", "Taxable Amount", "Final Price",
+        "Actual Amount", "TDS", "GST"];
       const colIndexMap = {};
       Object.keys(exportData[0]).forEach((key, index) => {
         colIndexMap[key] = index;
@@ -545,7 +634,7 @@ const ShowBill = ({ userRole }) => {
 
       // Export file
       XLSX.writeFile(wb, fileName);
-      
+
       alert(`Exported ${exportData.length} bills to ${fileName}`);
     } catch (error) {
       console.error("Error exporting to Excel:", error);
@@ -566,7 +655,7 @@ const ShowBill = ({ userRole }) => {
     try {
       const allFilteredRows = filteredRows;
       const selectedRows = allFilteredRows.filter(row => selectedBills.includes(row.BillID));
-      
+
       const exportData = selectedRows.map(row => {
         return {
           "Dispatch Month": row["Dispatch Month"] || "",
@@ -585,7 +674,7 @@ const ShowBill = ({ userRole }) => {
       });
 
       const ws = XLSX.utils.json_to_sheet(exportData);
-      
+
       const wscols = [
         { wch: 15 }, { wch: 20 }, { wch: 20 }, { wch: 12 },
         { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 15 },
@@ -610,7 +699,7 @@ const ShowBill = ({ userRole }) => {
       const fileName = `Selected_Bills_${selectedBills.length}_${dateStr}.xlsx`;
 
       XLSX.writeFile(wb, fileName);
-      
+
       alert(`Exported ${selectedBills.length} selected bills to ${fileName}`);
     } catch (error) {
       console.error("Error exporting selected bills:", error);
@@ -638,9 +727,9 @@ const ShowBill = ({ userRole }) => {
           collection(db, "TblDispatch"),
           where("BillID", "==", billId)
         );
-        
+
         const dispatchSnapshot = await getDocs(dispatchQuery);
-        
+
         for (const dispatchDoc of dispatchSnapshot.docs) {
           await updateDoc(doc(db, "TblDispatch", dispatchDoc.id), {
             BillID: "",
@@ -648,7 +737,7 @@ const ShowBill = ({ userRole }) => {
             UpdatedAt: serverTimestamp()
           });
         }
-        
+
         await deleteDoc(doc(db, "BillTable", billId));
       }
 
@@ -726,14 +815,14 @@ const ShowBill = ({ userRole }) => {
         </div>
 
         <div className="filter-button-group">
-          <button 
+          <button
             onClick={applyFilters}
             disabled={loading}
             className="filter-button filter-button-apply"
           >
             {loading ? 'Loading...' : 'Apply Filters'}
           </button>
-          <button 
+          <button
             onClick={clearFilters}
             disabled={loading}
             className="filter-button filter-button-clear"
@@ -744,7 +833,7 @@ const ShowBill = ({ userRole }) => {
 
         {/* ===== EXPORT BUTTONS ===== */}
         <div className="export-button-group">
-          <button 
+          <button
             onClick={exportToExcel}
             disabled={exporting || !dataLoaded || filteredRows.length === 0}
             className="export-button export-button-all"
@@ -752,9 +841,9 @@ const ShowBill = ({ userRole }) => {
           >
             {exporting ? 'Exporting...' : 'Export All to Excel'}
           </button>
-          
+
           {isAdmin && selectedBills.length > 0 && (
-            <button 
+            <button
               onClick={exportSelectedToExcel}
               disabled={exporting}
               className="export-button export-button-selected"
@@ -790,31 +879,28 @@ const ShowBill = ({ userRole }) => {
       {/* Only show table controls and data if data is loaded */}
       {dataLoaded && rows.length > 0 && (
         <>
-          {/* ===== RECORDS PER PAGE SELECTOR ===== */}
+          {/* ===== CURSOR PAGINATION CONTROLS ===== */}
           <div className="pagination-controls">
-            <div className="records-selector">
-              <span className="records-selector-label">Records per page:</span>
-              <select 
-                value={recordsPerPage} 
-                onChange={handleRecordsPerPageChange}
-                className="records-selector-select"
-                disabled={loading}
+            <div className="pagination-nav">
+              <button
+                onClick={prevPage}
+                disabled={!hasPrevPage || loading}
+                className="pagination-button pagination-button-prev"
               >
-                <option value="10">10</option>
-                <option value="20">20</option>
-                <option value="50">50</option>
-                <option value="100">100</option>
-                <option value="200">200</option>
-              </select>
-              
-              <span className="records-info">
-                Showing {indexOfFirstRecord + 1} to {Math.min(indexOfLastRecord, totalRecords)} of {totalRecords} records
+                ← Previous
+              </button>
+
+              <span className="pagination-info">
+                Showing {displayRows.length} bills (max {BILLS_PER_PAGE} per page)
               </span>
-            </div>
-            
-            {/* Total records count */}
-            <div className="total-records">
-              Total Bills: {totalRecords}
+
+              <button
+                onClick={nextPage}
+                disabled={!hasNextPage || loading}
+                className="pagination-button pagination-button-next"
+              >
+                Next →
+              </button>
             </div>
           </div>
 
@@ -836,7 +922,7 @@ const ShowBill = ({ userRole }) => {
                   Page Bills: {displayRows.length}
                 </span>
               </div>
-              
+
               <div className="selection-actions">
                 {selectedBills.length > 0 && (
                   <>
@@ -945,132 +1031,6 @@ const ShowBill = ({ userRole }) => {
             </table>
           </div>
 
-          {/* ===== PAGINATION CONTROLS ===== */}
-          {totalRecords > 0 && (
-            <div className="pagination">
-              <div className="pagination-left">
-                <span className="pagination-info">Page {currentPage} of {totalPages}</span>
-                
-                {/* First and Previous buttons */}
-                <button
-                  onClick={() => handlePageChange(1)}
-                  disabled={currentPage === 1}
-                  className="pagination-button pagination-button-first"
-                  title="First Page"
-                >
-                  ««
-                </button>
-                
-                <button
-                  onClick={() => handlePageChange(currentPage - 1)}
-                  disabled={currentPage === 1}
-                  className="pagination-button pagination-button-prev"
-                  title="Previous Page"
-                >
-                  «
-                </button>
-                
-                {/* Page number buttons */}
-                <div className="flex gap-5">
-                  {/* Show first page if not in first 3 pages */}
-                  {currentPage > 3 && (
-                    <>
-                      <button
-                        onClick={() => handlePageChange(1)}
-                        className="pagination-button pagination-button-number"
-                      >
-                        1
-                      </button>
-                      {currentPage > 4 && <span className="pagination-dots">...</span>}
-                    </>
-                  )}
-                  
-                  {/* Show pages around current page */}
-                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                    let pageNum;
-                    if (totalPages <= 5) {
-                      pageNum = i + 1;
-                    } else if (currentPage <= 3) {
-                      pageNum = i + 1;
-                    } else if (currentPage >= totalPages - 2) {
-                      pageNum = totalPages - 4 + i;
-                    } else {
-                      pageNum = currentPage - 2 + i;
-                    }
-                    
-                    if (pageNum < 1 || pageNum > totalPages) return null;
-                    
-                    return (
-                      <button
-                        key={pageNum}
-                        onClick={() => handlePageChange(pageNum)}
-                        className={`pagination-button ${currentPage === pageNum ? 'pagination-button-current' : 'pagination-button-number'}`}
-                      >
-                        {pageNum}
-                      </button>
-                    );
-                  })}
-                  
-                  {/* Show last page if not in last 3 pages */}
-                  {currentPage < totalPages - 2 && (
-                    <>
-                      {currentPage < totalPages - 3 && <span className="pagination-dots">...</span>}
-                      <button
-                        onClick={() => handlePageChange(totalPages)}
-                        className="pagination-button pagination-button-number"
-                      >
-                        {totalPages}
-                      </button>
-                    </>
-                  )}
-                </div>
-                
-                {/* Next and Last buttons */}
-                <button
-                  onClick={() => handlePageChange(currentPage + 1)}
-                  disabled={currentPage === totalPages}
-                  className="pagination-button pagination-button-next"
-                  title="Next Page"
-                >
-                  »
-                </button>
-                
-                <button
-                  onClick={() => handlePageChange(totalPages)}
-                  disabled={currentPage === totalPages}
-                  className="pagination-button pagination-button-last"
-                  title="Last Page"
-                >
-                  »»
-                </button>
-              </div>
-              
-              {/* Go to page input */}
-              <div className="pagination-right">
-                <span>Go to page:</span>
-                <input
-                  type="number"
-                  min="1"
-                  max={totalPages}
-                  value={currentPage}
-                  onChange={(e) => {
-                    const page = parseInt(e.target.value);
-                    if (page >= 1 && page <= totalPages) {
-                      handlePageChange(page);
-                    }
-                  }}
-                  onBlur={(e) => {
-                    const page = parseInt(e.target.value);
-                    if (!page || page < 1 || page > totalPages) {
-                      e.target.value = currentPage;
-                    }
-                  }}
-                  className="pagination-go-to"
-                />
-                <span>of {totalPages}</span>
-              </div>
-            </div>
-          )}
         </>
       )}
 
@@ -1129,7 +1089,7 @@ const ShowBill = ({ userRole }) => {
             <p className="modal-note">
               <strong>Note:</strong> This will remove the bill from BillTable but keep the dispatch records (only removing their BillID link).
             </p>
-            
+
             <div className="modal-actions">
               <button
                 onClick={() => setShowConfirmDelete(false)}

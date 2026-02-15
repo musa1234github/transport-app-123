@@ -99,16 +99,12 @@ const Home = ({ user, userRole }) => {
               </Link>
             </li>
           )}
+          {/* ================= CONTENT ================= */}
           {isAdmin && (
-            <>
-              <Link to="/dispatch-export">
-                <button>Dispatch Export</button>
-              </Link>
-            </>
-
+            <div style={{ marginBottom: "20px" }}>
+              <Link to="/dispatch-export">Dispatch Export</Link>
+            </div>
           )}
-
-
           <li><Link to="/factories" style={menuLink}>🏭 Factories</Link></li>
           <li><Link to="/show-dispatch" style={menuLink}>📦 Show Dispatch</Link></li>
           <li><Link to="/show-bill" style={menuLink}>📑 Show Bills</Link></li>
@@ -117,13 +113,6 @@ const Home = ({ user, userRole }) => {
           <li><Link to="/daily-qty-report" style={menuLink}>📊 Daily Qty</Link></li>
         </ul>
       </nav>
-
-      {/* ================= CONTENT ================= */}
-      {isAdmin && (
-        <div style={{ marginBottom: "20px" }}>
-          <Link to="/dispatch-export">Dispatch Export</Link>
-        </div>
-      )}
 
       <div style={{ padding: "25px" }}>
         {userRole === "viewer" && (

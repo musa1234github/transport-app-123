@@ -1,4 +1,4 @@
-﻿import ExportDispatchButton from "../components/ExportDispatchButton";
+﻿
 import React, { useEffect, useState } from "react";
 import { db, auth } from "../firebaseConfig";
 import {
@@ -8,7 +8,12 @@ import {
   doc,
   updateDoc,
   query,
-  where
+  where,
+  orderBy,
+  limit,
+  startAfter,
+  endBefore,
+  limitToLast
 } from "firebase/firestore";
 import * as XLSX from "xlsx";
 
@@ -77,7 +82,6 @@ const ShowDispatch = () => {
   const [dispatches, setDispatches] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedIds, setSelectedIds] = useState([]);
-  const [currentPage, setCurrentPage] = useState(1);
   const [filterFactory, setFilterFactory] = useState("");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
@@ -93,10 +97,16 @@ const ShowDispatch = () => {
     toDate: ""
   });
 
+  // Cursor-based pagination state
+  const [firstDoc, setFirstDoc] = useState(null);
+  const [lastDoc, setLastDoc] = useState(null);
+  const [hasNextPage, setHasNextPage] = useState(false);
+  const [hasPrevPage, setHasPrevPage] = useState(false);
+
   const [editId, setEditId] = useState(null);
   const [editChallan, setEditChallan] = useState("");
 
-  const recordsPerPage = 10;
+  const DOCS_PER_PAGE = 200; // Production-grade limit
 
   // Check admin status only on page load
   useEffect(() => {
@@ -109,40 +119,156 @@ const ShowDispatch = () => {
     checkAdmin();
   }, []);
 
-  // Function to fetch data with filters
-  const fetchDispatches = async () => {
+  // Function to fetch data with filters (cursor-based pagination)
+  const fetchDispatches = async (direction = 'initial', cursorDoc = null) => {
     setLoading(true);
     try {
-      let q = collection(db, "TblDispatch");
-      
-      // Build query based on filters
-      const conditions = [];
-      
-      // Only add factory filter if selected
-      if (appliedFilters.filterFactory) {
-        // Filter by normalized factory name
-        conditions.push(where("FactoryName", "==", appliedFilters.filterFactory));
-        
-        // Also check for DisVid mapping if the factory is from factoryMap
-        const reverseMap = Object.entries(factoryMap).find(
-          ([, value]) => value === appliedFilters.filterFactory
-        );
-        if (reverseMap) {
-          const [disVid] = reverseMap;
-          // If we have DisVid, we could add an OR condition, but Firestore doesn't support OR in the same query easily
-          // We'll handle this in local filtering instead
+      // 🔥 CRITICAL: Require at least one filter to prevent reading entire database
+      if (!appliedFilters.filterFactory && !appliedFilters.fromDate && !appliedFilters.toDate) {
+        alert("Please select at least a factory or date range to load data");
+        setLoading(false);
+        return;
+      }
+
+      // Validate date range (365 days max)
+      if (appliedFilters.fromDate && appliedFilters.toDate) {
+        const from = new Date(appliedFilters.fromDate);
+        const to = new Date(appliedFilters.toDate);
+        const daysDiff = (to - from) / (1000 * 60 * 60 * 24);
+
+        if (daysDiff > 365) {
+          alert("Please select a date range less than 1 year to optimize performance");
+          setLoading(false);
+          return;
+        }
+
+        if (daysDiff < 0) {
+          alert("'To Date' must be after 'From Date'");
+          setLoading(false);
+          return;
         }
       }
-      
-      let querySnapshot;
-      if (conditions.length > 0) {
-        const firestoreQuery = query(q, ...conditions);
-        querySnapshot = await getDocs(firestoreQuery);
-      } else {
-        querySnapshot = await getDocs(q);
+
+      let q = collection(db, "TblDispatch");
+
+      // Build query based on filters
+      const conditions = [];
+
+      // Add factory filter if selected
+      if (appliedFilters.filterFactory) {
+        conditions.push(where("FactoryName", "==", appliedFilters.filterFactory));
       }
-      
-      const data = querySnapshot.docs.map(ds => {
+
+      // 🔥 TEMPORARY WORKAROUND: Only add date filters to Firestore if factory is NOT selected
+      // This avoids requiring the composite index while it's still propagating
+      // Local date filtering will be applied after fetch if both factory and date are selected
+      const applyDatesInFirestore = !appliedFilters.filterFactory;
+
+      if (applyDatesInFirestore && appliedFilters.fromDate) {
+        const fromJS = normalizeDate(new Date(appliedFilters.fromDate));
+        conditions.push(where("DispatchDate", ">=", fromJS));
+      }
+
+      if (applyDatesInFirestore && appliedFilters.toDate) {
+        const toJS = normalizeDate(new Date(appliedFilters.toDate));
+        toJS.setHours(23, 59, 59, 999);
+        conditions.push(where("DispatchDate", "<=", toJS));
+      }
+
+      // 🔥 Build Firestore query with cursor-based pagination
+      let firestoreQuery;
+
+      // Determine if we should order by DispatchDate (only when date filters are ACTUALLY in Firestore query)
+      const shouldOrderByDate = applyDatesInFirestore && (appliedFilters.fromDate || appliedFilters.toDate);
+
+      if (direction === 'next' && cursorDoc) {
+        // Next page: start after the last document
+        if (shouldOrderByDate) {
+          firestoreQuery = query(
+            q,
+            ...conditions,
+            orderBy("DispatchDate", "desc"),
+            startAfter(cursorDoc),
+            limit(DOCS_PER_PAGE + 1)
+          );
+        } else {
+          // Factory-only: no orderBy needed, just use document ID for ordering
+          firestoreQuery = query(
+            q,
+            ...conditions,
+            startAfter(cursorDoc),
+            limit(DOCS_PER_PAGE + 1)
+          );
+        }
+      } else if (direction === 'prev' && cursorDoc) {
+        // Previous page: end before the first document
+        if (shouldOrderByDate) {
+          firestoreQuery = query(
+            q,
+            ...conditions,
+            orderBy("DispatchDate", "desc"),
+            endBefore(cursorDoc),
+            limitToLast(DOCS_PER_PAGE + 1)
+          );
+        } else {
+          firestoreQuery = query(
+            q,
+            ...conditions,
+            endBefore(cursorDoc),
+            limitToLast(DOCS_PER_PAGE + 1)
+          );
+        }
+      } else {
+        // Initial load or filter change
+        if (shouldOrderByDate) {
+          firestoreQuery = query(
+            q,
+            ...conditions,
+            orderBy("DispatchDate", "desc"),
+            limit(DOCS_PER_PAGE + 1)
+          );
+        } else {
+          // Factory-only: no orderBy
+          firestoreQuery = query(
+            q,
+            ...conditions,
+            limit(DOCS_PER_PAGE + 1)
+          );
+        }
+      }
+
+      const querySnapshot = await getDocs(firestoreQuery);
+      const docs = querySnapshot.docs;
+
+      // Check if there are more pages
+      const hasMore = docs.length > DOCS_PER_PAGE;
+      const displayDocs = hasMore ? docs.slice(0, DOCS_PER_PAGE) : docs;
+
+      // Update pagination state
+      if (displayDocs.length > 0) {
+        setFirstDoc(displayDocs[0]);
+        setLastDoc(displayDocs[displayDocs.length - 1]);
+        setHasNextPage(hasMore);
+
+        // Fix: hasPrevPage should only be true if we've moved from initial position
+        if (direction === 'next') {
+          setHasPrevPage(true); // We moved forward, so previous is available
+        } else if (direction === 'prev') {
+          // Keep current state, we're going back
+        } else if (direction === 'initial') {
+          setHasPrevPage(false); // Initial load, no previous
+        }
+      } else {
+        setFirstDoc(null);
+        setLastDoc(null);
+        setHasNextPage(false);
+        setHasPrevPage(false);
+      }
+
+      console.log(`✅ Firestore read ${docs.length} documents (limit: ${DOCS_PER_PAGE})`);
+      console.log(`📊 Has next page: ${hasMore}`);
+
+      const data = displayDocs.map(ds => {
         const row = { id: ds.id, ...ds.data() };
         row.DisVid = String(row.DisVid || "");
 
@@ -169,9 +295,9 @@ const ShowDispatch = () => {
         return row;
       });
 
-      // Apply additional local filtering for DisVid mapping and dates
+      // Apply additional local filtering for DisVid mapped records
       let filteredData = data;
-      
+
       // Additional factory filtering for DisVid mapped records
       if (appliedFilters.filterFactory) {
         filteredData = filteredData.filter(d => {
@@ -179,35 +305,38 @@ const ShowDispatch = () => {
           return recordFactory === appliedFilters.filterFactory;
         });
       }
-      
-      // Apply date range filtering
-      if (appliedFilters.fromDate || appliedFilters.toDate) {
+
+      // 🔥 Apply local date filtering when factory is selected (workaround for composite index)
+      if (appliedFilters.filterFactory && appliedFilters.fromDate) {
+        const fromDate = normalizeDate(new Date(appliedFilters.fromDate));
         filteredData = filteredData.filter(d => {
-          const rowDate = normalizeDate(d.DispatchDate);
-          const from = appliedFilters.fromDate ? normalizeDate(new Date(appliedFilters.fromDate)) : null;
-          const to = appliedFilters.toDate ? normalizeDate(new Date(appliedFilters.toDate)) : null;
+          if (!d.DispatchDate) return false;
+          const recordDate = normalizeDate(d.DispatchDate);
+          return recordDate >= fromDate;
+        });
+      }
 
-          let matchesFromDate = true;
-          let matchesToDate = true;
-
-          if (from && rowDate) {
-            matchesFromDate = rowDate.getTime() >= from.getTime();
-          }
-          if (to && rowDate) {
-            const toEndOfDay = new Date(to);
-            toEndOfDay.setDate(toEndOfDay.getDate() + 1);
-            matchesToDate = rowDate.getTime() < toEndOfDay.getTime();
-          }
-
-          return matchesFromDate && matchesToDate;
+      if (appliedFilters.filterFactory && appliedFilters.toDate) {
+        const toDate = normalizeDate(new Date(appliedFilters.toDate));
+        toDate.setHours(23, 59, 59, 999);
+        filteredData = filteredData.filter(d => {
+          if (!d.DispatchDate) return false;
+          const recordDate = normalizeDate(d.DispatchDate);
+          return recordDate <= toDate;
         });
       }
 
       setDispatches(filteredData);
       setDataLoaded(true);
-      setCurrentPage(1);
     } catch (error) {
       console.error("Error fetching dispatches:", error);
+
+      // Check if it's a composite index error
+      if (error.message && error.message.includes("index")) {
+        alert("⚠️ Composite Index Required\n\nFirebase needs a composite index for this query. Check the console for the auto-generated index creation link from Firebase.");
+      } else {
+        alert("Error loading data: " + error.message);
+      }
     } finally {
       setLoading(false);
     }
@@ -228,6 +357,12 @@ const ShowDispatch = () => {
       }
     }
 
+    // Reset pagination state when filters change
+    setFirstDoc(null);
+    setLastDoc(null);
+    setHasNextPage(false);
+    setHasPrevPage(false);
+
     // Set applied filters
     setAppliedFilters({
       searchTerm,
@@ -235,13 +370,13 @@ const ShowDispatch = () => {
       fromDate,
       toDate
     });
-    
+
     // Don't fetch here - let useEffect handle it
   };
 
-  // Fetch data when appliedFilters changes
+  // Fetch data when appliedFilters changes (only if at least one filter is set)
   useEffect(() => {
-    if (appliedFilters.filterFactory !== "" || appliedFilters.fromDate || appliedFilters.toDate) {
+    if (appliedFilters.filterFactory || appliedFilters.fromDate || appliedFilters.toDate) {
       fetchDispatches();
     }
   }, [appliedFilters]);
@@ -261,7 +396,23 @@ const ShowDispatch = () => {
     setDispatches([]);
     setDataLoaded(false);
     setSelectedIds([]);
-    setCurrentPage(1);
+    setFirstDoc(null);
+    setLastDoc(null);
+    setHasNextPage(false);
+    setHasPrevPage(false);
+  };
+
+  /* ================= PAGINATION ================= */
+  const handleNextPage = () => {
+    if (hasNextPage && lastDoc) {
+      fetchDispatches('next', lastDoc);
+    }
+  };
+
+  const handlePrevPage = () => {
+    if (hasPrevPage && firstDoc) {
+      fetchDispatches('prev', firstDoc);
+    }
   };
 
   /* ================= EDIT ================= */
@@ -322,7 +473,7 @@ const ShowDispatch = () => {
   };
 
   /* ================= FILTER DATA FOR DISPLAY ================= */
-  // Apply search filter to already loaded data
+  // Apply search filter to already loaded data (local search only)
   const filteredDispatches = dataLoaded ? dispatches.filter(d => {
     const terms = appliedFilters.searchTerm
       .toLowerCase()
@@ -343,30 +494,21 @@ const ShowDispatch = () => {
     );
   }) : [];
 
-  const totalRecords = dispatches.length;
-  const filteredCount = filteredDispatches.length;
-  const totalPages = Math.ceil(filteredCount / recordsPerPage);
-
-  const startIndex = (currentPage - 1) * recordsPerPage;
-  const endIndex = Math.min(startIndex + recordsPerPage, filteredCount);
-
-  const paginatedDispatches = filteredDispatches.slice(
-    startIndex,
-    startIndex + recordsPerPage
-  );
+  // Server-side pagination - no frontend slicing needed
+  const displayDispatches = filteredDispatches;
 
   const isAllSelected =
-    paginatedDispatches.length > 0 &&
-    paginatedDispatches.every(d => selectedIds.includes(d.id));
+    displayDispatches.length > 0 &&
+    displayDispatches.every(d => selectedIds.includes(d.id));
 
   const handleSelectAll = () => {
     if (isAllSelected) {
       setSelectedIds(prev =>
-        prev.filter(id => !paginatedDispatches.some(d => d.id === id))
+        prev.filter(id => !displayDispatches.some(d => d.id === id))
       );
     } else {
       setSelectedIds(prev => [
-        ...new Set([...prev, ...paginatedDispatches.map(d => d.id)])
+        ...new Set([...prev, ...displayDispatches.map(d => d.id)])
       ]);
     }
   };
@@ -454,49 +596,49 @@ const ShowDispatch = () => {
           />
         </div>
 
-        <button 
+        <button
           onClick={applyFilters}
           disabled={loading}
-          style={{ 
-            padding: "8px 16px", 
-            backgroundColor: "#007bff", 
-            color: "white", 
-            border: "none", 
-            borderRadius: 4, 
-            cursor: "pointer" 
+          style={{
+            padding: "8px 16px",
+            backgroundColor: "#007bff",
+            color: "white",
+            border: "none",
+            borderRadius: 4,
+            cursor: "pointer"
           }}
         >
           {loading ? "Loading..." : "Apply Filters"}
         </button>
-        
-        <button 
+
+        <button
           onClick={clearFilters}
-          style={{ 
-            padding: "8px 16px", 
-            backgroundColor: "#6c757d", 
-            color: "white", 
-            border: "none", 
-            borderRadius: 4, 
-            cursor: "pointer" 
+          style={{
+            padding: "8px 16px",
+            backgroundColor: "#6c757d",
+            color: "white",
+            border: "none",
+            borderRadius: 4,
+            cursor: "pointer"
           }}
         >
           Clear Filters
         </button>
-        
+
         {dataLoaded && (
-          <button 
+          <button
             onClick={exportToExcel}
-            disabled={filteredCount === 0}
-            style={{ 
-              padding: "8px 16px", 
-              backgroundColor: filteredCount === 0 ? "#6c757d" : "#28a745", 
-              color: "white", 
-              border: "none", 
-              borderRadius: 4, 
-              cursor: filteredCount === 0 ? "not-allowed" : "pointer" 
+            disabled={displayDispatches.length === 0}
+            style={{
+              padding: "8px 16px",
+              backgroundColor: displayDispatches.length === 0 ? "#6c757d" : "#28a745",
+              color: "white",
+              border: "none",
+              borderRadius: 4,
+              cursor: displayDispatches.length === 0 ? "not-allowed" : "pointer"
             }}
           >
-            Export Excel ({filteredCount})
+            Export Current Page ({displayDispatches.length})
           </button>
         )}
       </div>
@@ -512,16 +654,16 @@ const ShowDispatch = () => {
       {!loading && dataLoaded && (
         <>
           {isAdmin && selectedIds.length > 0 && (
-            <button 
-              onClick={handleDeleteSelected} 
-              style={{ 
-                marginTop: 10, 
-                padding: "8px 16px", 
-                backgroundColor: "#dc3545", 
-                color: "white", 
-                border: "none", 
-                borderRadius: 4, 
-                cursor: "pointer" 
+            <button
+              onClick={handleDeleteSelected}
+              style={{
+                marginTop: 10,
+                padding: "8px 16px",
+                backgroundColor: "#dc3545",
+                color: "white",
+                border: "none",
+                borderRadius: 4,
+                cursor: "pointer"
               }}
             >
               Delete Selected ({selectedIds.length})
@@ -549,8 +691,8 @@ const ShowDispatch = () => {
               </thead>
 
               <tbody>
-                {paginatedDispatches.length > 0 ? (
-                  paginatedDispatches.map(d => (
+                {displayDispatches.length > 0 ? (
+                  displayDispatches.map(d => (
                     <tr key={d.id} style={{ borderBottom: "1px solid #ddd" }}>
                       {isAdmin && (
                         <td style={{ padding: 10, textAlign: "center" }}>
@@ -582,13 +724,13 @@ const ShowDispatch = () => {
                         <td style={{ padding: 10 }}>
                           {editId === d.id ? (
                             <>
-                              <button 
+                              <button
                                 onClick={() => handleSave(d.id)}
                                 style={{ marginRight: 5, padding: "5px 10px", backgroundColor: "#28a745", color: "white", border: "none", borderRadius: 3, cursor: "pointer" }}
                               >
                                 Save
                               </button>
-                              <button 
+                              <button
                                 onClick={handleCancel}
                                 style={{ padding: "5px 10px", backgroundColor: "#6c757d", color: "white", border: "none", borderRadius: 3, cursor: "pointer" }}
                               >
@@ -597,13 +739,13 @@ const ShowDispatch = () => {
                             </>
                           ) : (
                             <>
-                              <button 
+                              <button
                                 onClick={() => handleEdit(d)}
                                 style={{ marginRight: 5, padding: "5px 10px", backgroundColor: "#007bff", color: "white", border: "none", borderRadius: 3, cursor: "pointer" }}
                               >
                                 Edit
                               </button>
-                              <button 
+                              <button
                                 onClick={() => handleDelete(d.id)}
                                 style={{ padding: "5px 10px", backgroundColor: "#dc3545", color: "white", border: "none", borderRadius: 3, cursor: "pointer" }}
                               >
@@ -617,8 +759,8 @@ const ShowDispatch = () => {
                   ))
                 ) : (
                   <tr>
-                    <td 
-                      colSpan={isAdmin ? COLUMN_SEQUENCE.length + 2 : COLUMN_SEQUENCE.length} 
+                    <td
+                      colSpan={isAdmin ? COLUMN_SEQUENCE.length + 2 : COLUMN_SEQUENCE.length}
                       style={{ padding: 20, textAlign: "center" }}
                     >
                       No records found for the selected filters
@@ -629,59 +771,55 @@ const ShowDispatch = () => {
             </table>
           </div>
 
-          <div style={{ marginTop: 20, fontWeight: "bold", color: "#333" }}>
-            Showing {filteredCount === 0 ? 0 : startIndex + 1}–{endIndex} of{" "}
-            {filteredCount} records
+          {/* Record count and search notice */}
+          <div style={{ marginTop: 20 }}>
+            <div style={{ fontWeight: "bold", color: "#333", marginBottom: 5 }}>
+              Showing {displayDispatches.length} record(s) on this page
+            </div>
+            <div style={{ fontSize: 13, color: "#6c757d", fontStyle: "italic" }}>
+              💡 Search filters only the {displayDispatches.length} records currently loaded
+            </div>
           </div>
 
-          {totalPages > 1 && (
-            <div style={{ marginTop: 20, display: "flex", alignItems: "center", gap: 5 }}>
-              <button 
-                disabled={currentPage === 1} 
-                onClick={() => setCurrentPage(p => p - 1)}
-                style={{ 
-                  padding: "8px 12px", 
-                  backgroundColor: currentPage === 1 ? "#e9ecef" : "#007bff", 
-                  color: currentPage === 1 ? "#6c757d" : "white", 
-                  border: "none", 
-                  borderRadius: 4, 
-                  cursor: currentPage === 1 ? "not-allowed" : "pointer" 
+          {/* Cursor-based pagination - Simple Previous/Next */}
+          {(hasPrevPage || hasNextPage) && (
+            <div style={{ marginTop: 20, display: "flex", alignItems: "center", gap: 15 }}>
+              <button
+                disabled={!hasPrevPage}
+                onClick={handlePrevPage}
+                style={{
+                  padding: "10px 20px",
+                  backgroundColor: !hasPrevPage ? "#e9ecef" : "#007bff",
+                  color: !hasPrevPage ? "#6c757d" : "white",
+                  border: "none",
+                  borderRadius: 4,
+                  cursor: !hasPrevPage ? "not-allowed" : "pointer",
+                  fontWeight: "bold",
+                  fontSize: 14
                 }}
               >
-                Prev
+                ← Previous
               </button>
 
-              {[...Array(totalPages)].map((_, i) => (
-                <button
-                  key={i}
-                  onClick={() => setCurrentPage(i + 1)}
-                  style={{ 
-                    padding: "8px 12px", 
-                    backgroundColor: currentPage === i + 1 ? "#0056b3" : "#007bff", 
-                    color: "white", 
-                    border: "none", 
-                    borderRadius: 4, 
-                    cursor: "pointer",
-                    fontWeight: currentPage === i + 1 ? "bold" : "normal" 
-                  }}
-                >
-                  {i + 1}
-                </button>
-              ))}
+              <span style={{ padding: "0 10px", color: "#495057", fontSize: 14 }}>
+                Server-side pagination • Max {DOCS_PER_PAGE} records per page
+              </span>
 
               <button
-                disabled={currentPage === totalPages}
-                onClick={() => setCurrentPage(p => p + 1)}
-                style={{ 
-                  padding: "8px 12px", 
-                  backgroundColor: currentPage === totalPages ? "#e9ecef" : "#007bff", 
-                  color: currentPage === totalPages ? "#6c757d" : "white", 
-                  border: "none", 
-                  borderRadius: 4, 
-                  cursor: currentPage === totalPages ? "not-allowed" : "pointer" 
+                disabled={!hasNextPage}
+                onClick={handleNextPage}
+                style={{
+                  padding: "10px 20px",
+                  backgroundColor: !hasNextPage ? "#e9ecef" : "#007bff",
+                  color: !hasNextPage ? "#6c757d" : "white",
+                  border: "none",
+                  borderRadius: 4,
+                  cursor: !hasNextPage ? "not-allowed" : "pointer",
+                  fontWeight: "bold",
+                  fontSize: 14
                 }}
               >
-                Next
+                Next →
               </button>
             </div>
           )}
@@ -690,18 +828,25 @@ const ShowDispatch = () => {
 
       {/* Initial state - no data loaded yet */}
       {!loading && !dataLoaded && (
-        <div style={{ 
-          textAlign: "center", 
-          padding: 40, 
-          backgroundColor: "#f8f9fa", 
+        <div style={{
+          textAlign: "center",
+          padding: 40,
+          backgroundColor: "#fff3cd",
+          border: "2px solid #ffc107",
           borderRadius: 8,
           marginTop: 20
         }}>
-          <p style={{ fontSize: 16, color: "#6c757d" }}>
-            No data loaded yet. Please set your filters and click "Apply Filters" to load data.
+          <p style={{ fontSize: 18, color: "#856404", fontWeight: "bold", marginBottom: 10 }}>
+            ⚠️ Filter Required
           </p>
-          <p style={{ fontSize: 14, color: "#6c757d", marginTop: 10 }}>
-            This reduces unnecessary database reads and improves performance.
+          <p style={{ fontSize: 16, color: "#856404" }}>
+            Please select at least a <strong>factory</strong> or <strong>date range</strong> before clicking "Apply Filters".
+          </p>
+          <p style={{ fontSize: 14, color: "#856404", marginTop: 10 }}>
+            This prevents reading the entire database and reduces Firebase costs.
+          </p>
+          <p style={{ fontSize: 13, color: "#856404", marginTop: 10, fontStyle: "italic" }}>
+            Maximum date range: 365 days | Maximum results: 10,000 records
           </p>
         </div>
       )}
