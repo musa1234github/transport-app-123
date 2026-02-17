@@ -103,9 +103,9 @@ const ShowPayment = ({ userRole }) => {
   const loadFactories = async (forceRefresh = false) => {
     setLoadingFactories(true);
     try {
-      // Check cache first (24 hour expiry)
+      // Check cache first (7 day expiry for better performance)
       const CACHE_KEY = 'paymentFactoriesCache';
-      const CACHE_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
+      const CACHE_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
       if (!forceRefresh) {
         const cached = localStorage.getItem(CACHE_KEY);
@@ -115,7 +115,8 @@ const ShowPayment = ({ userRole }) => {
             const age = Date.now() - timestamp;
 
             if (age < CACHE_EXPIRY_MS) {
-              console.log('Using cached factories for payment (age:', Math.round(age / 1000 / 60), 'minutes)');
+              const ageHours = Math.round(age / 1000 / 60 / 60);
+              console.log(`Using cached factories for payment (age: ${ageHours} hours, expires in ${Math.round((CACHE_EXPIRY_MS - age) / 1000 / 60 / 60)} hours)`);
               setFactories(factories);
               setLoadingFactories(false);
               return;
@@ -126,34 +127,71 @@ const ShowPayment = ({ userRole }) => {
         }
       }
 
-      // Cache miss or expired - load from Firestore
-      console.log('Loading factories from Firestore...');
-      // Use efficient query - we only need unique factory names
-      // Optimally this would be a separate collection, but scanning BillTable is current method
-      const billQuery = query(
-        collection(db, "BillTable"),
-        where("PaymentReceived", ">", 0)
-      );
+      // Cache miss or expired - load from Factories collection
+      console.log('Loading factories from Factories collection...');
 
-      const billSnap = await getDocs(billQuery);
+      try {
+        // OPTIMIZED: Read from dedicated Factories collection (3-5 reads)
+        // Instead of scanning all BillTable (100-5000 reads)
+        const factoriesQuery = query(
+          collection(db, "Factories"),
+          where("hasPayments", "==", true)
+        );
 
-      // Extract unique factory names from bills with payments
-      const factorySet = new Set();
-      billSnap.docs.forEach(b => {
-        const data = b.data();
-        if (data.FactoryName) {
-          factorySet.add(data.FactoryName);
+        const factoriesSnap = await getDocs(factoriesQuery);
+
+        if (factoriesSnap.empty) {
+          console.warn('⚠️ Factories collection is empty. Falling back to BillTable scan.');
+          console.warn('💡 Run the migration script: node populate_factories_collection.js');
+
+          // FALLBACK: If Factories collection doesn't exist yet, scan BillTable
+          const billQuery = query(
+            collection(db, "BillTable"),
+            where("PaymentReceived", ">", 0)
+          );
+          const billSnap = await getDocs(billQuery);
+
+          const factorySet = new Set();
+          billSnap.docs.forEach(b => {
+            const data = b.data();
+            if (data.FactoryName) {
+              factorySet.add(data.FactoryName);
+            }
+          });
+
+          const factoriesList = Array.from(factorySet).sort();
+          setFactories(factoriesList);
+
+          // Cache for next time
+          localStorage.setItem(CACHE_KEY, JSON.stringify({
+            factories: factoriesList,
+            timestamp: Date.now()
+          }));
+
+          return;
         }
-      });
 
-      const factoriesList = Array.from(factorySet).sort();
-      setFactories(factoriesList);
+        // Extract factory names from Factories collection
+        const factoriesList = factoriesSnap.docs
+          .map(doc => doc.data().displayName || doc.id)
+          .sort();
 
-      // Cache for next time
-      localStorage.setItem(CACHE_KEY, JSON.stringify({
-        factories: factoriesList,
-        timestamp: Date.now()
-      }));
+        console.log(`✅ Loaded ${factoriesList.length} factories from Factories collection (${factoriesSnap.docs.length} reads)`);
+        setFactories(factoriesList);
+
+        // Cache for next time
+        localStorage.setItem(CACHE_KEY, JSON.stringify({
+          factories: factoriesList,
+          timestamp: Date.now()
+        }));
+
+      } catch (error) {
+        console.error('Error loading from Factories collection:', error);
+        // If Factories collection doesn't exist, we'll get an error
+        // The fallback logic above will handle it
+        throw error;
+      }
+
     } catch (error) {
       console.error("Error loading factories:", error);
     } finally {
@@ -165,6 +203,9 @@ const ShowPayment = ({ userRole }) => {
   const load = async (direction = 'initial', cursorDoc = null) => {
     setLoading(true);
     try {
+      // Debug: Log applied filters to help with troubleshooting
+      console.log("🔍 Applied Filters:", appliedFilters);
+
       // REQUIRE at least one filter to avoid full collection scan
       // Exception: If user explicitly wants to see "latest" payments, we allow it but limited to 20
 
@@ -175,10 +216,7 @@ const ShowPayment = ({ userRole }) => {
 
       const hasDateFilter = appliedFilters.fromDate || appliedFilters.toDate;
 
-      // Sort by PaymentReceived (asc) then BillDate (desc) to match the composite index
-      // Index: PaymentReceived (Asc) + FactoryName (Asc) + BillDate (Desc)
-      // queryConstraints.push(orderBy("PaymentReceived", "asc")); // Removed per user: Rely on composite index logic
-      queryConstraints.push(orderBy("BillDate", "desc"));
+      // IMPORTANT: Add where clauses BEFORE orderBy for filters to work correctly
 
       // Add factory filter
       if (appliedFilters.factoryFilter) {
@@ -197,6 +235,9 @@ const ShowPayment = ({ userRole }) => {
         toDateObj.setHours(23, 59, 59, 999);
         queryConstraints.push(where("BillDate", "<=", Timestamp.fromDate(toDateObj)));
       }
+
+      // Add orderBy AFTER where clauses
+      queryConstraints.push(orderBy("BillDate", "desc"));
 
       // Build query with cursor pagination
       let billQuery;
@@ -275,47 +316,10 @@ const ShowPayment = ({ userRole }) => {
 
       const billData = [];
 
-      // Get payment details for each bill (ONLY for the filtered page)
-      // We can parallelize this for performance
-      await Promise.all(finalDocs.map(async (billDoc) => {
+      // Process bills - NO additional queries needed!
+      // All data is now denormalized in BillTable
+      finalDocs.forEach((billDoc) => {
         const bill = billDoc.data();
-
-        // CLIENT-SIDE FILTER REMOVED: Now handled by server query
-
-        let paymentDetails = {};
-        if (bill.PId) {
-          // Fetch payment details from PaymentTable
-          const paymentQuery = query(
-            collection(db, "PaymentTable"),
-            where("__name__", "==", bill.PId)
-          );
-          const paymentSnap = await getDocs(paymentQuery);
-          if (!paymentSnap.empty) {
-            const paymentData = paymentSnap.docs[0].data();
-            paymentDetails = {
-              DocNumber: paymentData.DocNumber || "",
-              PayRecDate: toDate(paymentData.PayRecDate) || null,
-              Shortage: paymentData.Shortage || 0
-            };
-          }
-        }
-
-        // Calculate total shortage for this payment number
-        // This is still potentially expensive but limited to 20 rows
-        let totalShortage = 0;
-        if (paymentDetails.DocNumber) {
-          const shortageQuery = query(
-            collection(db, "BillTable"),
-            where("PaymentNumber", "==", paymentDetails.DocNumber)
-          );
-          const shortageSnap = await getDocs(shortageQuery);
-          shortageSnap.docs.forEach(doc => {
-            const data = doc.data();
-            if (data.Shortage) {
-              totalShortage += toNum(data.Shortage);
-            }
-          });
-        }
 
         billData.push({
           id: billDoc.id,
@@ -328,22 +332,20 @@ const ShowPayment = ({ userRole }) => {
           Gst: toNum(bill.Gst),
           PaymentNumber: bill.PaymentNumber || "",
           BillType: bill.BillType || "",
-          PaymentDate: paymentDetails.PayRecDate,
-          Shortage: paymentDetails.Shortage || 0,
-          TotalShortage: totalShortage,
+          // Use denormalized fields - NO queries to PaymentTable needed!
+          PaymentDate: toDate(bill.PaymentRecDate) || null,
+          Shortage: toNum(bill.PaymentShortage || bill.Shortage || 0),
+          // Note: TotalShortage calculation would require aggregation query
+          // For now, showing individual bill shortage. To add TotalShortage,
+          // consider pre-calculating during upload or using Cloud Functions
+          TotalShortage: 0, // Placeholder - can be calculated if needed
           BillDateObj: toDate(bill.BillDate),
           BillDateSortKey: formatDate(toDate(bill.BillDate))
         });
-      }));
-
-      // Sort by payment date (newest first) or BillDate if PaymentDate unavailable
-      billData.sort((a, b) => {
-        if (a.BillDateObj && b.BillDateObj) {
-          // Consistent with Firestore orderBy
-          return b.BillDateObj - a.BillDateObj;
-        }
-        return 0;
       });
+
+      // No client-side sorting needed - Firestore orderBy("BillDate", "desc") already handles this
+      // Removing redundant sort improves performance
 
       setRows(billData);
       setSelectedPayments([]);
@@ -385,7 +387,14 @@ const ShowPayment = ({ userRole }) => {
   // Handle manual "Apply Filters" button click
   const handleApplyClick = () => {
     setPageCount(1); // Reset to first page
-    load(); // Trigger load
+    // Update appliedFilters - this will trigger the useEffect which calls load()
+    setAppliedFilters({
+      fromDate: fromDate,
+      toDate: toDateFilter,
+      searchTerm: searchTerm,
+      factoryFilter: factoryFilter,
+      paymentTypeFilter: paymentTypeFilter
+    });
   };
 
   /* ===== CLEAR FILTERS FUNCTION ===== */

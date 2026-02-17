@@ -9,7 +9,8 @@ import {
   updateDoc,
   doc,
   addDoc,
-  serverTimestamp
+  serverTimestamp,
+  setDoc
 } from "firebase/firestore";
 import { db } from "../firebaseConfig";
 
@@ -125,6 +126,24 @@ const parseDate = (v) => {
   return null;
 };
 
+/* ===== ENSURE FACTORY EXISTS IN FACTORIES COLLECTION ===== */
+const ensureFactoryExists = async (factoryName) => {
+  try {
+    const factoryDocRef = doc(db, "Factories", factoryName);
+
+    // Use setDoc with merge to create or update
+    await setDoc(factoryDocRef, {
+      displayName: factoryName,
+      hasPayments: true,
+      lastUpdated: serverTimestamp()
+    }, { merge: true });
+
+    console.log(`✅ Factory "${factoryName}" registered in Factories collection`);
+  } catch (error) {
+    console.error(`Failed to register factory "${factoryName}":`, error);
+  }
+};
+
 const PaymentUpload = () => {
   const { userRole } = useOutletContext();
 
@@ -154,6 +173,9 @@ const PaymentUpload = () => {
     setLoading(true);
     setUploadLog([]);
     addLog(`Starting payment upload for ${factory}...`, "info");
+
+    // Ensure factory exists in Factories collection
+    await ensureFactoryExists(factory);
 
     const reader = new FileReader();
 
@@ -287,6 +309,11 @@ const PaymentUpload = () => {
               Gst: gst,
               PId: paymentId,
               PaymentNumber: paymentNumber,
+              // DENORMALIZED FIELDS - Eliminate N+1 queries to PaymentTable
+              PaymentDocNumber: paymentNumber,
+              PaymentRecDate: paymentDate,
+              PaymentShortage: shortage,
+              Shortage: shortage, // Keep for backward compatibility
               UpdatedAt: serverTimestamp()
             });
 
