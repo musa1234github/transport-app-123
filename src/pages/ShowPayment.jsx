@@ -1,6 +1,20 @@
 ﻿// ShowPayment.jsx
-import React, { useEffect, useState } from "react";
-import { collection, getDocs, query, where, Timestamp, updateDoc, doc, serverTimestamp } from "firebase/firestore";
+import React, { useEffect, useState, useMemo } from "react";
+import {
+  collection,
+  getDocs,
+  query,
+  where,
+  Timestamp,
+  updateDoc,
+  doc,
+  serverTimestamp,
+  orderBy,
+  limit,
+  startAfter,
+  endBefore,
+  limitToLast
+} from "firebase/firestore";
 import { db } from "../firebaseConfig";
 import * as XLSX from 'xlsx';
 import './ShowPayment.css';
@@ -25,8 +39,8 @@ const formatDate = (date) => {
   try {
     if (isNaN(date.getTime())) return "";
     const day = String(date.getDate()).padStart(2, "0");
-    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", 
-                        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     const monthIndex = date.getMonth();
     const month = monthNames[monthIndex];
     const year = date.getFullYear();
@@ -47,7 +61,7 @@ const formatCurrency = (amount) => {
 const ShowPayment = ({ userRole }) => {
   // Check if user is admin
   const isAdmin = userRole === "admin";
-  
+
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [selectedPayments, setSelectedPayments] = useState([]);
@@ -59,8 +73,15 @@ const ShowPayment = ({ userRole }) => {
   const [loadingFactories, setLoadingFactories] = useState(true); // Track factory loading
 
   /* ===== PAGINATION STATES ===== */
-  const [currentPage, setCurrentPage] = useState(1);
-  const [recordsPerPage, setRecordsPerPage] = useState(20);
+  // Cursor-based pagination states
+  const [firstDoc, setFirstDoc] = useState(null);
+  const [lastDoc, setLastDoc] = useState(null);
+  const [hasNextPage, setHasNextPage] = useState(false);
+  const [hasPrevPage, setHasPrevPage] = useState(false);
+  const RECORDS_PER_PAGE = 20;
+
+  // Kept for UI compatibility but logic changed
+  const [pageCount, setPageCount] = useState(1); // Track abstract page number for UI
 
   /* ===== FILTER STATES ===== */
   const [searchTerm, setSearchTerm] = useState("");
@@ -78,17 +99,44 @@ const ShowPayment = ({ userRole }) => {
     paymentTypeFilter: ""
   });
 
-  /* ================= LOAD FACTORIES ON MOUNT ================= */
-  const loadFactories = async () => {
+  /* ================= LOAD FACTORIES WITH CACHE ================= */
+  const loadFactories = async (forceRefresh = false) => {
     setLoadingFactories(true);
     try {
+      // Check cache first (24 hour expiry)
+      const CACHE_KEY = 'paymentFactoriesCache';
+      const CACHE_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+      if (!forceRefresh) {
+        const cached = localStorage.getItem(CACHE_KEY);
+        if (cached) {
+          try {
+            const { factories, timestamp } = JSON.parse(cached);
+            const age = Date.now() - timestamp;
+
+            if (age < CACHE_EXPIRY_MS) {
+              console.log('Using cached factories for payment (age:', Math.round(age / 1000 / 60), 'minutes)');
+              setFactories(factories);
+              setLoadingFactories(false);
+              return;
+            }
+          } catch (e) {
+            console.error('Cache parse error:', e);
+          }
+        }
+      }
+
+      // Cache miss or expired - load from Firestore
+      console.log('Loading factories from Firestore...');
+      // Use efficient query - we only need unique factory names
+      // Optimally this would be a separate collection, but scanning BillTable is current method
       const billQuery = query(
         collection(db, "BillTable"),
         where("PaymentReceived", ">", 0)
       );
-      
+
       const billSnap = await getDocs(billQuery);
-      
+
       // Extract unique factory names from bills with payments
       const factorySet = new Set();
       billSnap.docs.forEach(b => {
@@ -97,9 +145,15 @@ const ShowPayment = ({ userRole }) => {
           factorySet.add(data.FactoryName);
         }
       });
-      
+
       const factoriesList = Array.from(factorySet).sort();
       setFactories(factoriesList);
+
+      // Cache for next time
+      localStorage.setItem(CACHE_KEY, JSON.stringify({
+        factories: factoriesList,
+        timestamp: Date.now()
+      }));
     } catch (error) {
       console.error("Error loading factories:", error);
     } finally {
@@ -107,23 +161,127 @@ const ShowPayment = ({ userRole }) => {
     }
   };
 
-  /* ================= LOAD PAYMENT DATA ================= */
-  const load = async () => {
+  /* ================= LOAD PAYMENT DATA WITH CURSOR PAGINATION ================= */
+  const load = async (direction = 'initial', cursorDoc = null) => {
     setLoading(true);
     try {
-      // First get all bills with payments
-      const billQuery = query(
-        collection(db, "BillTable"),
-        where("PaymentReceived", ">", 0)
-      );
-      
+      // REQUIRE at least one filter to avoid full collection scan
+      // Exception: If user explicitly wants to see "latest" payments, we allow it but limited to 20
+
+      // Create base query constraints
+      let queryConstraints = [];
+      // Note: Removed PaymentReceived/HasPayment filter to avoid multiple range filter conflicts with BillDate
+      // All bills will be fetched; filter by FactoryName and BillDate only
+
+      const hasDateFilter = appliedFilters.fromDate || appliedFilters.toDate;
+
+      // Sort by PaymentReceived (asc) then BillDate (desc) to match the composite index
+      // Index: PaymentReceived (Asc) + FactoryName (Asc) + BillDate (Desc)
+      // queryConstraints.push(orderBy("PaymentReceived", "asc")); // Removed per user: Rely on composite index logic
+      queryConstraints.push(orderBy("BillDate", "desc"));
+
+      // Add factory filter
+      if (appliedFilters.factoryFilter) {
+        queryConstraints.push(where("FactoryName", "==", appliedFilters.factoryFilter));
+      }
+
+      // Add date filters
+      if (appliedFilters.fromDate) {
+        const fromDateObj = new Date(appliedFilters.fromDate);
+        fromDateObj.setHours(0, 0, 0, 0);
+        queryConstraints.push(where("BillDate", ">=", Timestamp.fromDate(fromDateObj)));
+      }
+
+      if (appliedFilters.toDate) {
+        const toDateObj = new Date(appliedFilters.toDate);
+        toDateObj.setHours(23, 59, 59, 999);
+        queryConstraints.push(where("BillDate", "<=", Timestamp.fromDate(toDateObj)));
+      }
+
+      // Build query with cursor pagination
+      let billQuery;
+      if (direction === 'next' && cursorDoc) {
+        billQuery = query(
+          collection(db, "BillTable"),
+          ...queryConstraints,
+          startAfter(cursorDoc),
+          limit(RECORDS_PER_PAGE + 1) // Fetch one extra to check for next page
+        );
+      } else if (direction === 'prev' && cursorDoc) {
+        billQuery = query(
+          collection(db, "BillTable"),
+          ...queryConstraints,
+          endBefore(cursorDoc),
+          limitToLast(RECORDS_PER_PAGE + 1)
+        );
+      } else {
+        // Initial load
+        billQuery = query(
+          collection(db, "BillTable"),
+          ...queryConstraints,
+          limit(RECORDS_PER_PAGE + 1)
+        );
+      }
+
       const billSnap = await getDocs(billQuery);
+      const docs = billSnap.docs;
+
+      // Check for more pages
+      const hasMore = docs.length > RECORDS_PER_PAGE;
+      // Get the actual docs to display (remove the extra check doc)
+      const displayDocs = hasMore ? (direction === 'prev' ? docs.slice(1) : docs.slice(0, RECORDS_PER_PAGE)) : docs;
+
+      // Correcting start/end slice for limitToLast if direction is prev is tricky without the extra logic,
+      // but standard pattern:
+      // If we used limit(N+1), we have [0...N]. Display [0...N-1].
+      // If direction='prev' and we used limitToLast(N+1), we have [0...N]. Display [1...N].
+
+      let finalDocs = displayDocs;
+      if (direction === 'prev' && hasMore) {
+        finalDocs = docs.slice(docs.length - RECORDS_PER_PAGE);
+      } else if (hasMore) {
+        finalDocs = docs.slice(0, RECORDS_PER_PAGE);
+      } else {
+        finalDocs = docs;
+      }
+
+      // Update cursors
+      if (finalDocs.length > 0) {
+        setFirstDoc(finalDocs[0]);
+        setLastDoc(finalDocs[finalDocs.length - 1]);
+
+        if (direction === 'next') {
+          setHasNextPage(hasMore);
+          setHasPrevPage(true);
+        } else if (direction === 'prev') {
+          setHasPrevPage(hasMore);
+          setHasNextPage(true);
+        } else {
+          setHasNextPage(hasMore);
+          setHasPrevPage(false);
+          setPageCount(1); // Reset page count on initial load
+        }
+
+        // Update page count
+        if (direction === 'next') setPageCount(prev => prev + 1);
+        if (direction === 'prev') setPageCount(prev => Math.max(1, prev - 1));
+
+      } else {
+        setFirstDoc(null);
+        setLastDoc(null);
+        setHasNextPage(false);
+        setHasPrevPage(false);
+      }
+
       const billData = [];
-      
-      // Get payment details for each bill
-      for (const billDoc of billSnap.docs) {
+
+      // Get payment details for each bill (ONLY for the filtered page)
+      // We can parallelize this for performance
+      await Promise.all(finalDocs.map(async (billDoc) => {
         const bill = billDoc.data();
-        
+
+        // CLIENT-SIDE FILTER REMOVED: Now handled by server query
+
         let paymentDetails = {};
         if (bill.PId) {
           // Fetch payment details from PaymentTable
@@ -143,6 +301,7 @@ const ShowPayment = ({ userRole }) => {
         }
 
         // Calculate total shortage for this payment number
+        // This is still potentially expensive but limited to 20 rows
         let totalShortage = 0;
         if (paymentDetails.DocNumber) {
           const shortageQuery = query(
@@ -175,12 +334,13 @@ const ShowPayment = ({ userRole }) => {
           BillDateObj: toDate(bill.BillDate),
           BillDateSortKey: formatDate(toDate(bill.BillDate))
         });
-      }
+      }));
 
-      // Sort by payment date (newest first)
+      // Sort by payment date (newest first) or BillDate if PaymentDate unavailable
       billData.sort((a, b) => {
-        if (a.PaymentDate && b.PaymentDate) {
-          return b.PaymentDate - a.PaymentDate;
+        if (a.BillDateObj && b.BillDateObj) {
+          // Consistent with Firestore orderBy
+          return b.BillDateObj - a.BillDateObj;
         }
         return 0;
       });
@@ -188,23 +348,11 @@ const ShowPayment = ({ userRole }) => {
       setRows(billData);
       setSelectedPayments([]);
       setSelectAll(false);
-      setCurrentPage(1);
-      setHasLoadedData(true); // Mark that data has been loaded
-      
-      // Update factories with data from loaded rows
-      const loadedFactorySet = new Set();
-      billData.forEach(bill => {
-        if (bill.FactoryName) {
-          loadedFactorySet.add(bill.FactoryName);
-        }
-      });
-      
-      const loadedFactoriesList = Array.from(loadedFactorySet).sort();
-      if (loadedFactoriesList.length > 0) {
-        setFactories(loadedFactoriesList);
-      }
+      setHasLoadedData(true);
+
     } catch (error) {
       console.error("Error loading payment data:", error);
+      alert("Error loading data: " + error.message);
     } finally {
       setLoading(false);
     }
@@ -217,18 +365,27 @@ const ShowPayment = ({ userRole }) => {
 
   /* ===== APPLY FILTERS FUNCTION ===== */
   const applyFilters = () => {
-    // If no data has been loaded yet, load it now
-    if (!hasLoadedData) {
-      load();
-    }
-    
     setAppliedFilters({
       fromDate: fromDate,
       toDate: toDateFilter,
-      searchTerm: searchTerm,
+      searchTerm: searchTerm, // Keep for local search within page
       factoryFilter: factoryFilter,
       paymentTypeFilter: paymentTypeFilter
     });
+  };
+
+  // Trigger load when filters (excluding search term which is local) change
+  // BUT only if we have explicitly applied them or on initial load
+  useEffect(() => {
+    if (hasLoadedData || (appliedFilters.factoryFilter || appliedFilters.fromDate || appliedFilters.toDate)) {
+      load();
+    }
+  }, [appliedFilters.factoryFilter, appliedFilters.fromDate, appliedFilters.toDate]);
+
+  // Handle manual "Apply Filters" button click
+  const handleApplyClick = () => {
+    setPageCount(1); // Reset to first page
+    load(); // Trigger load
   };
 
   /* ===== CLEAR FILTERS FUNCTION ===== */
@@ -245,20 +402,19 @@ const ShowPayment = ({ userRole }) => {
       factoryFilter: "",
       paymentTypeFilter: ""
     });
-    // Don't clear rows - keep the loaded data for faster filtering
+    setRows([]);
+    setHasLoadedData(false);
+    setSelectAll(false);
+    setSelectedPayments([]);
   };
 
-  /* ===== PAYMENT TYPE LIST ===== */
-  const paymentTypes = ["Has Payment"];
+
 
   /* ================= PAGINATION CALCULATIONS ================= */
   const filteredRows = rows.filter(r => {
-    // If no filters are applied, show all loaded rows
-    if (!hasLoadedData) return false;
-    
-    // Search filter
-    if (appliedFilters.searchTerm.trim()) {
-      const tokens = appliedFilters.searchTerm.toLowerCase().split(/\s+/);
+    // Search filter (client-side for loaded page)
+    if (searchTerm.trim()) {
+      const tokens = searchTerm.toLowerCase().split(/\s+/);
       return tokens.every(t =>
         (r.FactoryName || "").toLowerCase().includes(t) ||
         (r.BillNum || "").toLowerCase().includes(t) ||
@@ -267,67 +423,25 @@ const ShowPayment = ({ userRole }) => {
       );
     }
     return true;
-  }).filter(r => {
-    // Factory filter
-    if (appliedFilters.factoryFilter) {
-      return (r.FactoryName || "").toLowerCase() === appliedFilters.factoryFilter.toLowerCase();
-    }
-    return true;
-  }).filter(r => {
-    // Payment type filter
-    if (appliedFilters.paymentTypeFilter === "Has Payment") {
-      return r.PaymentNumber && r.PaymentNumber.trim() !== "";
-    }
-    return true;
-  }).filter(r => {
-    // Date filtering
-    if (appliedFilters.fromDate) {
-      const fromDateObj = new Date(appliedFilters.fromDate);
-      fromDateObj.setHours(0, 0, 0, 0);
-      if (!r.PaymentDate) return false;
-      return r.PaymentDate >= fromDateObj;
-    }
-    return true;
-  }).filter(r => {
-    if (appliedFilters.toDate) {
-      const toDateObj = new Date(appliedFilters.toDate);
-      toDateObj.setHours(23, 59, 59, 999);
-      if (!r.PaymentDate) return false;
-      return r.PaymentDate <= toDateObj;
-    }
-    return true;
   });
 
-  // Calculate pagination values
-  const totalRecords = filteredRows.length;
-  const totalPages = Math.ceil(totalRecords / recordsPerPage);
-  
-  // Ensure current page is valid
-  useEffect(() => {
-    if (currentPage > totalPages && totalPages > 0) {
-      setCurrentPage(totalPages);
-    }
-  }, [currentPage, totalPages]);
+  // RECORDS ARE ALREADY PAGINATED BY SERVER
+  const currentRecords = filteredRows;
 
-  // Get current page data
-  const indexOfLastRecord = currentPage * recordsPerPage;
-  const indexOfFirstRecord = indexOfLastRecord - recordsPerPage;
-  const currentRecords = filteredRows.slice(indexOfFirstRecord, indexOfLastRecord);
-
-  // Handle page change
-  const handlePageChange = (pageNumber) => {
-    if (pageNumber >= 1 && pageNumber <= totalPages) {
-      setCurrentPage(pageNumber);
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+  // Helper for pagination controls
+  const nextPage = () => {
+    if (hasNextPage && lastDoc) {
+      load('next', lastDoc);
     }
   };
 
-  // Handle records per page change
-  const handleRecordsPerPageChange = (e) => {
-    const newRecordsPerPage = parseInt(e.target.value);
-    setRecordsPerPage(newRecordsPerPage);
-    setCurrentPage(1);
+  const prevPage = () => {
+    if (hasPrevPage && firstDoc) {
+      load('prev', firstDoc);
+    }
   };
+
+
 
   /* ===== CHECKBOX HANDLERS ===== */
   const handleSelectAll = () => {
@@ -354,7 +468,7 @@ const ShowPayment = ({ userRole }) => {
       alert("Please load data first by applying filters");
       return;
     }
-    
+
     setExporting(true);
     try {
       // Prepare data for export
@@ -383,7 +497,7 @@ const ShowPayment = ({ userRole }) => {
 
       // Create worksheet
       const ws = XLSX.utils.json_to_sheet(exportData);
-      
+
       // Set column widths
       const wscols = [
         { wch: 20 }, { wch: 20 }, { wch: 12 }, { wch: 20 },
@@ -413,7 +527,7 @@ const ShowPayment = ({ userRole }) => {
 
       // Export file
       XLSX.writeFile(wb, fileName);
-      
+
       alert(`Exported ${exportData.length} payments to ${fileName}`);
     } catch (error) {
       console.error("Error exporting to Excel:", error);
@@ -433,7 +547,7 @@ const ShowPayment = ({ userRole }) => {
     setExporting(true);
     try {
       const selectedRows = filteredRows.filter(row => selectedPayments.includes(row.id));
-      
+
       const exportData = selectedRows.map(row => {
         return {
           "Factory Name": row.FactoryName || "",
@@ -453,7 +567,7 @@ const ShowPayment = ({ userRole }) => {
 
       // Create worksheet
       const ws = XLSX.utils.json_to_sheet(exportData);
-      
+
       // Set column widths
       const wscols = [
         { wch: 20 }, { wch: 20 }, { wch: 12 }, { wch: 20 },
@@ -483,7 +597,7 @@ const ShowPayment = ({ userRole }) => {
 
       // Export file
       XLSX.writeFile(wb, fileName);
-      
+
       alert(`Exported ${selectedPayments.length} selected payments to ${fileName}`);
     } catch (error) {
       console.error("Error exporting selected payments:", error);
@@ -518,7 +632,7 @@ const ShowPayment = ({ userRole }) => {
           UpdatedAt: serverTimestamp()
         });
       }
-      
+
       // Reload data
       await load();
       setSelectedPayments([]);
@@ -536,7 +650,7 @@ const ShowPayment = ({ userRole }) => {
   return (
     <div className="container">
       <h1>Show Payment Report</h1>
-      
+
       {/* ===== FILTER BAR ===== */}
       <div className="filter-bar">
         <div>
@@ -570,19 +684,6 @@ const ShowPayment = ({ userRole }) => {
           )}
         </div>
 
-        <div>
-          <select
-            value={paymentTypeFilter}
-            onChange={e => setPaymentTypeFilter(e.target.value)}
-            className="filter-select"
-          >
-            <option value="">All Payments</option>
-            {paymentTypes.map(pt => (
-              <option key={pt} value={pt}>{pt}</option>
-            ))}
-          </select>
-        </div>
-
         <div className="date-filter-container">
           <label>From:</label>
           <input
@@ -604,14 +705,14 @@ const ShowPayment = ({ userRole }) => {
         </div>
 
         <div style={{ display: 'flex', gap: 10 }}>
-          <button 
-            onClick={applyFilters}
+          <button
+            onClick={handleApplyClick}
             disabled={loading}
             className="filter-button apply-button"
           >
             {loading ? 'Loading...' : hasLoadedData ? 'Apply Filters' : 'Load Data'}
           </button>
-          <button 
+          <button
             onClick={clearFilters}
             disabled={!hasLoadedData || loading}
             className="filter-button clear-button"
@@ -622,17 +723,20 @@ const ShowPayment = ({ userRole }) => {
 
         {/* ===== EXPORT BUTTONS ===== */}
         <div className="export-button-group">
-          <button 
+          <button
             onClick={exportToExcel}
             disabled={exporting || !hasLoadedData || filteredRows.length === 0}
             className="export-button export-all-button"
             title="Export all filtered payments to Excel"
           >
-            {exporting ? 'Exporting...' : 'Export All to Excel'}
+            {exporting ? 'Exporting...' : 'Export Visible to Excel'}
           </button>
-          
+          <div style={{ fontSize: '0.8em', marginTop: '5px', color: '#666' }}>
+            Note: Exports only current page
+          </div>
+
           {isAdmin && selectedPayments.length > 0 && (
-            <button 
+            <button
               onClick={exportSelectedToExcel}
               disabled={exporting}
               className="export-button export-selected-button"
@@ -651,8 +755,8 @@ const ShowPayment = ({ userRole }) => {
             <h3>No Data Loaded</h3>
             <p>Click <strong>"Load Data"</strong> to fetch payment records from the database.</p>
             <p>You can apply filters before loading to refine your results.</p>
-            <button 
-              onClick={load}
+            <button
+              onClick={handleApplyClick}
               disabled={loading}
               className="filter-button apply-button"
               style={{ marginTop: '15px', padding: '10px 20px' }}
@@ -663,32 +767,28 @@ const ShowPayment = ({ userRole }) => {
         </div>
       )}
 
-      {/* ===== RECORDS PER PAGE SELECTOR ===== */}
+      {/* ===== PAGINATION CONTROLS ===== */}
       {hasLoadedData && (
-        <div className="records-selector">
-          <div className="records-controls">
-            <span style={{ fontWeight: 'bold' }}>Records per page:</span>
-            <select 
-              value={recordsPerPage} 
-              onChange={handleRecordsPerPageChange}
-              style={{ padding: '5px 10px', borderRadius: 4, border: '1px solid #ccc' }}
-              disabled={loading}
-            >
-              <option value="10">10</option>
-              <option value="20">20</option>
-              <option value="50">50</option>
-              <option value="100">100</option>
-              <option value="200">200</option>
-            </select>
-            
-            <span style={{ marginLeft: 20, color: '#666' }}>
-              Showing {indexOfFirstRecord + 1} to {Math.min(indexOfLastRecord, totalRecords)} of {totalRecords} records
-            </span>
-          </div>
-          
-          <div style={{ fontWeight: 'bold', color: '#495057' }}>
-            Total Payments: {totalRecords}
-          </div>
+        <div className="pagination-controls" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '20px 0' }}>
+          <button
+            onClick={prevPage}
+            disabled={loading || !hasPrevPage}
+            className="filter-button"
+            style={{ opacity: !hasPrevPage ? 0.5 : 1 }}
+          >
+            Previous
+          </button>
+          <span>
+            Page {pageCount} {loading && '(Loading...)'}
+          </span>
+          <button
+            onClick={nextPage}
+            disabled={loading || !hasNextPage}
+            className="filter-button"
+            style={{ opacity: !hasNextPage ? 0.5 : 1 }}
+          >
+            Next
+          </button>
         </div>
       )}
 
@@ -710,7 +810,7 @@ const ShowPayment = ({ userRole }) => {
               Page Payments: {currentRecords.length}
             </span>
           </div>
-          
+
           <div style={{ display: 'flex', gap: 10 }}>
             {selectedPayments.length > 0 && (
               <>
@@ -814,133 +914,7 @@ const ShowPayment = ({ userRole }) => {
         </div>
       )}
 
-      {/* ===== PAGINATION CONTROLS ===== */}
-      {hasLoadedData && !loading && totalRecords > 0 && (
-        <div className="pagination-container">
-          <div className="pagination-controls">
-            <span style={{ fontWeight: 'bold', marginRight: 10 }}>Page {currentPage} of {totalPages}</span>
-            
-            {/* First and Previous buttons */}
-            <button
-              onClick={() => handlePageChange(1)}
-              disabled={currentPage === 1}
-              className={`page-button ${currentPage === 1 ? 'disabled-page-button' : ''}`}
-              title="First Page"
-            >
-              ««
-            </button>
-            
-            <button
-              onClick={() => handlePageChange(currentPage - 1)}
-              disabled={currentPage === 1}
-              className={`page-button ${currentPage === 1 ? 'disabled-page-button' : ''}`}
-              title="Previous Page"
-            >
-              «
-            </button>
-            
-            {/* Page number buttons */}
-            <div style={{ display: 'flex', gap: 5 }}>
-              {/* Show first page if not in first 3 pages */}
-              {currentPage > 3 && totalPages > 1 && (
-                <>
-                  <button
-                    onClick={() => handlePageChange(1)}
-                    className="page-button"
-                  >
-                    1
-                  </button>
-                  {currentPage > 4 && <span style={{ padding: '8px 0' }}>...</span>}
-                </>
-              )}
-              
-              {/* Show pages around current page */}
-              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                let pageNum;
-                if (totalPages <= 5) {
-                  pageNum = i + 1;
-                } else if (currentPage <= 3) {
-                  pageNum = i + 1;
-                } else if (currentPage >= totalPages - 2) {
-                  pageNum = totalPages - 4 + i;
-                } else {
-                  pageNum = currentPage - 2 + i;
-                }
-                
-                if (pageNum < 1 || pageNum > totalPages) return null;
-                
-                return (
-                  <button
-                    key={pageNum}
-                    onClick={() => handlePageChange(pageNum)}
-                    className={`page-button ${currentPage === pageNum ? 'current-page-button' : ''}`}
-                  >
-                    {pageNum}
-                  </button>
-                );
-              })}
-              
-              {/* Show last page if not in last 3 pages */}
-              {currentPage < totalPages - 2 && totalPages > 1 && (
-                <>
-                  {currentPage < totalPages - 3 && <span style={{ padding: '8px 0' }}>...</span>}
-                  <button
-                    onClick={() => handlePageChange(totalPages)}
-                    className="page-button"
-                  >
-                    {totalPages}
-                  </button>
-                </>
-              )}
-            </div>
-            
-            {/* Next and Last buttons */}
-            <button
-              onClick={() => handlePageChange(currentPage + 1)}
-              disabled={currentPage === totalPages}
-              className={`page-button ${currentPage === totalPages ? 'disabled-page-button' : ''}`}
-              title="Next Page"
-            >
-              »
-            </button>
-            
-            <button
-              onClick={() => handlePageChange(totalPages)}
-              disabled={currentPage === totalPages}
-              className={`page-button ${currentPage === totalPages ? 'disabled-page-button' : ''}`}
-              title="Last Page"
-            >
-              »»
-            </button>
-          </div>
-          
-          {/* Go to page input */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span>Go to page:</span>
-            <input
-              type="number"
-              min="1"
-              max={totalPages}
-              value={currentPage}
-              onChange={(e) => {
-                const page = parseInt(e.target.value);
-                if (page >= 1 && page <= totalPages) {
-                  handlePageChange(page);
-                }
-              }}
-              onBlur={(e) => {
-                const page = parseInt(e.target.value);
-                if (page >= 1 && page <= totalPages) {
-                  handlePageChange(page);
-                } else {
-                  e.target.value = currentPage;
-                }
-              }}
-              className="go-to-page-input"
-            />
-          </div>
-        </div>
-      )}
+      {/* ===== PAGINATION CONTROLS (Managed above) ===== */}
 
       {/* ===== DELETE CONFIRMATION MODAL (Only for Admin) ===== */}
       {isAdmin && showConfirmDelete && (
@@ -950,7 +924,7 @@ const ShowPayment = ({ userRole }) => {
               Confirm Reset Payments
             </h3>
             <p style={{ fontSize: '16px', marginBottom: 20 }}>
-              Are you sure you want to reset {selectedPayments.length} selected payments? 
+              Are you sure you want to reset {selectedPayments.length} selected payments?
               This will reset their payment information to zero.
             </p>
             <div className="warning-box">

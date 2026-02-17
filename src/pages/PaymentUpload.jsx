@@ -248,7 +248,7 @@ const PaymentUpload = () => {
               paymentId = paymentSnapshot.docs[0].id;
               paymentMap.set(paymentNumber, { id: paymentId, exists: true });
               addLog(`Row ${i}: Using existing payment ${paymentNumber}`, "info");
-              
+
               // Update existing payment date if needed
               await updateDoc(doc(db, "PaymentTable", paymentId), {
                 PayRecDate: paymentDate,
