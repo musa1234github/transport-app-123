@@ -223,21 +223,21 @@ const ShowPayment = ({ userRole }) => {
         queryConstraints.push(where("FactoryName", "==", appliedFilters.factoryFilter));
       }
 
-      // Add date filters
+      // Always filter and sort by PaymentRecDate
       if (appliedFilters.fromDate) {
         const fromDateObj = new Date(appliedFilters.fromDate);
         fromDateObj.setHours(0, 0, 0, 0);
-        queryConstraints.push(where("BillDate", ">=", Timestamp.fromDate(fromDateObj)));
+        queryConstraints.push(where("PaymentRecDate", ">=", Timestamp.fromDate(fromDateObj)));
       }
 
       if (appliedFilters.toDate) {
         const toDateObj = new Date(appliedFilters.toDate);
         toDateObj.setHours(23, 59, 59, 999);
-        queryConstraints.push(where("BillDate", "<=", Timestamp.fromDate(toDateObj)));
+        queryConstraints.push(where("PaymentRecDate", "<=", Timestamp.fromDate(toDateObj)));
       }
 
-      // Add orderBy AFTER where clauses
-      queryConstraints.push(orderBy("BillDate", "desc"));
+      // Add orderBy AFTER where clauses - always by PaymentRecDate
+      queryConstraints.push(orderBy("PaymentRecDate", "desc"));
 
       // Build query with cursor pagination
       let billQuery;
