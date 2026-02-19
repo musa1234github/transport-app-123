@@ -34,14 +34,30 @@ const formatDate = (dateVal) => {
 const BagShortUpdate = () => {
     const [factory, setFactory] = useState("");
     const [challanNo, setChallanNo] = useState("");
+    const [dispatchDate, setDispatchDate] = useState("");
+    const [truckNo, setTruckNo] = useState("");
+
     const [searching, setSearching] = useState(false);
     const [saving, setSaving] = useState(false);
     const [record, setRecord] = useState(null);       // matched Firestore doc
     const [bagShort, setBagShort] = useState("");      // new BagShort input
+    const [bagShortUnit, setBagShortUnit] = useState("Bag"); // "Bag" or "KG"
     const [searchError, setSearchError] = useState("");
     const [successMsg, setSuccessMsg] = useState("");
 
     /* ─────────────────────────── SEARCH ─────────────────────────── */
+    // Challan is optional when BOTH Dispatch Date and Truck No are provided
+    const challanRequired = !(dispatchDate && truckNo.trim());
+
+    // Returns midnight-start and end-of-day Dates for a YYYY-MM-DD string
+    const getDateRange = (dateStr) => {
+        const start = new Date(dateStr);
+        start.setHours(0, 0, 0, 0);
+        const end = new Date(dateStr);
+        end.setHours(23, 59, 59, 999);
+        return { start, end };
+    };
+
     const handleSearch = async (e) => {
         e.preventDefault();
         setRecord(null);
@@ -49,34 +65,85 @@ const BagShortUpdate = () => {
         setSuccessMsg("");
         setBagShort("");
 
-        if (!factory || !challanNo.trim()) {
-            setSearchError("❌ Please select a Factory and enter a Challan Number.");
+        if (!factory) {
+            setSearchError("❌ Please select a Factory.");
+            return;
+        }
+
+        if (challanRequired && !challanNo.trim()) {
+            setSearchError("❌ Please enter a Challan Number, or provide both Dispatch Date and Truck No to search without it.");
             return;
         }
 
         setSearching(true);
         try {
-            const q = query(
-                collection(db, "TblDispatch"),
-                where("FactoryName", "==", factory),
-                where("ChallanNo", "==", challanNo.trim().toUpperCase())
-            );
-            const snap = await getDocs(q);
+            let snap;
 
-            if (snap.empty) {
+            if (challanNo.trim()) {
+                // Search by Factory + Challan (most precise)
+                const q = query(
+                    collection(db, "TblDispatch"),
+                    where("FactoryName", "==", factory),
+                    where("ChallanNo", "==", challanNo.trim().toUpperCase())
+                );
+                snap = await getDocs(q);
+
+                if (snap.empty) {
+                    setSearchError(
+                        `⚠️ No record found for Challan "${challanNo.trim().toUpperCase()}" in factory "${factory}".`
+                    );
+                    setSearching(false);
+                    return;
+                }
+            } else {
+                // Challan not provided — push filters to Firestore (no client-side scan)
+                const constraints = [
+                    where("FactoryName", "==", factory)
+                ];
+
+                // Truck filter — Firestore-side
+                if (truckNo.trim()) {
+                    constraints.push(
+                        where("VehicleNo", "==", truckNo.trim().toUpperCase())
+                    );
+                }
+
+                // Date filter — Firestore-side range on Timestamp field
+                if (dispatchDate) {
+                    const { start, end } = getDateRange(dispatchDate);
+                    constraints.push(where("DispatchDate", ">=", start));
+                    constraints.push(where("DispatchDate", "<=", end));
+                }
+
+                const q = query(collection(db, "TblDispatch"), ...constraints);
+                snap = await getDocs(q);
+
+                if (snap.empty) {
+                    setSearchError(`⚠️ No records found for factory "${factory}" with the given Truck No / Date.`);
+                    setSearching(false);
+                    return;
+                }
+            }
+
+            // Firestore already filtered — just map docs directly
+            const filtered = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+
+            if (filtered.length === 0) {
                 setSearchError(
-                    `⚠️ No record found for Challan "${challanNo.trim().toUpperCase()}" in factory "${factory}".`
+                    challanNo.trim()
+                        ? "⚠️ Record found for Challan, but it doesn't match the provided Truck No or Dispatch Date."
+                        : "⚠️ No records match the provided Dispatch Date and Truck No for the selected factory."
                 );
             } else {
-                const d = snap.docs[0];
-                const data = { id: d.id, ...d.data() };
+                const data = filtered[0];
                 setRecord(data);
-                // Pre-fill with existing BagShort if present
                 setBagShort(
                     data.BagShort !== undefined && data.BagShort !== null
                         ? String(data.BagShort)
                         : ""
                 );
+                setBagShortUnit(data.BagShortUnit || "Bag");
             }
         } catch (err) {
             console.error("Search error:", err);
@@ -85,6 +152,7 @@ const BagShortUpdate = () => {
             setSearching(false);
         }
     };
+
 
     /* ─────────────────────────── SAVE ─────────────────────────── */
     const handleSave = async () => {
@@ -103,12 +171,13 @@ const BagShortUpdate = () => {
             const updatedAt = new Date();
             await updateDoc(doc(db, "TblDispatch", record.id), {
                 BagShort: numVal,
+                BagShortUnit: bagShortUnit,
                 BagShortUpdatedDate: updatedAt
             });
 
-            setRecord((prev) => ({ ...prev, BagShort: numVal, BagShortUpdatedDate: updatedAt }));
+            setRecord((prev) => ({ ...prev, BagShort: numVal, BagShortUnit: bagShortUnit, BagShortUpdatedDate: updatedAt }));
             setSuccessMsg(
-                `✅ Bag Short updated to ${numVal} for Challan "${record.ChallanNo}" (${factory}).`
+                `✅ Bag Short updated to ${numVal} ${bagShortUnit}(s) for Challan "${record.ChallanNo}" (${factory}).`
             );
         } catch (err) {
             console.error("Update error:", err);
@@ -119,22 +188,27 @@ const BagShortUpdate = () => {
     };
 
     /* ─────────────────────────── RESET ─────────────────────────── */
+    /* ─────────────────────────── RESET ─────────────────────────── */
     const handleReset = () => {
         setFactory("");
         setChallanNo("");
+        setDispatchDate("");
+        setTruckNo("");
         setRecord(null);
         setBagShort("");
+        setBagShortUnit("Bag");
         setSearchError("");
         setSuccessMsg("");
     };
+
 
     /* ─────────────────────────── UI ─────────────────────────── */
     return (
         <div style={styles.page}>
             <h2 style={styles.heading}>🎒 Update Bag Short</h2>
             <p style={styles.subtext}>
-                Search a dispatch record by <strong>Factory</strong> and{" "}
-                <strong>Challan Number</strong>, then enter the Bag Short quantity.
+                Search by <strong>Factory</strong> + <strong>Challan Number</strong>, or leave Challan blank
+                and provide both <strong>Dispatch Date</strong> and <strong>Truck No</strong>.
             </p>
 
             {/* ── SEARCH FORM ── */}
@@ -142,7 +216,7 @@ const BagShortUpdate = () => {
                 <div style={styles.row}>
                     {/* Factory */}
                     <div style={styles.field}>
-                        <label style={styles.label}>🏭 Factory</label>
+                        <label style={styles.label}>🏭 Factory *</label>
                         <select
                             value={factory}
                             onChange={(e) => { setFactory(e.target.value); setRecord(null); setSuccessMsg(""); setSearchError(""); }}
@@ -158,17 +232,47 @@ const BagShortUpdate = () => {
 
                     {/* Challan Number */}
                     <div style={styles.field}>
-                        <label style={styles.label}>🔢 Challan Number</label>
+                        <label style={styles.label}>
+                            🔢 Challan Number{" "}
+                            {challanRequired
+                                ? <span style={{ color: "#ef4444" }}>*</span>
+                                : <span style={{ color: "#6b7280", fontWeight: 400, fontSize: 12 }}>(Optional)</span>
+                            }
+                        </label>
                         <input
                             type="text"
                             placeholder="e.g. 6988560862"
                             value={challanNo}
                             onChange={(e) => { setChallanNo(e.target.value); setRecord(null); setSuccessMsg(""); setSearchError(""); }}
                             style={styles.input}
-                            required
+                            required={challanRequired}
+                        />
+                    </div>
+
+                    {/* Dispatch Date */}
+                    <div style={styles.field}>
+                        <label style={styles.label}>📅 Dispatch Date (Optional)</label>
+                        <input
+                            type="date"
+                            value={dispatchDate}
+                            onChange={(e) => { setDispatchDate(e.target.value); setRecord(null); setSuccessMsg(""); setSearchError(""); }}
+                            style={styles.input}
+                        />
+                    </div>
+
+                    {/* Truck No */}
+                    <div style={styles.field}>
+                        <label style={styles.label}>🚛 Truck No (Optional)</label>
+                        <input
+                            type="text"
+                            placeholder="e.g. MH12AB1234"
+                            value={truckNo}
+                            onChange={(e) => { setTruckNo(e.target.value); setRecord(null); setSuccessMsg(""); setSearchError(""); }}
+                            style={styles.input}
                         />
                     </div>
                 </div>
+
 
                 <div style={styles.btnRow}>
                     <button
@@ -209,7 +313,9 @@ const BagShortUpdate = () => {
                                 ["Dispatch Qty", record.DispatchQuantity ?? "—"],
                                 ["Advance", record.Advance ?? "—"],
                                 ["Diesel", record.Diesel ?? "—"],
-                                ["Current Bag Short", record.BagShort !== undefined && record.BagShort !== null ? record.BagShort : "Not set"],
+                                ["Current Bag Short", record.BagShort !== undefined && record.BagShort !== null
+                                    ? `${record.BagShort} ${record.BagShortUnit || "Bag"}`
+                                    : "Not set"],
                                 ["Last Updated", record.BagShortUpdatedDate
                                     ? formatDate(record.BagShortUpdatedDate)
                                     : "—"],
@@ -231,6 +337,7 @@ const BagShortUpdate = () => {
                             </span>
                         </label>
                         <div style={styles.row}>
+                            {/* Quantity input */}
                             <input
                                 type="number"
                                 step="any"
@@ -238,8 +345,27 @@ const BagShortUpdate = () => {
                                 placeholder="Enter Bag Short..."
                                 value={bagShort}
                                 onChange={(e) => { setBagShort(e.target.value); setSuccessMsg(""); setSearchError(""); }}
-                                style={{ ...styles.input, maxWidth: 200 }}
+                                style={{ ...styles.input, maxWidth: 180 }}
                             />
+
+                            {/* Bag / KG toggle */}
+                            <div style={styles.unitToggle}>
+                                {["Bag", "KG"].map((unit) => (
+                                    <button
+                                        key={unit}
+                                        type="button"
+                                        onClick={() => { setBagShortUnit(unit); setSuccessMsg(""); setSearchError(""); }}
+                                        style={{
+                                            ...styles.unitBtn,
+                                            backgroundColor: bagShortUnit === unit ? "#2563eb" : "#e5e7eb",
+                                            color: bagShortUnit === unit ? "#fff" : "#374151",
+                                        }}
+                                    >
+                                        {unit}
+                                    </button>
+                                ))}
+                            </div>
+
                             <button
                                 onClick={handleSave}
                                 disabled={saving || bagShort.trim() === ""}
@@ -384,6 +510,22 @@ const styles = {
     bagShortSection: {
         borderTop: "1px solid #e5e7eb",
         paddingTop: 20
+    },
+    unitToggle: {
+        display: "flex",
+        gap: 0,
+        borderRadius: 6,
+        overflow: "hidden",
+        border: "1px solid #d1d5db",
+        flexShrink: 0
+    },
+    unitBtn: {
+        padding: "9px 18px",
+        border: "none",
+        fontSize: 14,
+        fontWeight: 600,
+        cursor: "pointer",
+        transition: "background 0.15s, color 0.15s"
     }
 };
 
