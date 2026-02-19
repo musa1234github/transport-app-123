@@ -6,6 +6,7 @@ import Login from "./pages/Login.jsx";
 import Home from "./pages/Home.jsx";
 import FactoryList from "./pages/FactoryList.jsx";
 import UploadDispatch from "./pages/UploadDispatch.jsx";
+import BagShortUpdate from "./pages/BagShortUpdate.jsx";
 import ShowDispatch from "./pages/ShowDispatch.jsx";
 import VehicleMaster from "./pages/VehicleMaster.jsx";
 import BillUpload from "./pages/BillUpload.jsx";
@@ -121,7 +122,10 @@ const App = () => {
           {/* ===== UPLOAD / MASTER (ADMIN + DISPATCHER) ===== */}
           {/* ===== DISPATCH UPLOAD ===== */}
           {canUploadDispatch && (
-            <Route path="upload-dispatch" element={<UploadDispatch />} />
+            <>
+              <Route path="upload-dispatch" element={<UploadDispatch />} />
+              <Route path="bag-short-update" element={<BagShortUpdate />} />
+            </>
           )}
 
           {/* ===== BILL + PAYMENT (ADMIN ONLY) ===== */}

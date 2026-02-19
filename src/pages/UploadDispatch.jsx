@@ -171,7 +171,7 @@ const UploadDispatch = () => {
         dataRows = rows.slice(headerRowIndex + 1);
       } else {
         colMap = { ...FACTORY_COLUMN_MAPS[factoryName] };
-        
+
         // Check if factory has headerRowIndex property
         if (colMap.headerRowIndex !== undefined) {
           const startRow = colMap.headerRowIndex + 1;

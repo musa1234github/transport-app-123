@@ -64,11 +64,18 @@ const Home = ({ user, userRole }) => {
           }}
         >
           {canUploadDispatch && (
-            <li>
-              <Link to="/upload-dispatch" style={menuLink}>
-                🚚 Dispatch Upload
-              </Link>
-            </li>
+            <>
+              <li>
+                <Link to="/upload-dispatch" style={menuLink}>
+                  🚚 Dispatch Upload
+                </Link>
+              </li>
+              <li>
+                <Link to="/bag-short-update" style={menuLink}>
+                  🎒 Bag Short Update
+                </Link>
+              </li>
+            </>
           )}
 
           {canUploadBilling && (
