@@ -1,0 +1,426 @@
+/* GstReport.css */
+
+/* ── container ───────────────────────────────────── */
+.gst-report-container {
+    padding: 24px 28px;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    color: #212529;
+}
+
+.gst-report-title {
+    text-align: center;
+    font-size: 2rem;
+    font-weight: 700;
+    margin-bottom: 22px;
+    color: #1a1a2e;
+    letter-spacing: 1px;
+}
+
+/* ── filter bar ───────────────────────────────────── */
+.gst-filter-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    align-items: flex-end;
+    background: #f5f7fa;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-bottom: 18px;
+}
+
+.gst-filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.gst-filter-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: #495057;
+}
+
+.gst-filter-select,
+.gst-filter-input {
+    padding: 7px 10px;
+    border: 1px solid #ced4da;
+    border-radius: 5px;
+    font-size: 14px;
+    background: #fff;
+    min-width: 180px;
+    transition: border-color 0.2s;
+}
+
+.gst-filter-select:focus,
+.gst-filter-input:focus {
+    border-color: #4361ee;
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(67, 97, 238, 0.15);
+}
+
+.gst-filter-buttons {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+}
+
+/* ── buttons ─────────────────────────────────────── */
+.gst-btn {
+    padding: 8px 20px;
+    border: none;
+    border-radius: 5px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.2s, transform 0.1s;
+}
+
+.gst-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.gst-btn:not(:disabled):hover {
+    opacity: 0.88;
+    transform: translateY(-1px);
+}
+
+.gst-btn-search {
+    background: #4361ee;
+    color: #fff;
+}
+
+.gst-btn-clear {
+    background: #e63946;
+    color: #fff;
+}
+
+.gst-btn-export {
+    background: #2a9d8f;
+    color: #fff;
+}
+
+.gst-btn-save {
+    background: #2a9d8f;
+    color: #fff;
+}
+
+.gst-btn-cancel {
+    background: #6c757d;
+    color: #fff;
+}
+
+/* ── error / prompt / loading ─────────────────────── */
+.gst-error {
+    background: #fff5f5;
+    border: 1px solid #f5c6cb;
+    color: #721c24;
+    padding: 10px 16px;
+    border-radius: 5px;
+    margin-bottom: 14px;
+    font-size: 14px;
+}
+
+.gst-prompt,
+.gst-loading {
+    text-align: center;
+    padding: 50px 20px;
+    color: #6c757d;
+    font-size: 15px;
+}
+
+/* ── table controls row ───────────────────────────── */
+.gst-table-controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.gst-info-badge {
+    background: #e8f4fd;
+    color: #1565c0;
+    border: 1px solid #90caf9;
+    border-radius: 20px;
+    padding: 4px 14px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.gst-show-entries {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+    color: #495057;
+}
+
+.gst-show-entries select {
+    padding: 4px 8px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.gst-search-box {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    color: #495057;
+}
+
+.gst-search-box input {
+    padding: 6px 10px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    font-size: 14px;
+    width: 220px;
+    transition: border-color 0.2s;
+}
+
+.gst-search-box input:focus {
+    border-color: #4361ee;
+    outline: none;
+}
+
+/* ── table ───────────────────────────────────────── */
+.gst-table-wrapper {
+    overflow-x: auto;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    margin-bottom: 0;
+}
+
+.gst-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+}
+
+.gst-table thead tr {
+    background: #f2f2f2;
+    border-bottom: 2px solid #dee2e6;
+}
+
+.gst-table th {
+    padding: 10px 12px;
+    text-align: left;
+    font-weight: 600;
+    color: #343a40;
+    white-space: nowrap;
+    cursor: default;
+    user-select: none;
+}
+
+.gst-table td {
+    padding: 9px 12px;
+    border-bottom: 1px solid #e9ecef;
+    vertical-align: middle;
+    white-space: nowrap;
+}
+
+.gst-table tbody tr:hover {
+    background: #f0f4ff;
+}
+
+.gst-row-alt {
+    background: #fafafa;
+}
+
+.gst-bill-no {
+    color: #4361ee;
+    font-weight: 500;
+}
+
+.gst-empty-date {
+    color: #adb5bd;
+    font-style: italic;
+}
+
+.gst-no-data {
+    text-align: center;
+    padding: 30px;
+    color: #6c757d;
+    font-size: 14px;
+}
+
+/* ── edit button ─────────────────────────────────── */
+.gst-edit-btn {
+    padding: 4px 14px;
+    background: transparent;
+    color: #4361ee;
+    border: 1px solid #4361ee;
+    border-radius: 4px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.gst-edit-btn:hover {
+    background: #4361ee;
+    color: #fff;
+}
+
+/* ── pagination ──────────────────────────────────── */
+.gst-pagination {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 12px 4px;
+    border-top: 1px solid #dee2e6;
+    font-size: 14px;
+    color: #6c757d;
+}
+
+.gst-pagination-info {
+    font-size: 14px;
+}
+
+.gst-pagination-buttons {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.gst-page-btn {
+    padding: 5px 12px;
+    border: 1px solid #dee2e6;
+    background: #fff;
+    color: #495057;
+    border-radius: 4px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.gst-page-btn:hover:not(:disabled) {
+    background: #e9ecef;
+}
+
+.gst-page-btn:disabled {
+    color: #adb5bd;
+    cursor: default;
+}
+
+.gst-page-active {
+    background: #4361ee !important;
+    color: #fff !important;
+    border-color: #4361ee !important;
+    font-weight: 700;
+}
+
+.gst-page-dots {
+    padding: 5px 4px;
+    color: #6c757d;
+}
+
+/* ── modal ───────────────────────────────────────── */
+.gst-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+    animation: fadeIn 0.15s ease;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+.gst-modal {
+    background: #fff;
+    border-radius: 10px;
+    padding: 28px 32px;
+    min-width: 360px;
+    max-width: 480px;
+    width: 90%;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.18);
+    animation: slideUp 0.2s ease;
+}
+
+@keyframes slideUp {
+    from {
+        transform: translateY(20px);
+        opacity: 0;
+    }
+
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+.gst-modal-title {
+    margin: 0 0 18px;
+    font-size: 1.2rem;
+    color: #1a1a2e;
+    border-bottom: 1px solid #e9ecef;
+    padding-bottom: 12px;
+}
+
+.gst-modal-row {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 10px;
+    font-size: 14px;
+}
+
+.gst-modal-label {
+    font-weight: 600;
+    color: #495057;
+    min-width: 130px;
+}
+
+.gst-modal-field {
+    margin-top: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.gst-modal-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    margin-top: 22px;
+}
+
+/* ── responsive ──────────────────────────────────── */
+@media (max-width: 600px) {
+    .gst-filter-bar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .gst-filter-select,
+    .gst-filter-input {
+        min-width: unset;
+        width: 100%;
+    }
+
+    .gst-table-controls {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .gst-pagination {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+}

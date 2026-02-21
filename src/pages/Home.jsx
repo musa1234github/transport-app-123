@@ -95,6 +95,11 @@ const Home = ({ user, userRole }) => {
                   🧾 GST Upload
                 </Link>
               </li>
+              <li>
+                <Link to="/gst-report" style={menuLink}>
+                  📊 GST Report
+                </Link>
+              </li>
             </>
           )}
 

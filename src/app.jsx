@@ -20,6 +20,7 @@ import PaymentUpload from "./pages/PaymentUpload.jsx";
 import ShowPayment from "./pages/ShowPayment.jsx";
 import DispatchExport from "./pages/DispatchExport.jsx"; // ADD THIS
 import GstUpload from "./pages/GstUpload.jsx";
+import GstReport from "./pages/GstReport.jsx";
 import { auth, db } from "./firebaseConfig";
 import { doc, getDoc } from "firebase/firestore";
 
@@ -134,6 +135,7 @@ const App = () => {
               <Route path="bill-upload" element={<BillUpload />} />
               <Route path="payment-upload" element={<PaymentUpload />} />
               <Route path="gst-upload" element={<GstUpload />} />
+              <Route path="gst-report" element={<GstReport userRole={userRole} />} />
             </>
           )}
 

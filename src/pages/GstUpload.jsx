@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { db } from "../firebaseConfig";
-import { collection, getDocs, query, orderBy, where, updateDoc, doc, serverTimestamp } from "firebase/firestore";
+import { collection, getDocs, query, orderBy, where, updateDoc, doc, serverTimestamp, limit } from "firebase/firestore";
 import * as XLSX from 'xlsx';
 import './GstUpload.css';
 
 const GstUpload = () => {
     const [factories, setFactories] = useState([]);
-    const [selectedFactoryId, setSelectedFactoryId] = useState(''); // This will store the Factory Name
+    const [selectedFactoryId, setSelectedFactoryId] = useState('');
     const [selectedFile, setSelectedFile] = useState(null);
     const [uploadSummary, setUploadSummary] = useState(null);
     const [errorMessage, setErrorMessage] = useState('');
@@ -14,7 +14,6 @@ const GstUpload = () => {
     const [isUploading, setIsUploading] = useState(false);
     const [previewData, setPreviewData] = useState([]);
 
-    // Fetch factories on component mount
     useEffect(() => {
         fetchFactories();
     }, []);
@@ -22,12 +21,10 @@ const GstUpload = () => {
     const fetchFactories = async () => {
         setIsLoading(true);
         try {
-            // Using the same logic as FactoryList/DispatchUpload
             const q = query(collection(db, "factories"), orderBy("factoryName"));
             const snap = await getDocs(q);
-            // We map to { value: factoryName, text: factoryName } to match the select options
             const data = snap.docs.map(d => ({
-                value: d.data().factoryName,
+                value: d.data().factoryName,  // ← exact text used for BillTable query
                 text: d.data().factoryName
             }));
             setFactories(data);
@@ -49,14 +46,11 @@ const GstUpload = () => {
         setUploadSummary(null);
         setPreviewData([]);
 
-        // Preview the file
         try {
             const buffer = await file.arrayBuffer();
             const wb = XLSX.read(buffer);
             const sheet = wb.Sheets[wb.SheetNames[0]];
             const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-
-            // Show first 5 rows as preview
             if (rows.length > 0) {
                 setPreviewData(rows.slice(0, 6));
             }
@@ -72,39 +66,49 @@ const GstUpload = () => {
 
     const parseDate = (value) => {
         if (!value) return null;
+
+        // Already a Date object
         if (value instanceof Date) return value;
 
-        // Handle Excel serial date
-        if (typeof value === 'number') {
-            return new Date(Math.round((value - 25569) * 86400 * 1000));
+        // Excel serial number
+        if (typeof value === "number") {
+            const date = new Date((value - 25569) * 86400 * 1000);
+            return isNaN(date) ? null : date;
         }
 
-        // Handle various string formats
         const str = String(value).trim();
-        // Try YYYY-MM-DD
-        if (str.match(/^\d{4}-\d{2}-\d{2}$/)) {
-            return new Date(str);
-        }
-        // Try DD-MM-YYYY
-        if (str.match(/^\d{2}-\d{2}-\d{4}$/)) {
-            const [d, m, y] = str.split('-').map(Number);
-            return new Date(y, m - 1, d);
+
+        // Normalize separators: / and . → -
+        const normalized = str.replace(/[./]/g, "-");
+
+        // YYYY-MM-DD
+        if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+            const d = new Date(normalized);
+            return isNaN(d) ? null : d;
         }
 
-        return null;
+        // DD-MM-YYYY  (also covers DD/MM/YYYY and DD.MM.YYYY after normalize)
+        if (/^\d{2}-\d{2}-\d{4}$/.test(normalized)) {
+            const [day, month, year] = normalized.split("-").map(Number);
+            const d = new Date(year, month - 1, day);
+            return isNaN(d) ? null : d;
+        }
+
+        // Fallback — like .NET TryParse
+        const d = new Date(str);
+        return isNaN(d) ? null : d;
     };
 
     const handleSubmit = async (event) => {
         event.preventDefault();
 
-        // Validation
         if (!selectedFactoryId) {
             setErrorMessage('Please select a factory');
             return;
         }
 
         if (!selectedFile) {
-            setErrorMessage('Please select an Excel file to upload');
+            setErrorMessage('Please select an Excel file');
             return;
         }
 
@@ -118,93 +122,150 @@ const GstUpload = () => {
         let failedRecords = [];
 
         try {
+            // ── 1. LOAD ALL FACTORY BILLS ONCE ──────────────────────────────
+            // BillTable is the correct source — it has BillDate, Gst and FactoryName.
+            console.log(`[GstUpload] Querying BillTable where FactoryName == "${selectedFactoryId}"`);
+
+            const billQuery = query(
+                collection(db, "BillTable"),
+                where("FactoryName", "==", selectedFactoryId)
+            );
+            const billSnap = await getDocs(billQuery);
+
+            // Debug: show a sample doc so you can see the EXACT FactoryName stored
+            if (billSnap.docs.length > 0) {
+                const sample = billSnap.docs[0].data();
+                console.log("[GstUpload] ✅ Records found! Sample doc:", sample);
+                console.log("[GstUpload] FactoryName in Firestore:", JSON.stringify(sample.FactoryName));
+            } else {
+                // Load one random doc so you can see the actual FactoryName value stored
+                const sampleSnap = await getDocs(query(collection(db, "BillTable"), limit(1)));
+                if (sampleSnap.docs.length > 0) {
+                    const sampleData = sampleSnap.docs[0].data();
+                    console.warn("[GstUpload] ⚠️ 0 bills matched. You selected:", JSON.stringify(selectedFactoryId));
+                    console.warn("[GstUpload] ⚠️ BillTable actual FactoryName value:", JSON.stringify(sampleData.FactoryName));
+                    console.warn("[GstUpload] ⚠️ Full sample doc:", sampleData);
+                } else {
+                    console.warn("[GstUpload] ⚠️ BillTable collection appears to be empty!");
+                }
+            }
+
+            // Build O(1) lookup map  key = "YYYY-M-D_gstInt"
+            const billMap = new Map();
+            billSnap.docs.forEach(d => {
+                const data = d.data();
+
+                // DEBUG: show raw Firestore doc so we can see exact field names
+                console.log("[GstUpload] PaymentTable doc fields:", JSON.stringify(Object.keys(data)), "| BillDate:", data.BillDate, "| Gst:", data.Gst, "| GSTAmount:", data.GSTAmount);
+
+                // Firestore Timestamp → JS Date
+                const billDateRaw = data.BillDate?.toDate
+                    ? data.BillDate.toDate()
+                    : data.BillDate ? new Date(data.BillDate) : null;
+                if (!billDateRaw || isNaN(billDateRaw)) {
+                    console.warn("[GstUpload] Skipped doc (bad BillDate):", d.id, data.BillDate);
+                    return;
+                }
+
+                const dateKey =
+                    billDateRaw.getFullYear() + "-" +
+                    (billDateRaw.getMonth() + 1) + "-" +
+                    billDateRaw.getDate();
+
+                // Support: Gst (ASP.NET) + common React casings
+                const rawGst =
+                    data.Gst ?? data.GSTAmount ?? data.GstAmount ?? data.gstAmount ?? null;
+                if (rawGst == null) {
+                    console.warn("[GstUpload] Skipped doc (no GST field):", d.id, "fields:", Object.keys(data));
+                    return;
+                }
+
+                // Math.trunc strips decimals on BOTH sides so e.g. 2430.2 (Excel)
+                // and 2430.20 (Firestore) both become 2430 and always match.
+                const gstInt = Math.trunc(Number(rawGst));
+                const key = `${dateKey}_${gstInt}`;
+                console.log("[GstUpload] Map key added:", key);
+                billMap.set(key, d);
+            });
+
+            console.log(`[GstUpload] Loaded ${billMap.size} BillTable records for factory "${selectedFactoryId}"`);
+
+            // ── 2. READ EXCEL ────────────────────────────────────────────────
             const buffer = await selectedFile.arrayBuffer();
             const wb = XLSX.read(buffer);
             const sheet = wb.Sheets[wb.SheetNames[0]];
             const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+            const dataRows = rows.slice(1); // skip header
 
-            // Assume header is row 0
-            // Columns expected: Bill Number, GST Amount, Bill Date, GST Update Date
-            // We need to find the definition. 
-            // Based on previous code: 1) GST Amount, 2) Bill Date, 3) GST Update Date. 
-            // BUT WE NEED A KEY. I will assume Column 0 is Bill Number or Challan Number.
-            // Let's assume Column 0 = Bill Number, 1 = GST Amount, 2 = Bill Date, 3 = GST Update Date
-            // Skipping header row
-            const dataRows = rows.slice(1);
-
+            // ── 3. MATCH EACH ROW AGAINST IN-MEMORY MAP ──────────────────────
             for (let i = 0; i < dataRows.length; i++) {
                 const row = dataRows[i];
                 if (!row || row.length === 0) continue;
 
-                // Adjust these indices based on actual file format
-                // For now, I'll try to match by Bill Number (Col 0)
-                const billNum = row[0] ? String(row[0]).trim() : null;
-                const gstAmount = row[1]; // Col 1
-                const billDateRaw = row[2]; // Col 2
-                const gstUpdateDateRaw = row[3]; // Col 3
+                // Column 0 → GST Amount | Column 1 → Bill Date | Column 2 → GST Update Date
+                const gstAmount = parseFloat(row[0]);
+                const billDate = parseDate(row[1]);
+                const gstUpdateDate = parseDate(row[2]);
 
-                if (!billNum) {
-                    failedRecords.push(`Row ${i + 2}: Missing Bill Number`);
+                if (isNaN(gstAmount)) {
+                    failedRecords.push(`Row ${i + 2}: Invalid GST Amount`);
+                    failureCount++;
+                    continue;
+                }
+                if (!billDate) {
+                    failedRecords.push(`Row ${i + 2}: Invalid Bill Date`);
+                    failureCount++;
+                    continue;
+                }
+                if (!gstUpdateDate) {
+                    failedRecords.push(`Row ${i + 2}: Invalid GST Update Date`);
                     failureCount++;
                     continue;
                 }
 
-                // Find the Bill in Firestore
-                const q = query(
-                    collection(db, "BillTable"),
-                    where("BillNum", "==", billNum),
-                    where("FactoryName", "==", selectedFactoryId)
-                );
-                const snap = await getDocs(q);
+                const dateKey =
+                    billDate.getFullYear() + "-" +
+                    (billDate.getMonth() + 1) + "-" +
+                    billDate.getDate();
 
-                if (snap.empty) {
-                    failedRecords.push(`Row ${i + 2}: Bill "${billNum}" not found for factory ${selectedFactoryId}`);
+                // Math.trunc on Excel value matches the same trunc applied to Firestore data above,
+                // so any decimal difference (e.g. 2430.2 vs 2430.20) is safely ignored.
+                const key = `${dateKey}_${Math.trunc(gstAmount)}`;
+
+                // DEBUG: log first 3 Excel keys so you can compare with map keys above
+                if (i < 3) console.log(`[GstUpload] Excel key (row ${i + 2}):`, key);
+
+                const matchedDoc = billMap.get(key);
+
+                if (!matchedDoc) {
+                    failedRecords.push(
+                        `Row ${i + 2}: No match found (GST ${Math.trunc(gstAmount)}, Date ${billDate.toLocaleDateString()})`
+                    );
                     failureCount++;
                     continue;
                 }
 
-                const docId = snap.docs[0].id;
-
-                // Update the document
+                // ── 4. UPDATE GstReceivedDate in BillTable ─────────────────
                 try {
-                    const updateData = {};
-                    if (gstAmount !== undefined && gstAmount !== null && gstAmount !== '') {
-                        updateData.GSTAmount = parseFloat(gstAmount);
-                    }
-
-                    const gstDate = parseDate(gstUpdateDateRaw);
-                    if (gstDate) {
-                        updateData.GSTUpdateDate = gstDate;
-                    }
-
-                    if (Object.keys(updateData).length > 0) {
-                        updateData.UpdatedAt = serverTimestamp();
-                        await updateDoc(doc(db, "BillTable", docId), updateData);
-                        successCount++;
-                        successfulRecords.push(`Bill ${billNum} updated`);
-                    } else {
-                        failedRecords.push(`Row ${i + 2}: No valid data to update for Bill ${billNum}`);
-                        failureCount++;
-                    }
+                    await updateDoc(doc(db, "BillTable", matchedDoc.id), {
+                        GstReceivedDate: gstUpdateDate,
+                        UpdatedAt: serverTimestamp()
+                    });
+                    successCount++;
+                    successfulRecords.push(`Updated Bill ID: ${matchedDoc.id}`);
                 } catch (err) {
-                    failedRecords.push(`Row ${i + 2}: Error updating bill ${billNum}: ${err.message}`);
+                    failedRecords.push(`Row ${i + 2}: Update error - ${err.message}`);
                     failureCount++;
                 }
             }
 
-            setUploadSummary({
-                successCount,
-                failureCount,
-                successfulRecords,
-                failedRecords
-            });
+            setUploadSummary({ successCount, failureCount, successfulRecords, failedRecords });
 
         } catch (error) {
-            setErrorMessage('An error occurred while processing the file: ' + error.message);
-            console.error('Upload error:', error);
+            setErrorMessage("Upload error: " + error.message);
+            console.error(error);
         } finally {
             setIsUploading(false);
-            // Reset file input
             const fileInput = document.getElementById('file-input');
             if (fileInput) fileInput.value = '';
             setSelectedFile(null);
@@ -264,13 +325,11 @@ const GstUpload = () => {
                 <p>
                     Please ensure your Excel file has headers in the first row and columns in the following order:
                     <br />
-                    <strong>1) Bill Number</strong> (Required to match record)
+                    <strong>1) GST Amount</strong>
                     <br />
-                    <strong>2) GST Amount</strong>
+                    <strong>2) Bill Date</strong>
                     <br />
-                    <strong>3) Bill Date</strong> (yyyy-MM-dd)
-                    <br />
-                    <strong>4) GST Update Date</strong> (yyyy-MM-dd)
+                    <strong>3) GST Update Date</strong>
                 </p>
             </div>
 
