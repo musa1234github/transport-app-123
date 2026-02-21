@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../firebaseConfig';
 import {
     collection, getDocs, query, orderBy, where,
-    updateDoc, doc, serverTimestamp, limit, startAfter, getCountFromServer
+    updateDoc, doc, serverTimestamp, limit, startAfter, getCountFromServer, deleteField
 } from 'firebase/firestore';
 import './GstReport.css';
 import * as XLSX from 'xlsx';
@@ -35,6 +35,7 @@ const GstReport = ({ userRole }) => {
     const [fromDate, setFromDate] = useState('');
     const [toDate, setToDate] = useState('');
     const [pageSize, setPageSize] = useState(10);
+    const [searchText, setSearchText] = useState('');
 
     /* server-side pagination state */
     const [rows, setRows] = useState([]);       // current page rows
@@ -185,6 +186,7 @@ const GstReport = ({ userRole }) => {
         setSelectedFactory('');
         setFromDate('');
         setToDate('');
+        setSearchText('');
         setRows([]);
         setHasSearched(false);
         setErrorMsg('');
@@ -269,17 +271,33 @@ const GstReport = ({ userRole }) => {
     };
 
     const handleSave = async () => {
-        if (!editDate) { alert('Please select a GST Received Date.'); return; }
+        // Allow empty date — it means "clear the GST date"
+        if (editDate && isNaN(new Date(editDate + 'T00:00:00'))) {
+            alert('Invalid date selected.');
+            return;
+        }
         setSaving(true);
         try {
-            const dateVal = new Date(editDate + 'T00:00:00');
-            await updateDoc(doc(db, 'BillTable', editRow.id), {
-                GstReceivedDate: dateVal,
-                UpdatedAt: serverTimestamp()
-            });
-            setRows(prev => prev.map(r =>
-                r.id === editRow.id ? { ...r, GstReceivedDate: dateVal } : r
-            ));
+            if (editDate) {
+                // Set a new date
+                const dateVal = new Date(editDate + 'T00:00:00');
+                await updateDoc(doc(db, 'BillTable', editRow.id), {
+                    GstReceivedDate: dateVal,
+                    UpdatedAt: serverTimestamp()
+                });
+                setRows(prev => prev.map(r =>
+                    r.id === editRow.id ? { ...r, GstReceivedDate: dateVal } : r
+                ));
+            } else {
+                // Empty date → remove the field entirely
+                await updateDoc(doc(db, 'BillTable', editRow.id), {
+                    GstReceivedDate: deleteField(),
+                    UpdatedAt: serverTimestamp()
+                });
+                // Remove from current view (won't match the date-range filter anymore)
+                setRows(prev => prev.filter(r => r.id !== editRow.id));
+                setTotalCount(prev => Math.max(0, prev - 1));
+            }
             setEditRow(null);
         } catch (e) {
             alert('Save failed: ' + e.message);
@@ -288,7 +306,31 @@ const GstReport = ({ userRole }) => {
         }
     };
 
+    const handleClearGstDate = async (row) => {
+        if (!window.confirm(
+            `Clear the GST Received Date for Bill No. "${getBillNum(row) || row.id}"?\n\nThis will remove the date from this record.`
+        )) return;
+        try {
+            await updateDoc(doc(db, 'BillTable', row.id), {
+                GstReceivedDate: deleteField(),
+                UpdatedAt: serverTimestamp()
+            });
+            // Remove from current page view
+            setRows(prev => prev.filter(r => r.id !== row.id));
+            setTotalCount(prev => Math.max(0, prev - 1));
+        } catch (e) {
+            alert('Failed to clear GST date: ' + e.message);
+        }
+    };
+
     const loading = isLoading || isPaging;
+
+    /* client-side text filter on current page rows */
+    const filteredRows = searchText.trim()
+        ? rows.filter(r =>
+            String(getBillNum(r)).toLowerCase().includes(searchText.trim().toLowerCase())
+        )
+        : rows;
 
     /* ── render ── */
     return (
@@ -331,6 +373,18 @@ const GstReport = ({ userRole }) => {
                         className="gst-filter-input"
                         value={toDate}
                         onChange={e => setToDate(e.target.value)}
+                    />
+                </div>
+
+                <div className="gst-filter-group">
+                    <label className="gst-filter-label">Search Bill No.</label>
+                    <input
+                        type="text"
+                        id="gst-search-text"
+                        className="gst-filter-input"
+                        placeholder="e.g. 12345"
+                        value={searchText}
+                        onChange={e => setSearchText(e.target.value)}
                     />
                 </div>
 
@@ -405,14 +459,16 @@ const GstReport = ({ userRole }) => {
                                 </tr>
                             </thead>
                             <tbody>
-                                {rows.length === 0 ? (
+                                {filteredRows.length === 0 ? (
                                     <tr>
                                         <td colSpan={6} className="gst-no-data">
-                                            No records found for the selected filters.
+                                            {searchText.trim()
+                                                ? `No records match "${searchText}".`
+                                                : 'No records found for the selected filters.'}
                                         </td>
                                     </tr>
                                 ) : (
-                                    rows.map((row, idx) => {
+                                    filteredRows.map((row, idx) => {
                                         const gstReceived = getGstDate(row);
                                         return (
                                             <tr key={row.id} className={idx % 2 === 0 ? '' : 'gst-row-alt'}>
@@ -425,13 +481,24 @@ const GstReport = ({ userRole }) => {
                                                 </td>
                                                 <td>
                                                     {isAdmin && (
-                                                        <button
-                                                            className="gst-edit-btn"
-                                                            onClick={() => openEdit(row)}
-                                                            id={`edit-btn-${row.id}`}
-                                                        >
-                                                            Edit
-                                                        </button>
+                                                        <div style={{ display: 'flex', gap: '6px' }}>
+                                                            <button
+                                                                className="gst-edit-btn"
+                                                                onClick={() => openEdit(row)}
+                                                                id={`edit-btn-${row.id}`}
+                                                                title="Edit GST Received Date"
+                                                            >
+                                                                ✏ Edit
+                                                            </button>
+                                                            <button
+                                                                className="gst-clear-btn"
+                                                                onClick={() => handleClearGstDate(row)}
+                                                                id={`clear-btn-${row.id}`}
+                                                                title="Clear GST Received Date"
+                                                            >
+                                                                🗑 Clear
+                                                            </button>
+                                                        </div>
                                                     )}
                                                 </td>
                                             </tr>
@@ -548,6 +615,33 @@ const GstReport = ({ userRole }) => {
                                 id="modal-save-btn"
                             >
                                 {saving ? 'Saving…' : '✔ Save'}
+                            </button>
+                            <button
+                                className="gst-btn gst-btn-danger"
+                                onClick={async () => {
+                                    if (!window.confirm(
+                                        `Clear the GST Received Date for Bill No. "${getBillNum(editRow) || editRow.id}"?\n\nThis will remove the date from this record.`
+                                    )) return;
+                                    setSaving(true);
+                                    try {
+                                        await updateDoc(doc(db, 'BillTable', editRow.id), {
+                                            GstReceivedDate: deleteField(),
+                                            UpdatedAt: serverTimestamp()
+                                        });
+                                        setRows(prev => prev.filter(r => r.id !== editRow.id));
+                                        setTotalCount(prev => Math.max(0, prev - 1));
+                                        setEditRow(null);
+                                    } catch (e) {
+                                        alert('Failed to clear: ' + e.message);
+                                    } finally {
+                                        setSaving(false);
+                                    }
+                                }}
+                                disabled={saving}
+                                id="modal-clear-date-btn"
+                                title="Remove the GST Received Date from this record"
+                            >
+                                🗑 Clear GST Date
                             </button>
                             <button
                                 className="gst-btn gst-btn-cancel"

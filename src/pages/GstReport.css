@@ -111,6 +111,29 @@
     color: #fff;
 }
 
+.gst-btn-danger {
+    background: #e63946;
+    color: #fff;
+}
+
+/* inline table clear-date button */
+.gst-clear-btn {
+    padding: 4px 10px;
+    background: transparent;
+    color: #e63946;
+    border: 1px solid #e63946;
+    border-radius: 4px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    white-space: nowrap;
+}
+
+.gst-clear-btn:hover {
+    background: #e63946;
+    color: #fff;
+}
+
 /* ── error / prompt / loading ─────────────────────── */
 .gst-error {
     background: #fff5f5;

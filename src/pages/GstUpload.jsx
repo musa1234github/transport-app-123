@@ -150,13 +150,12 @@ const GstUpload = () => {
                 }
             }
 
-            // Build O(1) lookup map  key = "YYYY-M-D_gstInt"
+            // Build O(1) lookup map
+            // Key = "YYYY-M-D_gstInt_billNumber" — includes Bill Number so two bills
+            // on the same date with the same GST amount never collide.
             const billMap = new Map();
             billSnap.docs.forEach(d => {
                 const data = d.data();
-
-                // DEBUG: show raw Firestore doc so we can see exact field names
-                console.log("[GstUpload] PaymentTable doc fields:", JSON.stringify(Object.keys(data)), "| BillDate:", data.BillDate, "| Gst:", data.Gst, "| GSTAmount:", data.GSTAmount);
 
                 // Firestore Timestamp → JS Date
                 const billDateRaw = data.BillDate?.toDate
@@ -180,10 +179,14 @@ const GstUpload = () => {
                     return;
                 }
 
-                // Math.trunc strips decimals on BOTH sides so e.g. 2430.2 (Excel)
-                // and 2430.20 (Firestore) both become 2430 and always match.
+                // Bill Number — support common field name variants
+                const billNum = String(
+                    data.BillNum ?? data.BillNumber ?? data.BillNo ?? data.billNumber ?? ''
+                ).trim();
+
+                // Math.trunc strips decimals so 2430.2 (Excel) and 2430.20 (Firestore) both → 2430
                 const gstInt = Math.trunc(Number(rawGst));
-                const key = `${dateKey}_${gstInt}`;
+                const key = `${dateKey}_${gstInt}_${billNum}`;
                 console.log("[GstUpload] Map key added:", key);
                 billMap.set(key, d);
             });
@@ -202,10 +205,11 @@ const GstUpload = () => {
                 const row = dataRows[i];
                 if (!row || row.length === 0) continue;
 
-                // Column 0 → GST Amount | Column 1 → Bill Date | Column 2 → GST Update Date
+                // Col 0 → GST Amount | Col 1 → Bill Date | Col 2 → GST Update Date | Col 3 → Bill Number
                 const gstAmount = parseFloat(row[0]);
                 const billDate = parseDate(row[1]);
                 const gstUpdateDate = parseDate(row[2]);
+                const billNum = String(row[3] ?? '').trim();
 
                 if (isNaN(gstAmount)) {
                     failedRecords.push(`Row ${i + 2}: Invalid GST Amount`);
@@ -222,24 +226,27 @@ const GstUpload = () => {
                     failureCount++;
                     continue;
                 }
+                if (!billNum) {
+                    failedRecords.push(`Row ${i + 2}: Missing Bill Number (Column 4)`);
+                    failureCount++;
+                    continue;
+                }
 
                 const dateKey =
                     billDate.getFullYear() + "-" +
                     (billDate.getMonth() + 1) + "-" +
                     billDate.getDate();
 
-                // Math.trunc on Excel value matches the same trunc applied to Firestore data above,
-                // so any decimal difference (e.g. 2430.2 vs 2430.20) is safely ignored.
-                const key = `${dateKey}_${Math.trunc(gstAmount)}`;
+                // Key must match the one built from Firestore data above
+                const key = `${dateKey}_${Math.trunc(gstAmount)}_${billNum}`;
 
-                // DEBUG: log first 3 Excel keys so you can compare with map keys above
                 if (i < 3) console.log(`[GstUpload] Excel key (row ${i + 2}):`, key);
 
                 const matchedDoc = billMap.get(key);
 
                 if (!matchedDoc) {
                     failedRecords.push(
-                        `Row ${i + 2}: No match found (GST ${Math.trunc(gstAmount)}, Date ${billDate.toLocaleDateString()})`
+                        `Row ${i + 2}: No match found (Bill No. ${billNum}, GST ${Math.trunc(gstAmount)}, Date ${billDate.toLocaleDateString()})`
                     );
                     failureCount++;
                     continue;
@@ -330,6 +337,8 @@ const GstUpload = () => {
                     <strong>2) Bill Date</strong>
                     <br />
                     <strong>3) GST Update Date</strong>
+                    <br />
+                    <strong>4) Bill Number</strong>
                 </p>
             </div>
 
