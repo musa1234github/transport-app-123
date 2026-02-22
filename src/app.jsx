@@ -11,8 +11,7 @@ import ShowDispatch from "./pages/ShowDispatch.jsx";
 import VehicleMaster from "./pages/VehicleMaster.jsx";
 import BillUpload from "./pages/BillUpload.jsx";
 import ShowBill from "./pages/ShowBill.jsx";
-import DeleteDispatch from "./pages/DeleteDispatch.jsx";
-import DeleteDuplicateChallan from "./pages/DelDuplicateChallan.jsx";
+
 import ShoBilledChallan from "./pages/ShoBilledChallan.jsx";
 import ShowQtyByMonth from "./pages/ShowQtyByMonth.jsx";
 import ShowDayQty from "./pages/ShowDayQty.jsx";
