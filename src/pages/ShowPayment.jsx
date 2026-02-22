@@ -100,6 +100,15 @@ const ShowPayment = ({ userRole }) => {
   });
 
   /* ================= LOAD FACTORIES WITH CACHE ================= */
+  // Ensure these factories are always present regardless of Firestore state
+  const REQUIRED_FACTORIES = ["JSW"];
+
+  const mergeRequiredFactories = (list) => {
+    const merged = new Set(list);
+    REQUIRED_FACTORIES.forEach(f => merged.add(f));
+    return Array.from(merged).sort();
+  };
+
   const loadFactories = async (forceRefresh = false) => {
     setLoadingFactories(true);
     try {
@@ -115,9 +124,20 @@ const ShowPayment = ({ userRole }) => {
             const age = Date.now() - timestamp;
 
             if (age < CACHE_EXPIRY_MS) {
+              // Always merge required factories in case cache is stale
+              const merged = mergeRequiredFactories(factories);
               const ageHours = Math.round(age / 1000 / 60 / 60);
-              console.log(`Using cached factories for payment (age: ${ageHours} hours, expires in ${Math.round((CACHE_EXPIRY_MS - age) / 1000 / 60 / 60)} hours)`);
-              setFactories(factories);
+              console.log(`Using cached factories for payment (age: ${ageHours} hours). Merged required factories.`);
+
+              // If merged list differs from cached, update the cache
+              if (merged.length !== factories.length) {
+                localStorage.setItem(CACHE_KEY, JSON.stringify({
+                  factories: merged,
+                  timestamp // preserve original timestamp so it expires naturally
+                }));
+              }
+
+              setFactories(merged);
               setLoadingFactories(false);
               return;
             }
@@ -159,7 +179,7 @@ const ShowPayment = ({ userRole }) => {
             }
           });
 
-          const factoriesList = Array.from(factorySet).sort();
+          const factoriesList = mergeRequiredFactories(Array.from(factorySet));
           setFactories(factoriesList);
 
           // Cache for next time
@@ -171,12 +191,11 @@ const ShowPayment = ({ userRole }) => {
           return;
         }
 
-        // Extract factory names from Factories collection
-        const factoriesList = factoriesSnap.docs
-          .map(doc => doc.data().displayName || doc.id)
-          .sort();
+        // Extract factory names from Factories collection, always include required factories
+        const rawList = factoriesSnap.docs.map(doc => doc.data().displayName || doc.id);
+        const factoriesList = mergeRequiredFactories(rawList);
 
-        console.log(`✅ Loaded ${factoriesList.length} factories from Factories collection (${factoriesSnap.docs.length} reads)`);
+        console.log(`✅ Loaded ${factoriesList.length} factories (${factoriesSnap.docs.length} from Firestore + required merges)`);
         setFactories(factoriesList);
 
         // Cache for next time
@@ -194,6 +213,8 @@ const ShowPayment = ({ userRole }) => {
 
     } catch (error) {
       console.error("Error loading factories:", error);
+      // Even on error, make sure required factories are available
+      setFactories(prev => mergeRequiredFactories(prev));
     } finally {
       setLoadingFactories(false);
     }
