@@ -7,7 +7,9 @@ import {
   doc,
   updateDoc,
   query,
-  where
+  where,
+  Timestamp,
+  orderBy
 } from "firebase/firestore";
 import * as XLSX from "xlsx";
 import './ShoBilledChallan.css';
@@ -29,13 +31,6 @@ const COLUMN_SEQUENCE = [
   "FactoryName",
   "BillNum"
 ];
-
-const normalizeDate = (d) => {
-  if (!d) return null;
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  return x;
-};
 
 // ===== FORMAT DATE FOR DISPLAY (dd-MM-yy) =====
 const formatShortDate = (date) => {
@@ -69,8 +64,8 @@ const ShoBilledChallan = () => {
   const [loading, setLoading] = useState(false);
   const [dataLoaded, setDataLoaded] = useState(false);
   const [error, setError] = useState("");
-  const [clientSideFiltering, setClientSideFiltering] = useState(false);
-  
+
+
   // For factory dropdown
   const [factoryOptions, setFactoryOptions] = useState([]);
   const [factoriesLoaded, setFactoriesLoaded] = useState(false);
@@ -104,37 +99,15 @@ const ShoBilledChallan = () => {
     checkAdmin();
   }, []);
 
-  /* ================= FETCH FACTORY OPTIONS ================= */
+  /* ================= FACTORY OPTIONS (from hard-coded map — 0 extra reads) ================= */
   useEffect(() => {
-    const fetchFactoryOptions = async () => {
-      try {
-        const snapshot = await getDocs(collection(db, "TblDispatch"));
-        const factoriesSet = new Set();
-        
-        snapshot.docs.slice(0, 50).forEach(ds => {
-          const row = ds.data();
-          const disVid = String(row.DisVid || "");
-          
-          if (factoryMap[disVid]) {
-            factoriesSet.add(factoryMap[disVid]);
-          } else if (row.FactoryName) {
-            factoriesSet.add(row.FactoryName);
-          }
-        });
-        
-        setFactoryOptions(Array.from(factoriesSet).sort());
-        setFactoriesLoaded(true);
-      } catch (error) {
-        console.error("Error fetching factory options:", error);
-        setFactoryOptions([]);
-        setFactoriesLoaded(true);
-      }
-    };
-    
-    fetchFactoryOptions();
+    // Derive factory list directly from the factoryMap constant — no Firestore read needed.
+    const options = [...new Set(Object.values(factoryMap))].sort();
+    setFactoryOptions(options);
+    setFactoriesLoaded(true);
   }, []);
 
-  /* ================= FETCH DATA WITH FILTERS ================= */
+  /* ================= FETCH DATA WITH SERVER-SIDE FILTERS ================= */
   const fetchFilteredData = async () => {
     // Validate at least one filter is applied
     if (!filterFactory && !fromDate && !toDate) {
@@ -146,100 +119,81 @@ const ShoBilledChallan = () => {
 
     setLoading(true);
     setError("");
-    setClientSideFiltering(false);
-    
+
     try {
-      let q = collection(db, "TblDispatch");
-      let snapshot;
-      
-      // SIMPLE FILTERING APPROACH - Get all and filter client-side
-      // This avoids composite index errors completely
-      snapshot = await getDocs(q);
-      
-      // Process all data
-      let allData = snapshot.docs.map(ds => {
+      // ── Build server-side query constraints ──────────────────────────────
+      const constraints = [];
+
+      // 1. Factory filter — Firestore WHERE on FactoryName
+      if (filterFactory) {
+        constraints.push(where("FactoryName", "==", filterFactory));
+      }
+
+      // 2. Date range — convert JS Date → Firestore Timestamp for WHERE clauses
+      if (fromDate) {
+        const from = new Date(fromDate);
+        from.setHours(0, 0, 0, 0);
+        constraints.push(where("DispatchDate", ">=", Timestamp.fromDate(from)));
+      }
+
+      if (toDate) {
+        const to = new Date(toDate);
+        to.setHours(23, 59, 59, 999);
+        constraints.push(where("DispatchDate", "<=", Timestamp.fromDate(to)));
+      }
+
+      // 3. Always order by DispatchDate descending (required for inequality fields)
+      constraints.push(orderBy("DispatchDate", "desc"));
+
+      const q = query(collection(db, "TblDispatch"), ...constraints);
+      const snapshot = await getDocs(q);
+      // ────────────────────────────────────────────────────────────────────
+
+      const resultData = snapshot.docs.map(ds => {
         const row = { id: ds.id, ...ds.data() };
         row.DisVid = String(row.DisVid || "");
-        
-        // Handle date conversion
+
+        // Convert Firestore Timestamp → plain JS Date (date-only, no time)
         if (row.DispatchDate) {
+          let dateObj;
           if (row.DispatchDate.toDate) {
-            // Firestore Timestamp
-            const dateObj = row.DispatchDate.toDate();
-            row.DispatchDate = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate());
+            dateObj = row.DispatchDate.toDate();
           } else if (row.DispatchDate.seconds) {
-            // Timestamp object
-            const dateObj = new Date(row.DispatchDate.seconds * 1000);
-            row.DispatchDate = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate());
+            dateObj = new Date(row.DispatchDate.seconds * 1000);
           } else {
-            // Already Date or string
-            const dateObj = new Date(row.DispatchDate);
-            row.DispatchDate = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate());
+            dateObj = new Date(row.DispatchDate);
           }
+          row.DispatchDate = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate());
         }
-        
-        // Set FactoryName
+
+        // Fallback FactoryName from DisVid map if missing
         row.FactoryName = row.FactoryName || factoryMap[row.DisVid] || "";
-        
+
         // Normalize BillNum
         row.BillNum = String(row.BillNum || "").trim();
-        
+
         return row;
       });
 
-      // Apply filters client-side
-      let filteredData = allData.filter(row => {
-        // Factory filter
-        if (filterFactory) {
-          const matchesFactory = row.FactoryName === filterFactory || 
-                                 factoryMap[row.DisVid] === filterFactory;
-          if (!matchesFactory) return false;
-        }
-        
-        // Date filters
-        if (fromDate || toDate) {
-          const rowDate = normalizeDate(row.DispatchDate);
-          const from = fromDate ? normalizeDate(new Date(fromDate)) : null;
-          const to = toDate ? normalizeDate(new Date(toDate)) : null;
-
-          // Check from date
-          if (from && rowDate && rowDate.getTime() < from.getTime()) {
-            return false;
-          }
-          
-          // Check to date (include entire toDate)
-          if (to && rowDate) {
-            const toEndOfDay = new Date(to);
-            toEndOfDay.setDate(toEndOfDay.getDate() + 1);
-            if (rowDate.getTime() >= toEndOfDay.getTime()) {
-              return false;
-            }
-          }
-        }
-        
-        return true;
-      });
-
-      // Sort by date descending
-      filteredData.sort((a, b) => {
-        const dateA = a.DispatchDate ? new Date(a.DispatchDate).getTime() : 0;
-        const dateB = b.DispatchDate ? new Date(b.DispatchDate).getTime() : 0;
-        return dateB - dateA;
-      });
-
-      setDispatches(filteredData);
+      setDispatches(resultData);
       setDataLoaded(true);
-      setClientSideFiltering(true);
-      
-      if (filteredData.length === 0) {
+
+      if (resultData.length === 0) {
         setError("No records found with the current filters.");
-      } else {
-        setError("Using client-side filtering for better performance with combined filters.");
       }
-      
-    } catch (error) {
-      console.error("Error fetching data:", error);
-      setError(`Failed to load data: ${error.message}`);
+
+    } catch (err) {
+      console.error("Error fetching data:", err);
+      // Composite index missing — surface the Firebase Console link from the error message
+      if (err.message && err.message.includes("index")) {
+        setError(
+          `Firestore requires a composite index for this query. ` +
+          `Please open the browser console, click the index-creation link provided by Firebase, ` +
+          `wait ~1 min, then try again. Details: ${err.message}`
+        );
+      } else {
+        setError(`Failed to load data: ${err.message}`);
+      }
       setDataLoaded(false);
       setDispatches([]);
     } finally {
@@ -273,7 +227,7 @@ const ShoBilledChallan = () => {
     });
     setCurrentPage(1);
     setSelectedIds([]);
-    
+
     // Fetch data
     fetchFilteredData();
   };
@@ -295,13 +249,12 @@ const ShoBilledChallan = () => {
     setDispatches([]);
     setDataLoaded(false);
     setError("");
-    setClientSideFiltering(false);
   };
 
   /* ================= CLIENT-SIDE SEARCH FILTER ================= */
   const filteredDispatches = useMemo(() => {
     if (!dataLoaded) return [];
-    
+
     return dispatches.filter(d => {
       const { searchTerm } = appliedFilters;
 
@@ -328,12 +281,12 @@ const ShoBilledChallan = () => {
   const totalRecords = dispatches.length;
   const filteredCount = filteredDispatches.length;
   const totalPages = Math.ceil(filteredCount / recordsPerPage);
-  
+
   const startIndex = (currentPage - 1) * recordsPerPage;
   const endIndex = Math.min(startIndex + recordsPerPage, filteredCount);
-  
+
   const paginatedDispatches = filteredDispatches.slice(startIndex, endIndex);
-  
+
   const isAllSelected = paginatedDispatches.length > 0 &&
     paginatedDispatches.every(d => selectedIds.includes(d.id));
 
@@ -349,17 +302,17 @@ const ShoBilledChallan = () => {
       const updates = {
         ChallanNo: editChallan
       };
-      
+
       if (isAdmin && editBillNum !== undefined) {
         updates.BillNum = editBillNum;
       }
-      
+
       await updateDoc(doc(db, "TblDispatch", id), updates);
 
       setDispatches(prev =>
         prev.map(d =>
-          d.id === id ? { 
-            ...d, 
+          d.id === id ? {
+            ...d,
             ChallanNo: editChallan,
             BillNum: isAdmin ? editBillNum : d.BillNum
           } : d
@@ -488,10 +441,16 @@ const ShoBilledChallan = () => {
 
       {/* Error/Warning Message */}
       {error && (
-        <div className={`message ${error.includes("Please select") || error.includes("cannot be after") ? 'info' : error.includes("client-side") ? 'warning' : 'error'}`}>
+        <div className={`message ${error.includes("Please select") || error.includes("cannot be after")
+          ? 'info'
+          : error.includes("No records found")
+            ? 'info'
+            : 'error'
+          }`}>
           <strong>
-            {error.includes("Please select") || error.includes("cannot be after") ? "ℹ️ Information" : 
-             error.includes("client-side") ? "⚠️ Performance Notice" : "⚠️ Error"}
+            {error.includes("Please select") || error.includes("cannot be after") || error.includes("No records found")
+              ? "ℹ️ Information"
+              : "⚠️ Error"}
           </strong> {error}
         </div>
       )}
@@ -588,11 +547,10 @@ const ShoBilledChallan = () => {
           {appliedFilters.filterFactory && <span className="filter-tag">Factory: {appliedFilters.filterFactory}</span>}
           {(appliedFilters.fromDate || appliedFilters.toDate) && (
             <span className="filter-tag">
-              Dispatch Date: {appliedFilters.fromDate ? formatShortDate(appliedFilters.fromDate) : 'Any'} 
-              to {appliedFilters.toDate ? formatShortDate(appliedFilters.toDate) : 'Any'}
+              Dispatch Date: {appliedFilters.fromDate ? formatShortDate(appliedFilters.fromDate) : 'Any'}
+              {" "}to {appliedFilters.toDate ? formatShortDate(appliedFilters.toDate) : 'Any'}
             </span>
           )}
-          {clientSideFiltering && <span className="client-filter-tag">(Client-side filtering)</span>}
           <span className="loaded-records">
             <strong>Loaded Records:</strong> {totalRecords}
           </span>
@@ -774,9 +732,9 @@ const ShoBilledChallan = () => {
                   } else {
                     pageNum = currentPage - 2 + i;
                   }
-                  
+
                   if (pageNum < 1 || pageNum > totalPages) return null;
-                  
+
                   return (
                     <button
                       key={pageNum}
