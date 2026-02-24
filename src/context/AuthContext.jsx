@@ -1,3 +1,4 @@
+// AuthContext — handles auth state, role loading & idle timeout
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
