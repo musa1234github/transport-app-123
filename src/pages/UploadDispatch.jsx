@@ -3,6 +3,7 @@ import { db } from "../firebaseConfig";
 import { collection, addDoc, query, where, getDocs } from "firebase/firestore";
 import * as XLSX from "xlsx";
 import "./UploadDispatch.css";
+import { updateMonthlySummary } from "../utils/dispatchSummaryHelper";
 
 /* ================= HELPER FUNCTIONS ================= */
 
@@ -283,6 +284,8 @@ const UploadDispatch = () => {
         }
 
         await addDoc(collection(db, "TblDispatch"), dto);
+        // ✅ Keep monthly summary in sync (ultra-cheap atomic increment)
+        await updateMonthlySummary(dto);
         uploaded++;
       }
 

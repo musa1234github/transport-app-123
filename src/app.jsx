@@ -23,6 +23,7 @@ import ShowPayment from "./pages/ShowPayment.jsx";
 import DispatchExport from "./pages/DispatchExport.jsx";
 import GstUpload from "./pages/GstUpload.jsx";
 import GstReport from "./pages/GstReport.jsx";
+import BackfillMonthly from "./pages/BackfillMonthly.jsx";
 
 /* ─────────────────────────────────────────
    Inner app — reads auth state from context
@@ -96,6 +97,7 @@ const AppRoutes = () => {
             <Route path="gst-upload" element={<GstUpload />} />
             <Route path="gst-report" element={<GstReport userRole={userRole} />} />
             <Route path="dispatch-export" element={<DispatchExport />} />
+            <Route path="backfill-monthly" element={<BackfillMonthly />} />
           </>
         )}
 
