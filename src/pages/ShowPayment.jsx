@@ -68,7 +68,7 @@ const ShowPayment = ({ userRole }) => {
   const [selectAll, setSelectAll] = useState(false);
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [hasLoadedData, setHasLoadedData] = useState(false); // Track if data has been loaded
+  const [hasRequestedData, setHasRequestedData] = useState(false);
   const [factories, setFactories] = useState([]); // Separate state for factories
   const [loadingFactories, setLoadingFactories] = useState(true); // Track factory loading
 
@@ -371,7 +371,6 @@ const ShowPayment = ({ userRole }) => {
       setRows(billData);
       setSelectedPayments([]);
       setSelectAll(false);
-      setHasLoadedData(true);
 
     } catch (error) {
       console.error("Error loading payment data:", error);
@@ -397,17 +396,17 @@ const ShowPayment = ({ userRole }) => {
     });
   };
 
-  // Trigger load when filters (excluding search term which is local) change
-  // BUT only if we have explicitly applied them or on initial load
+  // Trigger load when filters change or on initial mount
   useEffect(() => {
-    if (hasLoadedData || (appliedFilters.factoryFilter || appliedFilters.fromDate || appliedFilters.toDate)) {
+    if (hasRequestedData) {
       load();
     }
-  }, [appliedFilters.factoryFilter, appliedFilters.fromDate, appliedFilters.toDate]);
+  }, [appliedFilters.factoryFilter, appliedFilters.fromDate, appliedFilters.toDate, hasRequestedData]);
 
   // Handle manual "Apply Filters" button click
   const handleApplyClick = () => {
     setPageCount(1); // Reset to first page
+    setHasRequestedData(true);
     // Update appliedFilters - this will trigger the useEffect which calls load()
     setAppliedFilters({
       fromDate: fromDate,
@@ -433,7 +432,7 @@ const ShowPayment = ({ userRole }) => {
       paymentTypeFilter: ""
     });
     setRows([]);
-    setHasLoadedData(false);
+    setHasRequestedData(false);
     setSelectAll(false);
     setSelectedPayments([]);
   };
@@ -494,8 +493,8 @@ const ShowPayment = ({ userRole }) => {
 
   /* ================= EXPORT TO EXCEL ================= */
   const exportToExcel = () => {
-    if (!hasLoadedData) {
-      alert("Please load data first by applying filters");
+    if (filteredRows.length === 0) {
+      alert("No data available to export");
       return;
     }
 
@@ -698,10 +697,10 @@ const ShowPayment = ({ userRole }) => {
             value={factoryFilter}
             onChange={e => setFactoryFilter(e.target.value)}
             className="filter-select"
-            disabled={loadingFactories && !hasLoadedData}
+            disabled={loadingFactories}
           >
             <option value="">Select Factory</option>
-            {loadingFactories && !hasLoadedData ? (
+            {loadingFactories ? (
               <option value="" disabled>Loading factories...</option>
             ) : (
               factories.map(f => (
@@ -709,7 +708,7 @@ const ShowPayment = ({ userRole }) => {
               ))
             )}
           </select>
-          {loadingFactories && !hasLoadedData && (
+          {loadingFactories && (
             <span className="loading-text">Loading factories...</span>
           )}
         </div>
@@ -740,11 +739,11 @@ const ShowPayment = ({ userRole }) => {
             disabled={loading}
             className="filter-button apply-button"
           >
-            {loading ? 'Loading...' : hasLoadedData ? 'Apply Filters' : 'Load Data'}
+            {loading ? 'Loading...' : 'Apply Filters'}
           </button>
           <button
             onClick={clearFilters}
-            disabled={!hasLoadedData || loading}
+            disabled={loading}
             className="filter-button clear-button"
           >
             Clear Filters
@@ -755,7 +754,7 @@ const ShowPayment = ({ userRole }) => {
         <div className="export-button-group">
           <button
             onClick={exportToExcel}
-            disabled={exporting || !hasLoadedData || filteredRows.length === 0}
+            disabled={exporting || filteredRows.length === 0}
             className="export-button export-all-button"
             title="Export all filtered payments to Excel"
           >
@@ -778,27 +777,8 @@ const ShowPayment = ({ userRole }) => {
         </div>
       </div>
 
-      {/* ===== LOAD DATA PROMPT ===== */}
-      {!hasLoadedData && !loading && (
-        <div className="data-prompt">
-          <div className="prompt-content">
-            <h3>No Data Loaded</h3>
-            <p>Click <strong>"Load Data"</strong> to fetch payment records from the database.</p>
-            <p>You can apply filters before loading to refine your results.</p>
-            <button
-              onClick={handleApplyClick}
-              disabled={loading}
-              className="filter-button apply-button"
-              style={{ marginTop: '15px', padding: '10px 20px' }}
-            >
-              {loading ? 'Loading...' : 'Load Payment Data'}
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* ===== PAGINATION CONTROLS ===== */}
-      {hasLoadedData && (
+      {rows.length > 0 && (
         <div className="pagination-controls" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '20px 0' }}>
           <button
             onClick={prevPage}
@@ -823,7 +803,7 @@ const ShowPayment = ({ userRole }) => {
       )}
 
       {/* ===== DELETE & EXPORT CONTROLS (Only for Admin) ===== */}
-      {hasLoadedData && isAdmin && (
+      {rows.length > 0 && isAdmin && (
         <div className={`selection-controls ${selectedPayments.length > 0 ? 'selection-controls-with-selection' : 'selection-controls-without-selection'}`}>
           <div>
             <span style={{ marginRight: 10 }}>
@@ -869,80 +849,78 @@ const ShowPayment = ({ userRole }) => {
       {exporting && <div className="exporting-message">Exporting to Excel...</div>}
 
       {/* ===== PAYMENT TABLE ===== */}
-      {hasLoadedData && (
-        <div className="table-container">
-          <table className="data-table">
-            <thead>
-              <tr>
-                {/* Only show checkbox column for admin */}
-                {isAdmin && (
-                  <th className="table-header" style={{ textAlign: 'center', width: '40px' }}>
-                    <input
-                      type="checkbox"
-                      checked={selectAll && currentRecords.length > 0}
-                      onChange={handleSelectAll}
-                      disabled={currentRecords.length === 0 || loading}
-                    />
-                  </th>
-                )}
-                <th className="table-header">Factory Name</th>
-                <th className="table-header">Bill Number</th>
-                <th className="table-header">Bill Date</th>
-                <th className="table-header">Payment Number</th>
-                <th className="table-header">Payment Date</th>
-                <th className="table-header">Actual Amount</th>
-                <th className="table-header">TDS</th>
-                <th className="table-header">GST</th>
-                <th className="table-header">Payment Received</th>
-                <th className="table-header">Shortage</th>
-                <th className="table-header">Bill Type</th>
-              </tr>
-            </thead>
-            <tbody>
-              {!loading && currentRecords.length > 0 ? (
-                currentRecords.map((r, i) => (
-                  <tr key={i} className={isAdmin && selectedPayments.includes(r.id) ? 'selected-row' : ''}>
-                    {/* Only show checkbox for admin */}
-                    {isAdmin && (
-                      <td className="table-cell">
-                        <input
-                          type="checkbox"
-                          checked={selectedPayments.includes(r.id)}
-                          onChange={() => handleSelectPayment(r.id)}
-                          disabled={loading}
-                        />
-                      </td>
-                    )}
-                    <td className="table-cell">{r.FactoryName}</td>
-                    <td className="table-cell">{r.BillNum}</td>
-                    <td className="table-cell">{r.BillDate ? formatDate(r.BillDate) : "N/A"}</td>
-                    <td className="table-cell" style={{ fontWeight: r.PaymentNumber ? 'bold' : 'normal' }}>
-                      {r.PaymentNumber || "N/A"}
-                    </td>
-                    <td className="table-cell">{r.PaymentDate ? formatDate(r.PaymentDate) : "N/A"}</td>
-                    <td className="table-cell amount-cell">{formatCurrency(r.ActualAmount)}</td>
-                    <td className="table-cell amount-cell">{formatCurrency(r.Tds)}</td>
-                    <td className="table-cell amount-cell">{formatCurrency(r.Gst)}</td>
-                    <td className="table-cell amount-cell currency-positive">
-                      {formatCurrency(r.PaymentReceived)}
-                    </td>
-                    <td className="table-cell amount-cell currency-negative">
-                      {formatCurrency(r.Shortage)}
-                    </td>
-                    <td className="table-cell">{r.BillType || "N/A"}</td>
-                  </tr>
-                ))
-              ) : !loading && hasLoadedData && (
-                <tr>
-                  <td colSpan={isAdmin ? "12" : "11"} className="no-data-message">
-                    No payment records found. Try adjusting your filters.
-                  </td>
-                </tr>
+      <div className="table-container">
+        <table className="data-table">
+          <thead>
+            <tr>
+              {/* Only show checkbox column for admin */}
+              {isAdmin && (
+                <th className="table-header" style={{ textAlign: 'center', width: '40px' }}>
+                  <input
+                    type="checkbox"
+                    checked={selectAll && currentRecords.length > 0}
+                    onChange={handleSelectAll}
+                    disabled={currentRecords.length === 0 || loading}
+                  />
+                </th>
               )}
-            </tbody>
-          </table>
-        </div>
-      )}
+              <th className="table-header">Factory Name</th>
+              <th className="table-header">Bill Number</th>
+              <th className="table-header">Bill Date</th>
+              <th className="table-header">Payment Number</th>
+              <th className="table-header">Payment Date</th>
+              <th className="table-header">Actual Amount</th>
+              <th className="table-header">TDS</th>
+              <th className="table-header">GST</th>
+              <th className="table-header">Payment Received</th>
+              <th className="table-header">Shortage</th>
+              <th className="table-header">Bill Type</th>
+            </tr>
+          </thead>
+          <tbody>
+            {!loading && currentRecords.length > 0 ? (
+              currentRecords.map((r, i) => (
+                <tr key={i} className={isAdmin && selectedPayments.includes(r.id) ? 'selected-row' : ''}>
+                  {/* Only show checkbox for admin */}
+                  {isAdmin && (
+                    <td className="table-cell">
+                      <input
+                        type="checkbox"
+                        checked={selectedPayments.includes(r.id)}
+                        onChange={() => handleSelectPayment(r.id)}
+                        disabled={loading}
+                      />
+                    </td>
+                  )}
+                  <td className="table-cell">{r.FactoryName}</td>
+                  <td className="table-cell">{r.BillNum}</td>
+                  <td className="table-cell">{r.BillDate ? formatDate(r.BillDate) : "N/A"}</td>
+                  <td className="table-cell" style={{ fontWeight: r.PaymentNumber ? 'bold' : 'normal' }}>
+                    {r.PaymentNumber || "N/A"}
+                  </td>
+                  <td className="table-cell">{r.PaymentDate ? formatDate(r.PaymentDate) : "N/A"}</td>
+                  <td className="table-cell amount-cell">{formatCurrency(r.ActualAmount)}</td>
+                  <td className="table-cell amount-cell">{formatCurrency(r.Tds)}</td>
+                  <td className="table-cell amount-cell">{formatCurrency(r.Gst)}</td>
+                  <td className="table-cell amount-cell currency-positive">
+                    {formatCurrency(r.PaymentReceived)}
+                  </td>
+                  <td className="table-cell amount-cell currency-negative">
+                    {formatCurrency(r.Shortage)}
+                  </td>
+                  <td className="table-cell">{r.BillType || "N/A"}</td>
+                </tr>
+              ))
+            ) : !loading && (
+              <tr>
+                <td colSpan={isAdmin ? "12" : "11"} className="no-data-message">
+                  {!hasRequestedData ? "Click 'Apply Filters' to load payment records." : "No payment records found. Try adjusting your filters."}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
 
       {/* ===== PAGINATION CONTROLS (Managed above) ===== */}
 

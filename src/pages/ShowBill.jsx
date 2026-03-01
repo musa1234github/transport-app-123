@@ -128,7 +128,6 @@ const ShowBill = ({ userRole }) => {
   const [appliedFilters, setAppliedFilters] = useState({
     fromDate: "",
     toDate: "",
-    searchBill: "",
     factoryFilter: ""
   });
 
@@ -138,6 +137,14 @@ const ShowBill = ({ userRole }) => {
   const [hasNextPage, setHasNextPage] = useState(false);
   const [hasPrevPage, setHasPrevPage] = useState(false);
   const BILLS_PER_PAGE = 20;
+
+  /* ===== MEMORY STACK ===== */
+  const [pageHistory, setPageHistory] = useState([]);
+  const [currentPageIndex, setCurrentPageIndex] = useState(0);
+
+  /* ===== QUERY CACHE STATE ===== */
+  const [queryCache, setQueryCache] = useState({});
+  const [prefetchCache, setPrefetchCache] = useState({});
 
   /* ================= LOAD FACTORIES WITH CACHE ================= */
   const loadFactories = async (forceRefresh = false) => {
@@ -166,29 +173,53 @@ const ShowBill = ({ userRole }) => {
         }
       }
 
-      // Cache miss or expired - load from Firestore
-      console.log('Loading factories from Firestore...');
-      const billQuery = query(collection(db, "BillTable"));
-      const billSnap = await getDocs(billQuery);
+      // Cache miss or expired - load from Factories collection
+      console.log('Loading factories from Factories collection...');
+      try {
+        const factoriesQuery = query(
+          collection(db, "Factories"),
+          where("hasBills", "==", true) // Or omit this where clause if all factories produce bills
+        );
+        const factoriesSnap = await getDocs(factoriesQuery);
 
-      // Extract unique factory names from all bills
-      const factorySet = new Set();
-      billSnap.docs.forEach(b => {
-        const data = b.data();
-        if (data.FactoryName) {
-          factorySet.add(data.FactoryName);
+        if (factoriesSnap.empty) {
+          console.warn('⚠️ Factories collection is empty. Falling back to BillTable scan.');
+
+          // FALLBACK
+          const billQuery = query(collection(db, "BillTable"));
+          const billSnap = await getDocs(billQuery);
+
+          const factorySet = new Set();
+          billSnap.docs.forEach(b => {
+            const data = b.data();
+            if (data.FactoryName) {
+              factorySet.add(data.FactoryName);
+            }
+          });
+
+          const factoriesList = Array.from(factorySet).sort();
+          setFactories(factoriesList);
+
+          localStorage.setItem(CACHE_KEY, JSON.stringify({
+            factories: factoriesList,
+            timestamp: Date.now()
+          }));
+          return;
         }
-      });
 
-      const factoriesList = Array.from(factorySet).sort();
-      setFactories(factoriesList);
+        const factoriesList = factoriesSnap.docs.map(doc => doc.data().displayName || doc.id).sort();
+        setFactories(factoriesList);
 
-      // Cache for next time
-      localStorage.setItem(CACHE_KEY, JSON.stringify({
-        factories: factoriesList,
-        timestamp: Date.now()
-      }));
-      console.log('Cached', factoriesList.length, 'factories');
+        // Cache for next time
+        localStorage.setItem(CACHE_KEY, JSON.stringify({
+          factories: factoriesList,
+          timestamp: Date.now()
+        }));
+        console.log('Cached', factoriesList.length, 'factories');
+
+      } catch (err) {
+        console.error('Error loading from Factories collection:', err);
+      }
     } catch (error) {
       console.error("Error loading factories:", error);
     } finally {
@@ -196,29 +227,106 @@ const ShowBill = ({ userRole }) => {
     }
   };
 
+  /* ================= PREFETCH NEXT PAGE ================= */
+  const prefetchNextPage = async (cursorDoc) => {
+    if (!cursorDoc) return;
+
+    const cacheKey = JSON.stringify({
+      filters: appliedFilters,
+      direction: "next",
+      cursor: cursorDoc.id
+    });
+
+    // already prefetched
+    if (prefetchCache[cacheKey]) return;
+
+    try {
+      let queryConstraints = [];
+
+      queryConstraints.push(orderBy("BillDate", "desc"));
+
+      if (appliedFilters.factoryFilter) {
+        queryConstraints.push(
+          where("FactoryName", "==", appliedFilters.factoryFilter)
+        );
+      }
+
+      if (appliedFilters.fromDate) {
+        const d = new Date(appliedFilters.fromDate);
+        d.setHours(0, 0, 0, 0);
+        queryConstraints.push(
+          where("BillDate", ">=", Timestamp.fromDate(d))
+        );
+      }
+
+      if (appliedFilters.toDate) {
+        const d = new Date(appliedFilters.toDate);
+        d.setHours(23, 59, 59, 999);
+        queryConstraints.push(
+          where("BillDate", "<=", Timestamp.fromDate(d))
+        );
+      }
+
+      const q = query(
+        collection(db, "BillTable"),
+        ...queryConstraints,
+        startAfter(cursorDoc),
+        limit(BILLS_PER_PAGE + 1)
+      );
+
+      const snap = await getDocs(q);
+
+      setPrefetchCache(prev => ({
+        ...prev,
+        [cacheKey]: snap.docs
+      }));
+
+      console.log("⚡ Prefetched next page");
+    } catch (err) {
+      console.log("Prefetch failed", err);
+    }
+  };
+
   /* ================= LOAD DATA WITH CURSOR PAGINATION ================= */
   const load = async (direction = 'initial', cursorDoc = null) => {
     setLoading(true);
     try {
-      // 🔥 CRITICAL: Require at least one filter to prevent reading entire database
-      if (!appliedFilters.fromDate && !appliedFilters.toDate && !appliedFilters.factoryFilter && !appliedFilters.searchBill) {
+      if (!appliedFilters.fromDate && !appliedFilters.toDate && !appliedFilters.factoryFilter && !searchBill) {
         alert("Please select at least a factory, date range, or search term to load data");
         setLoading(false);
         setDataLoaded(false);
-        setRows([]);
-        setDispatchRows({});
+        // Do not clear the UI if they just fat-fingered applying with empty filters
+        return;
+      }
+
+      // Create cache key
+      const cacheKey = JSON.stringify({
+        filters: appliedFilters,
+        direction,
+        cursor: cursorDoc?.id || null
+      });
+
+      // CHECK CACHE BEFORE FIRESTORE
+      if (queryCache[cacheKey]) {
+        console.log("⚡ Using cached data");
+        const cached = queryCache[cacheKey];
+
+        setRows(cached.rows);
+        setFirstDoc(cached.firstDoc);
+        setLastDoc(cached.lastDoc);
+        setHasNextPage(cached.hasNextPage);
+        setHasPrevPage(cached.hasPrevPage);
+
+        setDataLoaded(true);
+        setLoading(false);
         return;
       }
 
       // Create base query constraints
       let queryConstraints = [];
 
-      const hasDateFilter = appliedFilters.fromDate || appliedFilters.toDate;
-
-      // Only add orderBy when we have date filters (to avoid unnecessary index requirements)
-      if (hasDateFilter) {
-        queryConstraints.push(orderBy("BillDate", "desc"));
-      }
+      // Always add orderBy for table determinism!
+      queryConstraints.push(orderBy("BillDate", "desc"));
 
       // Add factory filter to Firestore query (server-side filtering)
       if (appliedFilters.factoryFilter) {
@@ -263,8 +371,21 @@ const ShowBill = ({ userRole }) => {
         );
       }
 
-      const billSnap = await getDocs(billQuery);
-      const docs = billSnap.docs;
+      // PREFETCH CHECK
+      let docs;
+      const prefetchKey = JSON.stringify({
+        filters: appliedFilters,
+        direction,
+        cursor: cursorDoc?.id || null
+      });
+
+      if (prefetchCache[prefetchKey]) {
+        console.log("⚡ Using prefetched data");
+        docs = prefetchCache[prefetchKey];
+      } else {
+        const billSnap = await getDocs(billQuery);
+        docs = billSnap.docs;
+      }
 
       // Check if there are more pages
       const hasMore = docs.length > BILLS_PER_PAGE;
@@ -292,142 +413,63 @@ const ShowBill = ({ userRole }) => {
         setHasPrevPage(false);
       }
 
-      // Create bill map
-      const billMap = {};
-      displayDocs.forEach(b => (billMap[b.id] = b.data()));
-
-      // Get bill IDs for this page
-      const billIds = displayDocs.map(b => b.id);
-
-      // 🔥 OPTIMIZATION: Only load dispatches for current page of bills
-      const dispatchMap = {};
-      if (billIds.length > 0) {
-        // Firestore 'in' operator supports max 10 items, so batch requests
-        const batchSize = 10;
-        for (let i = 0; i < billIds.length; i += batchSize) {
-          const batchIds = billIds.slice(i, i + batchSize);
-          const dispQuery = query(
-            collection(db, "TblDispatch"),
-            where("BillID", "in", batchIds)
-          );
-          const dispSnap = await getDocs(dispQuery);
-
-          dispSnap.docs.forEach(d => {
-            const r = d.data();
-            if (!r.BillID || !billMap[r.BillID]) return;
-
-            const dispatchDateObj = toDate(r.DispatchDate);
-            const dispatchDateDisplay = formatDate(dispatchDateObj);
-            const dispatchDateSortKey = formatDateForSort(dispatchDateObj);
-
-            if (!dispatchMap[r.BillID]) dispatchMap[r.BillID] = [];
-
-            dispatchMap[r.BillID].push({
-              id: d.id,
-              ChallanNo: r.ChallanNo || "",
-              DispatchDate: dispatchDateDisplay,
-              DispatchDateSortKey: dispatchDateSortKey,
-              Quantity: toNum(r.DispatchQuantity),
-              UnitPrice: toNum(r.UnitPrice),
-              FinalPrice: toNum(r.FinalPrice),
-              VehicleNo: r.VehicleNo || "",
-              LRNo: r.LRNo || "",
-              DeliveryNum: r.DeliveryNum || ""
-            });
-          });
-        }
-      }
-
-      // Build report map
-      const reportMap = {};
-      Object.keys(billMap).forEach(billId => {
-        const bill = billMap[billId];
+      // 🔥 ENTEPRISE OPTIMIZATION: Map directly from BillTable using denormalized totals!
+      const result = displayDocs.map(b => {
+        const bill = b.data();
         const billDateObj = toDate(bill.BillDate);
-        const billDateDisplay = formatDate(billDateObj);
-        const billDateSortKey = formatDateForSort(billDateObj);
-
-        reportMap[billId] = {
-          BillID: billId,
-          "Dispatch Month": "",
-          "Factory Name": bill.FactoryName || "",
-          "Bill Num": bill.BillNum || "",
-          "LR Quantity": 0,
-          "Bill Quantity": 0,
-          "Taxable Amount": 0,
-          "Final Price": 0,
-          FINAL_RAW: 0,
-          "Actual Amount": 0,
-          "TDS": 0,
-          "GST": 0,
-          "Bill Date": billDateDisplay,
-          "Bill Type": bill.BillType || "",
-          BillDateObj: billDateObj,
-          BillDateSortKey: billDateSortKey,
-          HAS_ZERO_FINAL: false
-        };
-
-        // Calculate aggregate from dispatches
-        if (dispatchMap[billId]) {
-          dispatchMap[billId].forEach(dispatch => {
-            reportMap[billId]["LR Quantity"] += 1;
-            reportMap[billId]["Bill Quantity"] += dispatch.Quantity;
-
-            const taxable = dispatch.Quantity * dispatch.UnitPrice;
-            const finalPrice = dispatch.FinalPrice;
-
-            reportMap[billId]["Taxable Amount"] += taxable;
-            reportMap[billId].FINAL_RAW += finalPrice;
-
-            if (finalPrice === 0) {
-              reportMap[billId].HAS_ZERO_FINAL = true;
-            }
-          });
-
-          reportMap[billId]["Dispatch Month"] = getDispatchMonth(dispatchMap[billId]);
-        }
-      });
-
-      // Calculate final values
-      const result = Object.values(reportMap).map(r => {
-        const totalTaxable = r["Taxable Amount"];
-        const totalFinal = r.FINAL_RAW;
-
-        const useFinal =
-          !r.HAS_ZERO_FINAL &&
-          totalFinal > 0 &&
-          totalFinal < totalTaxable;
-
-        const base = useFinal ? totalFinal : totalTaxable;
-
-        const tds = base * 0.00984;
-        const gst = base * 0.18;
-        const actualAmount = base + gst;
 
         return {
-          ...r,
-          "LR Quantity": r["LR Quantity"],
-          "Bill Quantity": r["Bill Quantity"].toFixed(2),
-          "Taxable Amount": totalTaxable.toFixed(2),
-          "Final Price": useFinal ? totalFinal.toFixed(2) : "0.00",
-          "Actual Amount": actualAmount.toFixed(2),
-          "TDS": tds.toFixed(2),
-          "GST": gst.toFixed(2)
+          BillID: b.id,
+          "Dispatch Month": bill.DispatchMonth || "",
+          "Factory Name": bill.FactoryName || "",
+          "Bill Num": bill.BillNum || "",
+          "LR Quantity": toNum(bill.LRQuantity || bill.LrQuantity),
+          "Bill Quantity": toNum(bill.BillQuantity).toFixed(2),
+          "Taxable Amount": toNum(bill.TaxableAmount).toFixed(2),
+          "Final Price": toNum(bill.FinalPrice).toFixed(2),
+          "Actual Amount": toNum(bill.ActualAmount).toFixed(2),
+          "TDS": toNum(bill.TDS || bill.Tds).toFixed(2),
+          "GST": toNum(bill.GST || bill.Gst).toFixed(2),
+          "Bill Date": formatDate(billDateObj),
+          "Bill Type": bill.BillType || "",
+          BillDateObj: billDateObj,
+          BillDateSortKey: formatDateForSort(billDateObj)
         };
       });
 
-      // Sort by date (newest first if using date ordering, otherwise by creation order)
-      if (hasDateFilter) {
-        result.sort((a, b) => {
-          if (a.BillDateObj && b.BillDateObj) {
-            return b.BillDateObj - a.BillDateObj;
-          }
-          return 0;
-        });
+      setRows(result);
+      // We no longer pre-fetch ALL dispatch rows logic. Only loaded on-demand!
+      setDataLoaded(true);
+
+      setQueryCache(prev => ({
+        ...prev,
+        [cacheKey]: {
+          rows: result,
+          firstDoc: displayDocs.length > 0 ? displayDocs[0] : null,
+          lastDoc: displayDocs.length > 0 ? displayDocs[displayDocs.length - 1] : null,
+          hasNextPage: hasMore,
+          hasPrevPage: direction === 'next' ? true : (direction === 'prev' ? hasMore : false)
+        }
+      }));
+
+      // 🔥 Trigger Prefetching in Background
+      if (displayDocs.length > 0 && hasMore) {
+        prefetchNextPage(displayDocs[displayDocs.length - 1]);
       }
 
-      setRows(result);
-      setDispatchRows(dispatchMap);
-      setDataLoaded(true);
+      setPageHistory(prev => {
+        const newHistory = [...prev];
+
+        newHistory[currentPageIndex] = {
+          rows: result,
+          firstDoc: displayDocs.length > 0 ? displayDocs[0] : null,
+          lastDoc: displayDocs.length > 0 ? displayDocs[displayDocs.length - 1] : null,
+          hasNextPage: hasMore,
+          hasPrevPage: direction === 'next' ? true : (direction === 'prev' ? hasMore : false)
+        };
+
+        return newHistory;
+      });
 
       setSelectedBills([]);
       setSelectAll(false);
@@ -456,11 +498,19 @@ const ShowBill = ({ userRole }) => {
 
   /* ===== APPLY FILTERS FUNCTION ===== */
   const applyFilters = () => {
+    // RESET pagination state
+    setFirstDoc(null);
+    setLastDoc(null);
+    setHasNextPage(false);
+    setHasPrevPage(false);
+    setSelectedBillId(null);
+    setPageHistory([]);
+    setCurrentPageIndex(0);
+
     // Mark that we want to load data
     setAppliedFilters({
       fromDate: fromDate,
       toDate: toDateFilter,
-      searchBill: searchBill,
       factoryFilter: factoryFilter
     });
   };
@@ -471,10 +521,19 @@ const ShowBill = ({ userRole }) => {
     setFactoryFilter("");
     setFromDate("");
     setToDateFilter("");
+
+    // RESET pagination state
+    setFirstDoc(null);
+    setLastDoc(null);
+    setHasNextPage(false);
+    setHasPrevPage(false);
+    setSelectedBillId(null);
+    setPageHistory([]);
+    setCurrentPageIndex(0);
+
     setAppliedFilters({
       fromDate: "",
       toDate: "",
-      searchBill: "",
       factoryFilter: ""
     });
     // Clear data when filters are cleared
@@ -486,15 +545,43 @@ const ShowBill = ({ userRole }) => {
 
   /* ===== PAGINATION NAVIGATION ===== */
   const nextPage = () => {
-    if (hasNextPage && lastDoc) {
-      load('next', lastDoc);
+    if (!hasNextPage) return;
+
+    const nextIndex = currentPageIndex + 1;
+
+    // already loaded → instant
+    if (pageHistory[nextIndex]) {
+      const p = pageHistory[nextIndex];
+
+      setRows(p.rows);
+      setFirstDoc(p.firstDoc);
+      setLastDoc(p.lastDoc);
+      setHasNextPage(p.hasNextPage);
+      setHasPrevPage(true);
+
+      setCurrentPageIndex(nextIndex);
+      return;
     }
+
+    // otherwise fetch normally
+    load("next", lastDoc);
+    setCurrentPageIndex(nextIndex);
   };
 
   const prevPage = () => {
-    if (hasPrevPage && firstDoc) {
-      load('prev', firstDoc);
-    }
+    const prevIndex = currentPageIndex - 1;
+    if (prevIndex < 0) return;
+
+    const p = pageHistory[prevIndex];
+    if (!p) return;
+
+    setRows(p.rows);
+    setFirstDoc(p.firstDoc);
+    setLastDoc(p.lastDoc);
+    setHasNextPage(p.hasNextPage);
+    setHasPrevPage(prevIndex > 0);
+
+    setCurrentPageIndex(prevIndex);
   };
 
   /* ================= APPLY SEARCH FILTER (local) ================= */
@@ -502,8 +589,8 @@ const ShowBill = ({ userRole }) => {
     let data = [...rows];
 
     // Search filter (only client-side filter remaining)
-    if (appliedFilters.searchBill.trim()) {
-      const tokens = appliedFilters.searchBill.toLowerCase().split(/\s+/);
+    if (searchBill.trim()) {
+      const tokens = searchBill.toLowerCase().split(/\s+/);
       data = data.filter(r =>
         tokens.every(t =>
           (r["Factory Name"] || "").toLowerCase().includes(t) ||
@@ -515,12 +602,64 @@ const ShowBill = ({ userRole }) => {
     }
 
     return data;
-  }, [rows, appliedFilters.searchBill]);
+  }, [rows, searchBill]);
 
   // Display rows (all filtered rows are shown, pagination is server-side)
   const displayRows = selectedBillId
     ? filteredRows.filter(r => r.BillID === selectedBillId)
     : filteredRows;
+
+  /* ================= ON-DEMAND FETCH DISPATCHES ================= */
+  const fetchDispatchForBill = async (billId) => {
+    // If we already loaded it, don't re-fetch
+    if (dispatchRows[billId]) {
+      setSelectedBillId(billId === selectedBillId ? null : billId);
+      return;
+    }
+
+    // Toggle off if clicking same bill
+    if (selectedBillId === billId) {
+      setSelectedBillId(null);
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const dispQuery = query(
+        collection(db, "TblDispatch"),
+        where("BillID", "==", billId)
+      );
+      const dispSnap = await getDocs(dispQuery);
+
+      const loadedDispatches = dispSnap.docs.map(d => {
+        const r = d.data();
+        const dispatchDateObj = toDate(r.DispatchDate);
+        return {
+          id: d.id,
+          ChallanNo: r.ChallanNo || "",
+          DispatchDate: formatDate(dispatchDateObj),
+          DispatchDateSortKey: formatDateForSort(dispatchDateObj),
+          Quantity: toNum(r.DispatchQuantity),
+          UnitPrice: toNum(r.UnitPrice),
+          FinalPrice: toNum(r.FinalPrice),
+          VehicleNo: r.VehicleNo || "",
+          LRNo: r.LRNo || "",
+          DeliveryNum: r.DeliveryNum || ""
+        };
+      });
+
+      setDispatchRows(prev => ({
+        ...prev,
+        [billId]: loadedDispatches
+      }));
+      setSelectedBillId(billId);
+    } catch (e) {
+      console.error("Error fetching dispatches for bill", e);
+      alert("Failed to load dispatch details for this bill.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // Sort dispatch rows by date
   const getSortedDispatchRows = (billId) => {
@@ -872,8 +1011,12 @@ const ShowBill = ({ userRole }) => {
         )}
       </div>
 
-      {/* Show loading state */}
-      {loading && <div className="loading-container">Loading data...</div>}
+      {/* Show loading state non-destructively */}
+      {loading && (
+        <div style={{ color: "#666", fontStyle: "italic", marginBottom: "10px" }}>
+          Updating data...
+        </div>
+      )}
       {exporting && <div className="exporting-container">Exporting to Excel...</div>}
 
       {/* Only show table controls and data if data is loaded */}
@@ -1008,11 +1151,7 @@ const ShowBill = ({ userRole }) => {
                       <td>{r["Bill Type"]}</td>
                       <td>
                         <button
-                          onClick={() =>
-                            setSelectedBillId(
-                              selectedBillId === r.BillID ? null : r.BillID
-                            )
-                          }
+                          onClick={() => fetchDispatchForBill(r.BillID)}
                           className={`view-button ${selectedBillId === r.BillID ? 'view-button-active' : 'view-button-inactive'}`}
                         >
                           {selectedBillId === r.BillID ? "Hide" : "View"}

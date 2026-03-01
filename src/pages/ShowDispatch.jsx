@@ -1,5 +1,5 @@
 ﻿
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef, useMemo } from "react";
 import { db, auth } from "../firebaseConfig";
 import {
   collection,
@@ -13,9 +13,12 @@ import {
   limit,
   startAfter,
   endBefore,
-  limitToLast
+  limitToLast,
+  Timestamp,
+  writeBatch
 } from "firebase/firestore";
 import * as XLSX from "xlsx";
+import { FixedSizeList as List } from "react-window";
 
 const FACTORY_NAME_FIXES = {
   MANIGARH: "MANIGARH"
@@ -26,6 +29,12 @@ const factoryMap = {
   "6": "MANIGARH",
   "7": "ULTRATECH",
 };
+
+// Reverse lookup: factory name → DisVid value
+const reverseFactoryMap = Object.fromEntries(
+  Object.entries(factoryMap).map(([disVid, name]) => [name, disVid])
+);
+// Result: { JSW: "10", MANIGARH: "6", ULTRATECH: "7" }
 
 const COLUMN_SEQUENCE = [
   "ChallanNo",
@@ -78,6 +87,110 @@ const formatDateForInput = (date) => {
   return `${year}-${month}-${day}`;
 };
 
+const areEqual = (prevProps, nextProps) => {
+  const { index, style: prevStyle, data: prevData } = prevProps;
+  const { style: nextStyle, data: nextData } = nextProps;
+
+  const prevItem = prevData.items[index];
+  const nextItem = nextData.items[index];
+
+  if (prevItem !== nextItem) return false;
+
+  const isSelectedPrev = prevData.selectedSet.has(prevItem.id);
+  const isSelectedNext = nextData.selectedSet.has(nextItem.id);
+  if (isSelectedPrev !== isSelectedNext) return false;
+
+  const isEditingPrev = prevData.editId === prevItem.id;
+  const isEditingNext = nextData.editId === nextItem.id;
+  if (isEditingPrev !== isEditingNext) return false;
+
+  if (isEditingNext && prevData.editChallan !== nextData.editChallan) return false;
+
+  if (prevData.isAdmin !== nextData.isAdmin) return false;
+  if (prevData.gridTemplateColumns !== nextData.gridTemplateColumns) return false;
+  if (prevStyle !== nextStyle) return false;
+
+  return true;
+};
+
+const Row = React.memo(({ index, style, data }) => {
+  const d = data.items[index];
+  const isSelected = data.selectedSet.has(d.id);
+
+  return (
+    <div style={{
+      ...style,
+      display: "grid",
+      gridTemplateColumns: data.gridTemplateColumns,
+      alignItems: "center",
+      borderBottom: "1px solid #ddd",
+      backgroundColor: "#fff"
+    }}>
+      {data.isAdmin && (
+        <div style={{ padding: 10, textAlign: "center" }}>
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={() => data.handleCheckboxChange(d.id)}
+          />
+        </div>
+      )}
+
+      {COLUMN_SEQUENCE.map(col => (
+        <div key={col} style={{ padding: 10, overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
+          {col === "ChallanNo" && data.editId === d.id ? (
+            <input
+              value={data.editChallan}
+              onChange={e => data.setEditChallan(e.target.value)}
+              style={{ padding: 4, width: "100%", boxSizing: "border-box" }}
+            />
+          ) : col === "DispatchDate" ? (
+            formatShortDate(d[col])
+          ) : (
+            d[col]
+          )}
+        </div>
+      ))}
+
+      {data.isAdmin && (
+        <div style={{ padding: 10 }}>
+          {data.editId === d.id ? (
+            <>
+              <button
+                onClick={() => data.handleSave(d.id)}
+                style={{ marginRight: 5, padding: "5px 10px", backgroundColor: "#28a745", color: "white", border: "none", borderRadius: 3, cursor: "pointer" }}
+              >
+                Save
+              </button>
+              <button
+                onClick={data.handleCancel}
+                style={{ padding: "5px 10px", backgroundColor: "#6c757d", color: "white", border: "none", borderRadius: 3, cursor: "pointer" }}
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={() => data.handleEdit(d)}
+                style={{ marginRight: 5, padding: "5px 10px", backgroundColor: "#007bff", color: "white", border: "none", borderRadius: 3, cursor: "pointer" }}
+              >
+                Edit
+              </button>
+              <button
+                onClick={() => data.handleDelete(d.id)}
+                style={{ padding: "5px 10px", backgroundColor: "#dc3545", color: "white", border: "none", borderRadius: 3, cursor: "pointer" }}
+              >
+                Delete
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}, areEqual);
+
 const ShowDispatch = () => {
   const [dispatches, setDispatches] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
@@ -89,9 +202,40 @@ const ShowDispatch = () => {
   const [loading, setLoading] = useState(false);
   const [dataLoaded, setDataLoaded] = useState(false);
 
+  const [filteredDispatches, setFilteredDispatches] = useState([]);
+  const workerRef = useRef(null);
+  const searchSeq = useRef(0);
+  const setDataSeq = useRef(0); // Separate sequence for SET_DATA responses
+
+  // Initialize worker
+  useEffect(() => {
+    workerRef.current = new Worker(
+      new URL("../workers/dispatchFilter.worker.js", import.meta.url)
+    );
+    workerRef.current.onmessage = (e) => {
+      const { seq, type: msgType, results } = e.data || {};
+
+      // Route SET_DATA vs SEARCH responses via separate sequence guards
+      if (msgType === "SET_DATA_DONE") {
+        if (seq < setDataSeq.current) return;
+        if (Array.isArray(results)) setFilteredDispatches(results);
+        return;
+      }
+
+      // Default: SEARCH response
+      if (seq !== undefined && seq < searchSeq.current) return;
+      if (Array.isArray(results)) {
+        setFilteredDispatches(results);
+      } else if (Array.isArray(e.data)) {
+        setFilteredDispatches(e.data);
+      }
+    };
+
+    return () => workerRef.current.terminate();
+  }, []);
+
   // Applied filters
   const [appliedFilters, setAppliedFilters] = useState({
-    searchTerm: "",
     filterFactory: "",
     fromDate: "",
     toDate: ""
@@ -103,10 +247,18 @@ const ShowDispatch = () => {
   const [hasNextPage, setHasNextPage] = useState(false);
   const [hasPrevPage, setHasPrevPage] = useState(false);
 
+  // Caching Array Refs
+  const [queryCache, setQueryCache] = useState({});
+  const [prefetchCache, setPrefetchCache] = useState({});
+
+  // Memory Stack Refs
+  const [pageHistory, setPageHistory] = useState([]);
+  const [currentPageIndex, setCurrentPageIndex] = useState(0);
+
   const [editId, setEditId] = useState(null);
   const [editChallan, setEditChallan] = useState("");
 
-  const DOCS_PER_PAGE = 200; // Production-grade limit
+  const DOCS_PER_PAGE = 100; // Production-grade limit
 
   // Check admin status only on page load
   useEffect(() => {
@@ -151,94 +303,71 @@ const ShowDispatch = () => {
 
       let q = collection(db, "TblDispatch");
 
-      // Build query based on filters
+      // Build query conditions
       const conditions = [];
 
-      // Add factory filter if selected
+      // Factory filter — all records use FactoryName directly
       if (appliedFilters.filterFactory) {
         conditions.push(where("FactoryName", "==", appliedFilters.filterFactory));
       }
 
-      // 🔥 TEMPORARY WORKAROUND: Only add date filters to Firestore if factory is NOT selected
-      // This avoids requiring the composite index while it's still propagating
-      // Local date filtering will be applied after fetch if both factory and date are selected
-      const applyDatesInFirestore = !appliedFilters.filterFactory;
-
-      if (applyDatesInFirestore && appliedFilters.fromDate) {
+      if (appliedFilters.fromDate) {
         const fromJS = normalizeDate(new Date(appliedFilters.fromDate));
-        conditions.push(where("DispatchDate", ">=", fromJS));
+        conditions.push(where("DispatchDate", ">=", Timestamp.fromDate(fromJS)));
       }
 
-      if (applyDatesInFirestore && appliedFilters.toDate) {
+      if (appliedFilters.toDate) {
         const toJS = normalizeDate(new Date(appliedFilters.toDate));
         toJS.setHours(23, 59, 59, 999);
-        conditions.push(where("DispatchDate", "<=", toJS));
+        conditions.push(where("DispatchDate", "<=", Timestamp.fromDate(toJS)));
       }
 
-      // 🔥 Build Firestore query with cursor-based pagination
+      // Create cache key
+      const cacheKey = JSON.stringify({
+        filters: appliedFilters,
+        direction,
+        cursor: cursorDoc?.id || null
+      });
+
+      // CHECK CACHE
+      if (queryCache[cacheKey]) {
+        console.log("⚡ Using cached data");
+        const cached = queryCache[cacheKey];
+        setDispatches(cached.rows);
+        setFirstDoc(cached.firstDoc);
+        setLastDoc(cached.lastDoc);
+        setHasNextPage(cached.hasNextPage);
+        setHasPrevPage(cached.hasPrevPage);
+        setDataLoaded(true);
+        setLoading(false);
+        return;
+      }
+
+      // Build Firestore query with cursor-based pagination
       let firestoreQuery;
-
-      // Determine if we should order by DispatchDate (only when date filters are ACTUALLY in Firestore query)
-      const shouldOrderByDate = applyDatesInFirestore && (appliedFilters.fromDate || appliedFilters.toDate);
-
       if (direction === 'next' && cursorDoc) {
-        // Next page: start after the last document
-        if (shouldOrderByDate) {
-          firestoreQuery = query(
-            q,
-            ...conditions,
-            orderBy("DispatchDate", "desc"),
-            startAfter(cursorDoc),
-            limit(DOCS_PER_PAGE + 1)
-          );
-        } else {
-          // Factory-only: no orderBy needed, just use document ID for ordering
-          firestoreQuery = query(
-            q,
-            ...conditions,
-            startAfter(cursorDoc),
-            limit(DOCS_PER_PAGE + 1)
-          );
-        }
+        firestoreQuery = query(q, ...conditions, orderBy("DispatchDate", "desc"), startAfter(cursorDoc), limit(DOCS_PER_PAGE + 1));
       } else if (direction === 'prev' && cursorDoc) {
-        // Previous page: end before the first document
-        if (shouldOrderByDate) {
-          firestoreQuery = query(
-            q,
-            ...conditions,
-            orderBy("DispatchDate", "desc"),
-            endBefore(cursorDoc),
-            limitToLast(DOCS_PER_PAGE + 1)
-          );
-        } else {
-          firestoreQuery = query(
-            q,
-            ...conditions,
-            endBefore(cursorDoc),
-            limitToLast(DOCS_PER_PAGE + 1)
-          );
-        }
+        firestoreQuery = query(q, ...conditions, orderBy("DispatchDate", "desc"), endBefore(cursorDoc), limitToLast(DOCS_PER_PAGE + 1));
       } else {
-        // Initial load or filter change
-        if (shouldOrderByDate) {
-          firestoreQuery = query(
-            q,
-            ...conditions,
-            orderBy("DispatchDate", "desc"),
-            limit(DOCS_PER_PAGE + 1)
-          );
-        } else {
-          // Factory-only: no orderBy
-          firestoreQuery = query(
-            q,
-            ...conditions,
-            limit(DOCS_PER_PAGE + 1)
-          );
-        }
+        firestoreQuery = query(q, ...conditions, orderBy("DispatchDate", "desc"), limit(DOCS_PER_PAGE + 1));
       }
 
-      const querySnapshot = await getDocs(firestoreQuery);
-      const docs = querySnapshot.docs;
+      // PREFETCH CHECK
+      let docs;
+      const prefetchKey = JSON.stringify({
+        filters: appliedFilters,
+        direction,
+        cursor: cursorDoc?.id || null
+      });
+
+      if (prefetchCache[prefetchKey]) {
+        console.log("⚡ Using prefetched data");
+        docs = prefetchCache[prefetchKey];
+      } else {
+        const querySnapshot = await getDocs(firestoreQuery);
+        docs = querySnapshot.docs;
+      }
 
       // Check if there are more pages
       const hasMore = docs.length > DOCS_PER_PAGE;
@@ -249,15 +378,7 @@ const ShowDispatch = () => {
         setFirstDoc(displayDocs[0]);
         setLastDoc(displayDocs[displayDocs.length - 1]);
         setHasNextPage(hasMore);
-
-        // Fix: hasPrevPage should only be true if we've moved from initial position
-        if (direction === 'next') {
-          setHasPrevPage(true); // We moved forward, so previous is available
-        } else if (direction === 'prev') {
-          // Keep current state, we're going back
-        } else if (direction === 'initial') {
-          setHasPrevPage(false); // Initial load, no previous
-        }
+        setHasPrevPage(direction !== "initial");
       } else {
         setFirstDoc(null);
         setLastDoc(null);
@@ -288,46 +409,47 @@ const ShowDispatch = () => {
         if (row.FactoryName) {
           const upperFactory = row.FactoryName.toUpperCase();
           row.FactoryName = FACTORY_NAME_FIXES[upperFactory] || upperFactory;
-        } else if (row.DisVid) {
-          row.FactoryName = factoryMap[row.DisVid] || "";
+        } else if (row.disvid) {
+          row.FactoryName = factoryMap[String(row.disvid)] || "";
         }
 
         return row;
       });
 
-      // Apply additional local filtering for DisVid mapped records
-      let filteredData = data;
-
-      // Additional factory filtering for DisVid mapped records
-      if (appliedFilters.filterFactory) {
-        filteredData = filteredData.filter(d => {
-          const recordFactory = d.FactoryName || "";
-          return recordFactory === appliedFilters.filterFactory;
-        });
-      }
-
-      // 🔥 Apply local date filtering when factory is selected (workaround for composite index)
-      if (appliedFilters.filterFactory && appliedFilters.fromDate) {
-        const fromDate = normalizeDate(new Date(appliedFilters.fromDate));
-        filteredData = filteredData.filter(d => {
-          if (!d.DispatchDate) return false;
-          const recordDate = normalizeDate(d.DispatchDate);
-          return recordDate >= fromDate;
-        });
-      }
-
-      if (appliedFilters.filterFactory && appliedFilters.toDate) {
-        const toDate = normalizeDate(new Date(appliedFilters.toDate));
-        toDate.setHours(23, 59, 59, 999);
-        filteredData = filteredData.filter(d => {
-          if (!d.DispatchDate) return false;
-          const recordDate = normalizeDate(d.DispatchDate);
-          return recordDate <= toDate;
-        });
-      }
+      // Data is already factory-filtered and date-filtered by Firestore query
+      const filteredData = data;
 
       setDispatches(filteredData);
       setDataLoaded(true);
+
+      setQueryCache(prev => ({
+        ...prev,
+        [cacheKey]: {
+          rows: filteredData,
+          firstDoc: displayDocs.length > 0 ? displayDocs[0] : null,
+          lastDoc: displayDocs.length > 0 ? displayDocs[displayDocs.length - 1] : null,
+          hasNextPage: hasMore,
+          hasPrevPage: direction !== 'initial'
+        }
+      }));
+
+      // 🔥 Trigger Prefetching in Background
+      if (displayDocs.length > 0 && hasMore) {
+        prefetchNextPage(displayDocs[displayDocs.length - 1]);
+      }
+
+      setPageHistory(prev => {
+        const newHistory = [...prev];
+        newHistory[currentPageIndex] = {
+          rows: filteredData,
+          firstDoc: displayDocs.length > 0 ? displayDocs[0] : null,
+          lastDoc: displayDocs.length > 0 ? displayDocs[displayDocs.length - 1] : null,
+          hasNextPage: hasMore,
+          hasPrevPage: direction !== 'initial'
+        };
+        return newHistory;
+      });
+
     } catch (error) {
       console.error("Error fetching dispatches:", error);
 
@@ -339,6 +461,55 @@ const ShowDispatch = () => {
       }
     } finally {
       setLoading(false);
+    }
+  };
+
+  /* ================= PREFETCH NEXT PAGE ================= */
+  const prefetchNextPage = async (cursorDoc) => {
+    if (!cursorDoc) return;
+
+    const cacheKey = JSON.stringify({
+      filters: appliedFilters,
+      direction: "next",
+      cursor: cursorDoc.id
+    });
+
+    if (prefetchCache[cacheKey]) return;
+
+    try {
+      let conditions = [];
+
+      if (appliedFilters.filterFactory) {
+        conditions.push(where("FactoryName", "==", appliedFilters.filterFactory));
+      }
+      if (appliedFilters.fromDate) {
+        const fromJS = normalizeDate(new Date(appliedFilters.fromDate));
+        conditions.push(where("DispatchDate", ">=", Timestamp.fromDate(fromJS)));
+      }
+      if (appliedFilters.toDate) {
+        const toJS = normalizeDate(new Date(appliedFilters.toDate));
+        toJS.setHours(23, 59, 59, 999);
+        conditions.push(where("DispatchDate", "<=", Timestamp.fromDate(toJS)));
+      }
+
+      const q = query(
+        collection(db, "TblDispatch"),
+        ...conditions,
+        orderBy("DispatchDate", "desc"),
+        startAfter(cursorDoc),
+        limit(DOCS_PER_PAGE + 1)
+      );
+
+      const snap = await getDocs(q);
+
+      setPrefetchCache(prev => ({
+        ...prev,
+        [cacheKey]: snap.docs
+      }));
+
+      console.log("⚡ Prefetched next Dispatch page");
+    } catch (err) {
+      console.log("Prefetch failed", err);
     }
   };
 
@@ -362,10 +533,11 @@ const ShowDispatch = () => {
     setLastDoc(null);
     setHasNextPage(false);
     setHasPrevPage(false);
+    setPageHistory([]);
+    setCurrentPageIndex(0);
 
     // Set applied filters
     setAppliedFilters({
-      searchTerm,
       filterFactory: normalizedFactory,
       fromDate,
       toDate
@@ -374,11 +546,19 @@ const ShowDispatch = () => {
     // Don't fetch here - let useEffect handle it
   };
 
+  // Prevent double execution in StrictMode causing empty datasets via race condition arrays
+  const fetchLockRef = useRef(false);
+
   // Fetch data when appliedFilters changes (only if at least one filter is set)
   useEffect(() => {
-    if (appliedFilters.filterFactory || appliedFilters.fromDate || appliedFilters.toDate) {
-      fetchDispatches();
-    }
+    if (!appliedFilters.filterFactory && !appliedFilters.fromDate && !appliedFilters.toDate) return;
+
+    if (fetchLockRef.current) return;
+    fetchLockRef.current = true;
+
+    fetchDispatches().finally(() => {
+      fetchLockRef.current = false;
+    });
   }, [appliedFilters]);
 
   /* ================= CLEAR FILTERS ================= */
@@ -388,7 +568,6 @@ const ShowDispatch = () => {
     setFromDate("");
     setToDate("");
     setAppliedFilters({
-      searchTerm: "",
       filterFactory: "",
       fromDate: "",
       toDate: ""
@@ -400,19 +579,47 @@ const ShowDispatch = () => {
     setLastDoc(null);
     setHasNextPage(false);
     setHasPrevPage(false);
+    setPageHistory([]);
+    setCurrentPageIndex(0);
   };
 
   /* ================= PAGINATION ================= */
   const handleNextPage = () => {
-    if (hasNextPage && lastDoc) {
-      fetchDispatches('next', lastDoc);
+    if (!hasNextPage) return;
+
+    const nextIndex = currentPageIndex + 1;
+
+    if (pageHistory[nextIndex]) {
+      const p = pageHistory[nextIndex];
+
+      setDispatches(p.rows);
+      setFirstDoc(p.firstDoc);
+      setLastDoc(p.lastDoc);
+      setHasNextPage(p.hasNextPage);
+      setHasPrevPage(true);
+
+      setCurrentPageIndex(nextIndex);
+      return;
     }
+
+    fetchDispatches('next', lastDoc);
+    setCurrentPageIndex(nextIndex);
   };
 
   const handlePrevPage = () => {
-    if (hasPrevPage && firstDoc) {
-      fetchDispatches('prev', firstDoc);
-    }
+    const prevIndex = currentPageIndex - 1;
+    if (prevIndex < 0) return;
+
+    const p = pageHistory[prevIndex];
+    if (!p) return;
+
+    setDispatches(p.rows);
+    setFirstDoc(p.firstDoc);
+    setLastDoc(p.lastDoc);
+    setHasNextPage(p.hasNextPage);
+    setHasPrevPage(prevIndex > 0);
+
+    setCurrentPageIndex(prevIndex);
   };
 
   /* ================= EDIT ================= */
@@ -455,9 +662,12 @@ const ShowDispatch = () => {
     if (!isAdmin || !selectedIds.length) return;
     if (!window.confirm(`Delete ${selectedIds.length} records?`)) return;
 
-    for (let id of selectedIds) {
-      await deleteDoc(doc(db, "TblDispatch", id));
-    }
+    const batch = writeBatch(db);
+    selectedIds.forEach(id => {
+      batch.delete(doc(db, "TblDispatch", id));
+    });
+
+    await batch.commit();
 
     setDispatches(prev => prev.filter(d => !selectedIds.includes(d.id)));
     setSelectedIds([]);
@@ -473,29 +683,72 @@ const ShowDispatch = () => {
   };
 
   /* ================= FILTER DATA FOR DISPLAY ================= */
-  // Apply search filter to already loaded data (local search only)
-  const filteredDispatches = dataLoaded ? dispatches.filter(d => {
-    const terms = appliedFilters.searchTerm
-      .toLowerCase()
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean);
+  // Sync data to worker for background threading
+  useEffect(() => {
+    if (!workerRef.current) return;
 
-    if (terms.length === 0) return true;
+    if (dataLoaded) {
+      const seq = ++setDataSeq.current;
+      console.log("📤 SET_DATA dispatches:", dispatches.length, "seq:", seq);
+      workerRef.current.postMessage({
+        type: "SET_DATA",
+        data: dispatches,
+        seq
+      });
+    } else {
+      setFilteredDispatches([]);
+    }
+  }, [dispatches, dataLoaded]);
 
-    return terms.every(term =>
-      Object.values(d).some(v => {
-        if (!v) return false;
-        if (v instanceof Date) {
-          return formatShortDate(v).toLowerCase().includes(term);
-        }
-        return v.toString().toLowerCase().includes(term);
-      })
-    );
-  }) : [];
+  // Sync search updates separately to leverage indexing without reloading data
+  useEffect(() => {
+    if (!workerRef.current || !dataLoaded) return;
 
-  // Server-side pagination - no frontend slicing needed
-  const displayDispatches = filteredDispatches;
+    const seq = ++searchSeq.current;
+
+    const t = setTimeout(() => {
+      workerRef.current.postMessage({
+        type: "SEARCH",
+        searchTerm,
+        seq
+      });
+    }, 150);
+
+    return () => clearTimeout(t);
+  }, [searchTerm, dataLoaded]);
+
+  // Server-side pagination & Worker output
+  const displayDispatches = searchTerm.trim() ? filteredDispatches : dispatches;
+
+  const gridTemplateColumns = isAdmin
+    ? `50px repeat(${COLUMN_SEQUENCE.length}, minmax(100px, 1fr)) 160px`
+    : `repeat(${COLUMN_SEQUENCE.length}, minmax(100px, 1fr))`;
+
+  const selectedSetRef = useRef(new Set());
+  useEffect(() => {
+    selectedSetRef.current = new Set(selectedIds);
+  }, [selectedIds]);
+
+  const itemData = useMemo(() => ({
+    items: displayDispatches,
+    selectedSet: selectedSetRef.current,
+    gridTemplateColumns,
+    isAdmin,
+    editId,
+    editChallan,
+    setEditChallan,
+    handleSave,
+    handleCancel,
+    handleEdit,
+    handleDelete,
+    handleCheckboxChange
+  }), [
+    displayDispatches,
+    gridTemplateColumns,
+    isAdmin,
+    editId,
+    editChallan
+  ]);
 
   const isAllSelected =
     displayDispatches.length > 0 &&
@@ -532,6 +785,7 @@ const ShowDispatch = () => {
   };
 
   /* ================= UI ================= */
+
   return (
     <div style={{ padding: 20 }}>
       <h2>Dispatch Data</h2>
@@ -671,104 +925,49 @@ const ShowDispatch = () => {
           )}
 
           <div style={{ overflowX: "auto", marginTop: 20 }}>
-            <table border="1" width="100%" style={{ borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ backgroundColor: "#f2f2f2" }}>
-                  {isAdmin && (
-                    <th style={{ padding: 10 }}>
-                      <input
-                        type="checkbox"
-                        checked={isAllSelected}
-                        onChange={handleSelectAll}
-                      />
-                    </th>
-                  )}
-                  {COLUMN_SEQUENCE.map(col => (
-                    <th key={col} style={{ padding: 10, textAlign: "left" }}>{col}</th>
-                  ))}
-                  {isAdmin && <th style={{ padding: 10 }}>Action</th>}
-                </tr>
-              </thead>
+            {/* Header */}
+            <div style={{
+              display: "grid",
+              gridTemplateColumns,
+              backgroundColor: "#f2f2f2",
+              borderBottom: "2px solid #ccc",
+              fontWeight: "bold",
+              minWidth: isAdmin ? 1200 : 1000
+            }}>
+              {isAdmin && (
+                <div style={{ padding: 10, textAlign: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={isAllSelected}
+                    onChange={handleSelectAll}
+                  />
+                </div>
+              )}
+              {COLUMN_SEQUENCE.map(col => (
+                <div key={col} style={{ padding: 10 }}>{col}</div>
+              ))}
+              {isAdmin && <div style={{ padding: 10 }}>Action</div>}
+            </div>
 
-              <tbody>
-                {displayDispatches.length > 0 ? (
-                  displayDispatches.map(d => (
-                    <tr key={d.id} style={{ borderBottom: "1px solid #ddd" }}>
-                      {isAdmin && (
-                        <td style={{ padding: 10, textAlign: "center" }}>
-                          <input
-                            type="checkbox"
-                            checked={selectedIds.includes(d.id)}
-                            onChange={() => handleCheckboxChange(d.id)}
-                          />
-                        </td>
-                      )}
-
-                      {COLUMN_SEQUENCE.map(col => (
-                        <td key={col} style={{ padding: 10 }}>
-                          {col === "ChallanNo" && editId === d.id ? (
-                            <input
-                              value={editChallan}
-                              onChange={e => setEditChallan(e.target.value)}
-                              style={{ padding: 4, width: "100%" }}
-                            />
-                          ) : col === "DispatchDate" ? (
-                            formatShortDate(d[col])
-                          ) : (
-                            d[col]
-                          )}
-                        </td>
-                      ))}
-
-                      {isAdmin && (
-                        <td style={{ padding: 10 }}>
-                          {editId === d.id ? (
-                            <>
-                              <button
-                                onClick={() => handleSave(d.id)}
-                                style={{ marginRight: 5, padding: "5px 10px", backgroundColor: "#28a745", color: "white", border: "none", borderRadius: 3, cursor: "pointer" }}
-                              >
-                                Save
-                              </button>
-                              <button
-                                onClick={handleCancel}
-                                style={{ padding: "5px 10px", backgroundColor: "#6c757d", color: "white", border: "none", borderRadius: 3, cursor: "pointer" }}
-                              >
-                                Cancel
-                              </button>
-                            </>
-                          ) : (
-                            <>
-                              <button
-                                onClick={() => handleEdit(d)}
-                                style={{ marginRight: 5, padding: "5px 10px", backgroundColor: "#007bff", color: "white", border: "none", borderRadius: 3, cursor: "pointer" }}
-                              >
-                                Edit
-                              </button>
-                              <button
-                                onClick={() => handleDelete(d.id)}
-                                style={{ padding: "5px 10px", backgroundColor: "#dc3545", color: "white", border: "none", borderRadius: 3, cursor: "pointer" }}
-                              >
-                                Delete
-                              </button>
-                            </>
-                          )}
-                        </td>
-                      )}
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td
-                      colSpan={isAdmin ? COLUMN_SEQUENCE.length + 2 : COLUMN_SEQUENCE.length}
-                      style={{ padding: 20, textAlign: "center" }}
-                    >
-                      No records found for the selected filters
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+            {/* Virtualized Body */}
+            {displayDispatches.length > 0 ? (
+              <List
+                height={600}
+                itemCount={displayDispatches.length}
+                itemSize={50}
+                width={"100%"}
+                itemData={itemData}
+                itemKey={(index, data) => data.items[index].id}
+                overscanCount={5}
+                style={{ minWidth: isAdmin ? 1200 : 1000 }}
+              >
+                {Row}
+              </List>
+            ) : (
+              <div style={{ padding: 20, textAlign: "center", borderBottom: "1px solid #ccc" }}>
+                No records found for the selected filters
+              </div>
+            )}
           </div>
 
           {/* Record count and search notice */}
