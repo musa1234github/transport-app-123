@@ -143,7 +143,7 @@ const ShowBill = ({ userRole }) => {
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
 
   /* ===== QUERY CACHE STATE ===== */
-  const [queryCache, setQueryCache] = useState({});
+  // (queryCache removed — caused stale data via Vite HMR state preservation)
   const [prefetchCache, setPrefetchCache] = useState({});
 
   /* ================= LOAD FACTORIES WITH CACHE ================= */
@@ -306,21 +306,7 @@ const ShowBill = ({ userRole }) => {
         cursor: cursorDoc?.id || null
       });
 
-      // CHECK CACHE BEFORE FIRESTORE
-      if (queryCache[cacheKey]) {
-        console.log("⚡ Using cached data");
-        const cached = queryCache[cacheKey];
 
-        setRows(cached.rows);
-        setFirstDoc(cached.firstDoc);
-        setLastDoc(cached.lastDoc);
-        setHasNextPage(cached.hasNextPage);
-        setHasPrevPage(cached.hasPrevPage);
-
-        setDataLoaded(true);
-        setLoading(false);
-        return;
-      }
 
       // Create base query constraints
       let queryConstraints = [];
@@ -413,23 +399,31 @@ const ShowBill = ({ userRole }) => {
         setHasPrevPage(false);
       }
 
-      // 🔥 ENTEPRISE OPTIMIZATION: Map directly from BillTable using denormalized totals!
-      const result = displayDocs.map(b => {
+      // Build bill map first (from BillTable)
+      const billMap = {};
+      displayDocs.forEach(b => {
         const bill = b.data();
         const billDateObj = toDate(bill.BillDate);
-
-        return {
+        billMap[b.id] = {
           BillID: b.id,
-          "Dispatch Month": bill.DispatchMonth || "",
+          "Dispatch Month": bill.DispatchMonth
+            || (billDateObj
+              ? ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][billDateObj.getMonth()]
+              : ""),
           "Factory Name": bill.FactoryName || "",
           "Bill Num": bill.BillNum || "",
-          "LR Quantity": toNum(bill.LRQuantity || bill.LrQuantity),
-          "Bill Quantity": toNum(bill.BillQuantity).toFixed(2),
-          "Taxable Amount": toNum(bill.TaxableAmount).toFixed(2),
-          "Final Price": toNum(bill.FinalPrice).toFixed(2),
-          "Actual Amount": toNum(bill.ActualAmount).toFixed(2),
-          "TDS": toNum(bill.TDS || bill.Tds).toFixed(2),
-          "GST": toNum(bill.GST || bill.Gst).toFixed(2),
+          // All computed from TblDispatch aggregation below
+          "LR Quantity": 0,
+          "Bill Quantity": 0,
+          "Taxable Amount": 0,
+          "Final Price": 0,
+          "Actual Amount": 0,
+          "TDS": 0,
+          "GST": 0,
+          // Temp tracking fields (deleted after aggregation)
+          _totalFinalPrice: 0,
+          _dispatchCount: 0,
+          _fpValidCount: 0,
           "Bill Date": formatDate(billDateObj),
           "Bill Type": bill.BillType || "",
           BillDateObj: billDateObj,
@@ -437,25 +431,72 @@ const ShowBill = ({ userRole }) => {
         };
       });
 
+      // 🔥 Fetch TblDispatch for all bills in one batch query and aggregate totals
+      const billIds = displayDocs.map(b => b.id).filter(Boolean);
+      if (billIds.length > 0) {
+        // Firestore `in` supports up to 30 items; for ≤20 bills/page this is safe
+        const dispatchSnap = await getDocs(
+          query(collection(db, "TblDispatch"), where("BillID", "in", billIds))
+        );
+        dispatchSnap.docs.forEach(d => {
+          const r = d.data();
+          const bid = r.BillID;
+          if (!billMap[bid]) return;
+          const row = billMap[bid];
+
+          const fp = toNum(r.FinalPrice);
+          const taxable = toNum(r.UnitPrice) * toNum(r.DispatchQuantity);
+          // A dispatch has a valid negotiated FinalPrice if it's > 0 AND less than TaxableAmount
+          const fpValid = fp > 0 && fp < taxable;
+
+          row["LR Quantity"] += 1;
+          row["Bill Quantity"] += toNum(r.DispatchQuantity);
+          row["Taxable Amount"] += taxable;
+          row["_totalFinalPrice"] += fp;
+          row["_dispatchCount"] += 1;
+          row["_fpValidCount"] += fpValid ? 1 : 0;
+        });
+
+        // ── Formula from stored procedure (fixed GST rate 18%, TDS 0.984%) ──
+        const GST_RATE = 0.18;
+        const TDS_RATE = 0.00984;
+
+        Object.values(billMap).forEach(row => {
+          // If ALL dispatches have a valid negotiated FinalPrice → use FinalPrice as base
+          // Otherwise → use TaxableAmount (UnitPrice × Qty) as base
+          const allHaveFP = row["_dispatchCount"] > 0
+            && row["_fpValidCount"] === row["_dispatchCount"];
+
+          const base = allHaveFP ? row["_totalFinalPrice"] : row["Taxable Amount"];
+
+          row["Final Price"] = allHaveFP ? row["_totalFinalPrice"] : 0;
+          row["GST"] = base * GST_RATE;
+          row["TDS"] = base * TDS_RATE;
+          row["Actual Amount"] = base + row["GST"];
+
+          // Format all numeric fields to 2 decimal places
+          row["Bill Quantity"] = toNum(row["Bill Quantity"]).toFixed(2);
+          row["Taxable Amount"] = toNum(row["Taxable Amount"]).toFixed(2);
+          row["Final Price"] = toNum(row["Final Price"]).toFixed(2);
+          row["Actual Amount"] = toNum(row["Actual Amount"]).toFixed(2);
+          row["TDS"] = toNum(row["TDS"]).toFixed(2);
+          row["GST"] = toNum(row["GST"]).toFixed(2);
+
+          // Remove temp tracking fields
+          delete row["_totalFinalPrice"];
+          delete row["_dispatchCount"];
+          delete row["_fpValidCount"];
+        });
+      }
+
+      // Preserve original Firestore sort order (Object.values order not guaranteed)
+      const result = displayDocs.map(b => billMap[b.id]).filter(Boolean);
+
       setRows(result);
       // We no longer pre-fetch ALL dispatch rows logic. Only loaded on-demand!
       setDataLoaded(true);
 
-      setQueryCache(prev => ({
-        ...prev,
-        [cacheKey]: {
-          rows: result,
-          firstDoc: displayDocs.length > 0 ? displayDocs[0] : null,
-          lastDoc: displayDocs.length > 0 ? displayDocs[displayDocs.length - 1] : null,
-          hasNextPage: hasMore,
-          hasPrevPage: direction === 'next' ? true : (direction === 'prev' ? hasMore : false)
-        }
-      }));
 
-      // 🔥 Trigger Prefetching in Background
-      if (displayDocs.length > 0 && hasMore) {
-        prefetchNextPage(displayDocs[displayDocs.length - 1]);
-      }
 
       setPageHistory(prev => {
         const newHistory = [...prev];
