@@ -1,4 +1,69 @@
 {
-  "indexes": [],
+  "indexes": [
+    {
+      "collectionGroup": "BillTable",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "PaymentRecDate",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "__name__",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "BillTable",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "FactoryName",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "PaymentRecDate",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "__name__",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "BillTable",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "PaymentRecDate",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "__name__",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "BillTable",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "FactoryName",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "PaymentRecDate",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "__name__",
+          "order": "ASCENDING"
+        }
+      ]
+    }
+  ],
   "fieldOverrides": []
 }

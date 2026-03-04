@@ -9,11 +9,7 @@ import {
   updateDoc,
   doc,
   serverTimestamp,
-  orderBy,
-  limit,
-  startAfter,
-  endBefore,
-  limitToLast
+  orderBy
 } from "firebase/firestore";
 import { db } from "../firebaseConfig";
 import * as XLSX from 'xlsx';
@@ -62,7 +58,7 @@ const ShowPayment = ({ userRole }) => {
   // Check if user is admin
   const isAdmin = userRole === "admin";
 
-  const [rows, setRows] = useState([]);
+  const [allRows, setAllRows] = useState([]);   // All fetched records
   const [loading, setLoading] = useState(false);
   const [selectedPayments, setSelectedPayments] = useState([]);
   const [selectAll, setSelectAll] = useState(false);
@@ -72,16 +68,9 @@ const ShowPayment = ({ userRole }) => {
   const [factories, setFactories] = useState([]); // Separate state for factories
   const [loadingFactories, setLoadingFactories] = useState(true); // Track factory loading
 
-  /* ===== PAGINATION STATES ===== */
-  // Cursor-based pagination states
-  const [firstDoc, setFirstDoc] = useState(null);
-  const [lastDoc, setLastDoc] = useState(null);
-  const [hasNextPage, setHasNextPage] = useState(false);
-  const [hasPrevPage, setHasPrevPage] = useState(false);
+  /* ===== CLIENT-SIDE PAGINATION STATES ===== */
   const RECORDS_PER_PAGE = 20;
-
-  // Kept for UI compatibility but logic changed
-  const [pageCount, setPageCount] = useState(1); // Track abstract page number for UI
+  const [currentPage, setCurrentPage] = useState(1); // 1-indexed
 
   /* ===== FILTER STATES ===== */
   const [searchTerm, setSearchTerm] = useState("");
@@ -220,155 +209,90 @@ const ShowPayment = ({ userRole }) => {
     }
   };
 
-  /* ================= LOAD PAYMENT DATA WITH CURSOR PAGINATION ================= */
-  const load = async (direction = 'initial', cursorDoc = null) => {
+  /* ================= PROCESS DOCS INTO BILL DATA ================= */
+  const processDocs = (docs, fromDateObj, toDateObj, hasDateFilter) => {
+    const billData = [];
+    docs.forEach((billDoc) => {
+      const bill = billDoc.data();
+
+      // Resolve payment date: prefer PaymentRecDate, fallback to PaymentDate field
+      const paymentRecDate = toDate(bill.PaymentRecDate) || toDate(bill.PaymentDate) || null;
+
+      // CLIENT-SIDE SAFETY NET: verify each record actually falls in range
+      if (hasDateFilter) {
+        if (!paymentRecDate) return;
+        if (fromDateObj && paymentRecDate < fromDateObj) return;
+        if (toDateObj && paymentRecDate > toDateObj) return;
+      }
+
+      billData.push({
+        id: billDoc.id,
+        FactoryName: bill.FactoryName || "",
+        BillNum: bill.BillNum || "",
+        BillDate: toDate(bill.BillDate) || null,
+        PaymentReceived: toNum(bill.PaymentReceived),
+        ActualAmount: toNum(bill.ActualAmount),
+        Tds: toNum(bill.Tds),
+        Gst: toNum(bill.Gst),
+        PaymentNumber: bill.PaymentNumber || "",
+        BillType: bill.BillType || "",
+        PaymentDate: paymentRecDate,
+        Shortage: toNum(bill.PaymentShortage || bill.Shortage || 0),
+        TotalShortage: 0,
+        BillDateObj: toDate(bill.BillDate),
+        BillDateSortKey: formatDate(toDate(bill.BillDate))
+      });
+    });
+    return billData;
+  };
+
+  /* ================= LOAD ALL MATCHING PAYMENT DATA ================= */
+  // Uses client-side pagination to avoid composite index requirement.
+  // Fetches ALL records matching the filter and paginates in memory.
+  const load = async () => {
     setLoading(true);
     try {
-      // Debug: Log applied filters to help with troubleshooting
       console.log("🔍 Applied Filters:", appliedFilters);
 
-      // REQUIRE at least one filter to avoid full collection scan
-      // Exception: If user explicitly wants to see "latest" payments, we allow it but limited to 20
-
-      // Create base query constraints
-      let queryConstraints = [];
-      // Note: Removed PaymentReceived/HasPayment filter to avoid multiple range filter conflicts with BillDate
-      // All bills will be fetched; filter by FactoryName and BillDate only
-
       const hasDateFilter = appliedFilters.fromDate || appliedFilters.toDate;
+      let fromDateObj = null;
+      let toDateObj = null;
 
-      // IMPORTANT: Add where clauses BEFORE orderBy for filters to work correctly
+      let queryConstraints = [];
 
       // Add factory filter
       if (appliedFilters.factoryFilter) {
         queryConstraints.push(where("FactoryName", "==", appliedFilters.factoryFilter));
       }
 
-      // Always filter and sort by PaymentRecDate
+      // Add date range filter on PaymentRecDate
       if (appliedFilters.fromDate) {
-        const fromDateObj = new Date(appliedFilters.fromDate);
+        fromDateObj = new Date(appliedFilters.fromDate);
         fromDateObj.setHours(0, 0, 0, 0);
         queryConstraints.push(where("PaymentRecDate", ">=", Timestamp.fromDate(fromDateObj)));
       }
-
       if (appliedFilters.toDate) {
-        const toDateObj = new Date(appliedFilters.toDate);
+        toDateObj = new Date(appliedFilters.toDate);
         toDateObj.setHours(23, 59, 59, 999);
         queryConstraints.push(where("PaymentRecDate", "<=", Timestamp.fromDate(toDateObj)));
       }
 
-      // Add orderBy AFTER where clauses - always by PaymentRecDate
+      // orderBy must come after where clauses
       queryConstraints.push(orderBy("PaymentRecDate", "desc"));
 
-      // Build query with cursor pagination
-      let billQuery;
-      if (direction === 'next' && cursorDoc) {
-        billQuery = query(
-          collection(db, "BillTable"),
-          ...queryConstraints,
-          startAfter(cursorDoc),
-          limit(RECORDS_PER_PAGE + 1) // Fetch one extra to check for next page
-        );
-      } else if (direction === 'prev' && cursorDoc) {
-        billQuery = query(
-          collection(db, "BillTable"),
-          ...queryConstraints,
-          endBefore(cursorDoc),
-          limitToLast(RECORDS_PER_PAGE + 1)
-        );
-      } else {
-        // Initial load
-        billQuery = query(
-          collection(db, "BillTable"),
-          ...queryConstraints,
-          limit(RECORDS_PER_PAGE + 1)
-        );
-      }
-
+      // Fetch ALL matching records — no limit, no cursor
+      // This avoids composite index requirement for startAfter/endBefore
+      const billQuery = query(collection(db, "BillTable"), ...queryConstraints);
       const billSnap = await getDocs(billQuery);
-      const docs = billSnap.docs;
 
-      // Check for more pages
-      const hasMore = docs.length > RECORDS_PER_PAGE;
-      // Get the actual docs to display (remove the extra check doc)
-      const displayDocs = hasMore ? (direction === 'prev' ? docs.slice(1) : docs.slice(0, RECORDS_PER_PAGE)) : docs;
+      console.log(`📦 Firestore returned ${billSnap.docs.length} docs`);
 
-      // Correcting start/end slice for limitToLast if direction is prev is tricky without the extra logic,
-      // but standard pattern:
-      // If we used limit(N+1), we have [0...N]. Display [0...N-1].
-      // If direction='prev' and we used limitToLast(N+1), we have [0...N]. Display [1...N].
+      const billData = processDocs(billSnap.docs, fromDateObj, toDateObj, hasDateFilter);
 
-      let finalDocs = displayDocs;
-      if (direction === 'prev' && hasMore) {
-        finalDocs = docs.slice(docs.length - RECORDS_PER_PAGE);
-      } else if (hasMore) {
-        finalDocs = docs.slice(0, RECORDS_PER_PAGE);
-      } else {
-        finalDocs = docs;
-      }
+      console.log(`✅ Total matching records: ${billData.length}`);
 
-      // Update cursors
-      if (finalDocs.length > 0) {
-        setFirstDoc(finalDocs[0]);
-        setLastDoc(finalDocs[finalDocs.length - 1]);
-
-        if (direction === 'next') {
-          setHasNextPage(hasMore);
-          setHasPrevPage(true);
-        } else if (direction === 'prev') {
-          setHasPrevPage(hasMore);
-          setHasNextPage(true);
-        } else {
-          setHasNextPage(hasMore);
-          setHasPrevPage(false);
-          setPageCount(1); // Reset page count on initial load
-        }
-
-        // Update page count
-        if (direction === 'next') setPageCount(prev => prev + 1);
-        if (direction === 'prev') setPageCount(prev => Math.max(1, prev - 1));
-
-      } else {
-        setFirstDoc(null);
-        setLastDoc(null);
-        setHasNextPage(false);
-        setHasPrevPage(false);
-      }
-
-      const billData = [];
-
-      // Process bills - NO additional queries needed!
-      // All data is now denormalized in BillTable
-      finalDocs.forEach((billDoc) => {
-        const bill = billDoc.data();
-
-        billData.push({
-          id: billDoc.id,
-          FactoryName: bill.FactoryName || "",
-          BillNum: bill.BillNum || "",
-          BillDate: toDate(bill.BillDate) || null,
-          PaymentReceived: toNum(bill.PaymentReceived),
-          ActualAmount: toNum(bill.ActualAmount),
-          Tds: toNum(bill.Tds),
-          Gst: toNum(bill.Gst),
-          PaymentNumber: bill.PaymentNumber || "",
-          BillType: bill.BillType || "",
-          // Use denormalized fields - NO queries to PaymentTable needed!
-          PaymentDate: toDate(bill.PaymentRecDate) || null,
-          Shortage: toNum(bill.PaymentShortage || bill.Shortage || 0),
-          // Note: TotalShortage calculation would require aggregation query
-          // For now, showing individual bill shortage. To add TotalShortage,
-          // consider pre-calculating during upload or using Cloud Functions
-          TotalShortage: 0, // Placeholder - can be calculated if needed
-          BillDateObj: toDate(bill.BillDate),
-          BillDateSortKey: formatDate(toDate(bill.BillDate))
-        });
-      });
-
-      // No client-side sorting needed - Firestore orderBy("BillDate", "desc") already handles this
-      // Removing redundant sort improves performance
-
-      setRows(billData);
+      setAllRows(billData);
+      setCurrentPage(1);        // Reset to first page
       setSelectedPayments([]);
       setSelectAll(false);
 
@@ -378,6 +302,19 @@ const ShowPayment = ({ userRole }) => {
     } finally {
       setLoading(false);
     }
+  };
+
+  /* ================= CLIENT-SIDE PAGINATION ================= */
+  // Derive current page rows from allRows whenever allRows or currentPage changes
+  const totalPages = Math.max(1, Math.ceil(allRows.length / RECORDS_PER_PAGE));
+  const hasNextPage = currentPage < totalPages;
+  const hasPrevPage = currentPage > 1;
+
+  const nextPage = () => {
+    if (hasNextPage) setCurrentPage(prev => prev + 1);
+  };
+  const prevPage = () => {
+    if (hasPrevPage) setCurrentPage(prev => prev - 1);
   };
 
   /* ===== LOAD FACTORIES ON COMPONENT MOUNT ===== */
@@ -405,7 +342,7 @@ const ShowPayment = ({ userRole }) => {
 
   // Handle manual "Apply Filters" button click
   const handleApplyClick = () => {
-    setPageCount(1); // Reset to first page
+    setCurrentPage(1); // Reset to first page
     setHasRequestedData(true);
     // Update appliedFilters - this will trigger the useEffect which calls load()
     setAppliedFilters({
@@ -431,7 +368,8 @@ const ShowPayment = ({ userRole }) => {
       factoryFilter: "",
       paymentTypeFilter: ""
     });
-    setRows([]);
+    setAllRows([]);
+    setCurrentPage(1);
     setHasRequestedData(false);
     setSelectAll(false);
     setSelectedPayments([]);
@@ -439,9 +377,9 @@ const ShowPayment = ({ userRole }) => {
 
 
 
-  /* ================= PAGINATION CALCULATIONS ================= */
-  const filteredRows = rows.filter(r => {
-    // Search filter (client-side for loaded page)
+  /* ================= CLIENT-SIDE SEARCH + PAGINATION ================= */
+  // Apply search filter across ALL records first
+  const filteredRows = allRows.filter(r => {
     if (searchTerm.trim()) {
       const tokens = searchTerm.toLowerCase().split(/\s+/);
       return tokens.every(t =>
@@ -454,21 +392,9 @@ const ShowPayment = ({ userRole }) => {
     return true;
   });
 
-  // RECORDS ARE ALREADY PAGINATED BY SERVER
-  const currentRecords = filteredRows;
-
-  // Helper for pagination controls
-  const nextPage = () => {
-    if (hasNextPage && lastDoc) {
-      load('next', lastDoc);
-    }
-  };
-
-  const prevPage = () => {
-    if (hasPrevPage && firstDoc) {
-      load('prev', firstDoc);
-    }
-  };
+  // Slice filteredRows for current page display
+  const pageStart = (currentPage - 1) * RECORDS_PER_PAGE;
+  const currentRecords = filteredRows.slice(pageStart, pageStart + RECORDS_PER_PAGE);
 
 
 
@@ -761,7 +687,7 @@ const ShowPayment = ({ userRole }) => {
             {exporting ? 'Exporting...' : 'Export Visible to Excel'}
           </button>
           <div style={{ fontSize: '0.8em', marginTop: '5px', color: '#666' }}>
-            Note: Exports only current page
+            Note: Exports all {filteredRows.length} matching records
           </div>
 
           {isAdmin && selectedPayments.length > 0 && (
@@ -778,7 +704,7 @@ const ShowPayment = ({ userRole }) => {
       </div>
 
       {/* ===== PAGINATION CONTROLS ===== */}
-      {rows.length > 0 && (
+      {allRows.length > 0 && (
         <div className="pagination-controls" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '20px 0' }}>
           <button
             onClick={prevPage}
@@ -789,7 +715,8 @@ const ShowPayment = ({ userRole }) => {
             Previous
           </button>
           <span>
-            Page {pageCount} {loading && '(Loading...)'}
+            Page {currentPage} of {totalPages} &nbsp;|&nbsp; Total Records: {filteredRows.length}
+            {loading && ' (Loading...)'}
           </span>
           <button
             onClick={nextPage}
@@ -803,7 +730,7 @@ const ShowPayment = ({ userRole }) => {
       )}
 
       {/* ===== DELETE & EXPORT CONTROLS (Only for Admin) ===== */}
-      {rows.length > 0 && isAdmin && (
+      {allRows.length > 0 && isAdmin && (
         <div className={`selection-controls ${selectedPayments.length > 0 ? 'selection-controls-with-selection' : 'selection-controls-without-selection'}`}>
           <div>
             <span style={{ marginRight: 10 }}>
