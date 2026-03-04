@@ -1,78 +1,13 @@
 ﻿import React, { useEffect, useState, useRef } from "react";
 import { db } from "../firebaseConfig";
 import {
-  collection, query, where, getDocs, doc, setDoc, limit
+  collection, query, where, getDocs, limit
 } from "firebase/firestore";
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December"
 ];
-
-// ── One-time backfill: reads TblDispatch, writes TblDispatchMonthly ──────────
-async function runBackfill(onLog, onProgress) {
-  onLog("📥 Reading all dispatch records from TblDispatch…");
-
-  const snap = await getDocs(collection(db, "TblDispatch"));
-  const total = snap.size;
-  onLog(`✅ Found ${total} dispatch records.`);
-  onProgress({ read: total, written: 0 });
-
-  // Aggregate client-side
-  const summaryMap = {};
-
-  snap.docs.forEach(d => {
-    const data = d.data();
-
-    let date = null;
-    if (data.DispatchDate?.seconds) {
-      date = new Date(data.DispatchDate.seconds * 1000);
-    } else if (data.DispatchDate) {
-      date = new Date(data.DispatchDate);
-    }
-    if (!date || isNaN(date.getTime())) return;
-
-    const year = date.getFullYear();
-    const month = date.getMonth() + 1;
-    const factory = (
-      data.FactoryName || data.Factory ||
-      (data.DisVid === "10" ? "JSW" :
-        data.DisVid === "6" ? "MANIGAR" :
-          data.DisVid === "7" ? "ULTRATECH" :
-            data.DisVid ? `FACTORY_${data.DisVid}` : "UNKNOWN")
-    ).toUpperCase().trim();
-
-    const qty = Number(data.DispatchQuantity) || 0;
-    const isBilled = Number(data.UnitPrice) > 0 ||
-      data.BillStatus === true ||
-      data.IsBilled === true ||
-      data.Billed === true;
-
-    const key = `${factory}_${year}_${month}`;
-    if (!summaryMap[key]) {
-      summaryMap[key] = { year, month, factory, totalQty: 0, billQty: 0 };
-    }
-    summaryMap[key].totalQty += qty;
-    if (isBilled) summaryMap[key].billQty += qty;
-  });
-
-  const keys = Object.keys(summaryMap);
-  onLog(`📊 ${keys.length} factory-month combinations found. Writing summaries…`);
-
-  let written = 0;
-  for (const key of keys) {
-    const entry = summaryMap[key];
-    await setDoc(doc(db, "TblDispatchMonthly", key), {
-      year: entry.year, month: entry.month, factory: entry.factory,
-      totalQty: entry.totalQty, billQty: entry.billQty,
-    });
-    written++;
-    onProgress({ read: total, written });
-  }
-
-  onLog(`✅ Done! ${written} summary documents written to TblDispatchMonthly.`);
-  return written;
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -86,14 +21,7 @@ const ShowQtyByMonth = () => {
   const [allFactories, setAllFactories] = useState([]);
   const [readCount, setReadCount] = useState(0);
 
-  // Backfill UI state
-  const [backfilling, setBackfilling] = useState(false);
-  const [backfillLog, setBackfillLog] = useState([]);
-  const [backfillDone, setBackfillDone] = useState(false);
-  const [bfProgress, setBfProgress] = useState({ read: 0, written: 0 });
-
   const cache = useRef({});
-  const logEndRef = useRef(null);
 
   // ── Fetch summary ─────────────────────────────────────────────────────────
   const fetchSummary = async (year) => {
@@ -163,37 +91,7 @@ const ShowQtyByMonth = () => {
     setFilteredData(data);
   }, [selectedFactory, selectedMonth, monthlyData]);
 
-  // Auto-scroll backfill log
-  useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [backfillLog]);
 
-  // ── Backfill handler ──────────────────────────────────────────────────────
-  const handleBackfill = async () => {
-    if (!window.confirm(
-      "This reads all TblDispatch records and builds the monthly summary.\n\nThis is a ONE-TIME setup. Continue?"
-    )) return;
-
-    setBackfilling(true);
-    setBackfillLog([]);
-    setBfProgress({ read: 0, written: 0 });
-    setBackfillDone(false);
-
-    try {
-      await runBackfill(
-        (msg) => setBackfillLog(prev => [...prev, msg]),
-        (prog) => setBfProgress(prog)
-      );
-      setBackfillDone(true);
-      // Bust cache and reload
-      cache.current = {};
-      await fetchSummary(selectedYear);
-    } catch (err) {
-      setBackfillLog(prev => [...prev, `❌ Error: ${err.message}`]);
-    } finally {
-      setBackfilling(false);
-    }
-  };
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   const getAvailableYears = () => {
@@ -259,59 +157,7 @@ const ShowQtyByMonth = () => {
         }}>🔄 Refresh</button>
       </div>
 
-      {/* ── BACKFILL BANNER — shown when collection is empty ──────────────── */}
-      {isEmpty && !backfilling && !backfillDone && (
-        <div style={{
-          backgroundColor: "#fff3cd", border: "1px solid #ffc107",
-          borderRadius: 8, padding: "20px 24px", marginBottom: 24
-        }}>
-          <h3 style={{ margin: "0 0 10px", color: "#856404" }}>⚠️ No summary data found</h3>
-          <p style={{ margin: "0 0 16px", color: "#856404" }}>
-            The <strong>TblDispatchMonthly</strong> collection is empty. You need to run a
-            one-time backfill to build monthly summaries from your existing dispatch records.
-            This takes a few seconds and only needs to be done once.
-          </p>
-          <button
-            onClick={handleBackfill}
-            style={{
-              padding: "10px 28px", backgroundColor: "#198754", color: "white",
-              border: "none", borderRadius: 5, fontSize: 15, cursor: "pointer", fontWeight: 700
-            }}
-          >
-            ▶ Build Monthly Summary Now
-          </button>
-        </div>
-      )}
 
-      {/* ── Backfill progress panel ────────────────────────────────────────── */}
-      {(backfilling || backfillDone) && (
-        <div style={{
-          backgroundColor: "#f8f9fa", border: "1px solid #dee2e6",
-          borderRadius: 8, padding: "16px 20px", marginBottom: 24
-        }}>
-          <div style={{ display: "flex", gap: 24, marginBottom: 10, fontWeight: 600 }}>
-            <span>📥 Read: {bfProgress.read} records</span>
-            <span>💾 Written: {bfProgress.written} summaries</span>
-          </div>
-          <div style={{
-            maxHeight: 180, overflowY: "auto",
-            backgroundColor: "#1e1e1e", color: "#d4d4d4",
-            borderRadius: 4, padding: "10px 14px", fontFamily: "monospace", fontSize: 13
-          }}>
-            {backfillLog.map((line, i) => <div key={i} style={{ lineHeight: 1.7 }}>{line}</div>)}
-            {backfilling && <div style={{ color: "#4ec9b0" }}>⏳ Running…</div>}
-            <div ref={logEndRef} />
-          </div>
-          {backfillDone && (
-            <div style={{
-              marginTop: 12, padding: "10px 16px",
-              backgroundColor: "#d4edda", borderRadius: 5, color: "#155724", fontWeight: 600
-            }}>
-              ✅ Backfill complete! Factory dropdown is now populated below.
-            </div>
-          )}
-        </div>
-      )}
 
       {/* ── Controls ──────────────────────────────────────────────────────── */}
       <div style={{

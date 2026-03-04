@@ -406,10 +406,7 @@ const ShowBill = ({ userRole }) => {
         const billDateObj = toDate(bill.BillDate);
         billMap[b.id] = {
           BillID: b.id,
-          "Dispatch Month": bill.DispatchMonth
-            || (billDateObj
-              ? ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][billDateObj.getMonth()]
-              : ""),
+          "Dispatch Month": "", // will be computed from TblDispatch DispatchDate below
           "Factory Name": bill.FactoryName || "",
           "Bill Num": bill.BillNum || "",
           // All computed from TblDispatch aggregation below
@@ -444,6 +441,16 @@ const ShowBill = ({ userRole }) => {
           if (!billMap[bid]) return;
           const row = billMap[bid];
 
+          // ✅ Collect Dispatch Month from DispatchDate (not from BillDate)
+          const dispatchDateObj = toDate(r.DispatchDate);
+          if (dispatchDateObj) {
+            const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+            const month = monthNames[dispatchDateObj.getMonth()];
+            if (!row._months) row._months = new Set();
+            row._months.add(month);
+          }
+
           const fp = toNum(r.FinalPrice);
           const taxable = toNum(r.UnitPrice) * toNum(r.DispatchQuantity);
           // A dispatch has a valid negotiated FinalPrice if it's > 0 AND less than TaxableAmount
@@ -462,6 +469,18 @@ const ShowBill = ({ userRole }) => {
         const TDS_RATE = 0.00984;
 
         Object.values(billMap).forEach(row => {
+          // ✅ Finalize Dispatch Month from collected DispatchDate months
+          if (row._months && row._months.size > 0) {
+            const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+            row["Dispatch Month"] = Array.from(row._months)
+              .sort((a, b) => monthNames.indexOf(a) - monthNames.indexOf(b))
+              .join(", ");
+          } else {
+            row["Dispatch Month"] = "";
+          }
+          delete row._months;
+
           // If ALL dispatches have a valid negotiated FinalPrice → use FinalPrice as base
           // Otherwise → use TaxableAmount (UnitPrice × Qty) as base
           const allHaveFP = row["_dispatchCount"] > 0
