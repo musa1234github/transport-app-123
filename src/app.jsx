@@ -23,6 +23,7 @@ import ShowPayment from "./pages/ShowPayment.jsx";
 import DispatchExport from "./pages/DispatchExport.jsx";
 import GstUpload from "./pages/GstUpload.jsx";
 import GstReport from "./pages/GstReport.jsx";
+import DeductionReport from "./pages/DeductionReport.jsx";
 
 
 /* ─────────────────────────────────────────
@@ -110,6 +111,7 @@ const AppRoutes = () => {
         <Route path="show-billed-challan" element={<ShoBilledChallan />} />
         <Route path="monthly-qty-report" element={<ShowQtyByMonth />} />
         <Route path="daily-qty-report" element={<ShowDayQty />} />
+        <Route path="deduction-report" element={<DeductionReport />} />
       </Route>
 
       {/* ═══ FALLBACK ═══ */}

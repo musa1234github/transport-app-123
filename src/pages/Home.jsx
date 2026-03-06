@@ -136,6 +136,7 @@ const Home = () => {
     { to: "show-payment", label: "Show Payments", icon: "💰" },
     { to: "monthly-qty-report", label: "Monthly Qty", icon: "📊" },
     { to: "daily-qty-report", label: "Daily Qty", icon: "📅" },
+    { to: "deduction-report", label: "Deduction Report", icon: "📉" },
     ...(canUploadBilling
       ? [{ to: "gst-report", label: "GST Report", icon: "📋" }]
       : []),

@@ -1,18 +1,65 @@
-{
+﻿{
   "indexes": [
     {
       "collectionGroup": "BillTable",
       "queryScope": "COLLECTION",
       "fields": [
         {
-          "fieldPath": "PaymentRecDate",
+          "fieldPath": "FactoryName",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "BillDate",
           "order": "DESCENDING"
         },
         {
           "fieldPath": "__name__",
           "order": "DESCENDING"
         }
-      ]
+      ],
+      "density": "SPARSE_ALL"
+    },
+    {
+      "collectionGroup": "BillTable",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "FactoryName",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "GstReceivedDate",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "__name__",
+          "order": "ASCENDING"
+        }
+      ],
+      "density": "SPARSE_ALL"
+    },
+    {
+      "collectionGroup": "BillTable",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "FactoryName",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "GstReceivedDate",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "BillNum",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "__name__",
+          "order": "ASCENDING"
+        }
+      ],
+      "density": "SPARSE_ALL"
     },
     {
       "collectionGroup": "BillTable",
@@ -30,21 +77,111 @@
           "fieldPath": "__name__",
           "order": "DESCENDING"
         }
-      ]
+      ],
+      "density": "SPARSE_ALL"
     },
     {
-      "collectionGroup": "BillTable",
+      "collectionGroup": "TblDispatch",
       "queryScope": "COLLECTION",
       "fields": [
         {
-          "fieldPath": "PaymentRecDate",
+          "fieldPath": "FactoryName",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "BillNum",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "DispatchDate",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "__name__",
+          "order": "DESCENDING"
+        }
+      ],
+      "density": "SPARSE_ALL"
+    },
+    {
+      "collectionGroup": "TblDispatch",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "FactoryName",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "DispatchDate",
           "order": "ASCENDING"
         },
         {
           "fieldPath": "__name__",
           "order": "ASCENDING"
         }
-      ]
+      ],
+      "density": "SPARSE_ALL"
+    },
+    {
+      "collectionGroup": "TblDispatch",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "FactoryName",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "DispatchDate",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "__name__",
+          "order": "DESCENDING"
+        }
+      ],
+      "density": "SPARSE_ALL"
+    },
+    {
+      "collectionGroup": "TblDispatch",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "FactoryName",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "VehicleNo",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "DispatchDate",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "__name__",
+          "order": "ASCENDING"
+        }
+      ],
+      "density": "SPARSE_ALL"
+    },
+    {
+      "collectionGroup": "TblDispatch",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "DisVid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "DispatchDate",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "__name__",
+          "order": "DESCENDING"
+        }
+      ],
+      "density": "SPARSE_ALL"
     },
     {
       "collectionGroup": "BillTable",
@@ -55,14 +192,15 @@
           "order": "ASCENDING"
         },
         {
-          "fieldPath": "PaymentRecDate",
+          "fieldPath": "BillDate",
           "order": "ASCENDING"
         },
         {
           "fieldPath": "__name__",
           "order": "ASCENDING"
         }
-      ]
+      ],
+      "density": "SPARSE_ALL"
     }
   ],
   "fieldOverrides": []

@@ -9,7 +9,8 @@ import {
   query,
   where,
   Timestamp,
-  orderBy
+  orderBy,
+  limit
 } from "firebase/firestore";
 import * as XLSX from "xlsx";
 import './ShoBilledChallan.css';
@@ -64,6 +65,7 @@ const ShoBilledChallan = () => {
   const [loading, setLoading] = useState(false);
   const [dataLoaded, setDataLoaded] = useState(false);
   const [error, setError] = useState("");
+  const [limitHit, setLimitHit] = useState(false);
 
 
   // For factory dropdown
@@ -124,9 +126,16 @@ const ShoBilledChallan = () => {
       // ── Build server-side query constraints ──────────────────────────────
       const constraints = [];
 
-      // 1. Factory filter — Firestore WHERE on FactoryName
+      // ==========================================
+      // ⚠️ TEMPORARY DIAGNOSTIC TEST
+      // ==========================================
+      /*
+      // 1. Factory filter — Firestore WHERE on DisVid
       if (filterFactory) {
-        constraints.push(where("FactoryName", "==", filterFactory));
+        const disVid = Object.keys(factoryMap)
+          .find(key => factoryMap[key] === filterFactory);
+
+        constraints.push(where("DisVid", "==", parseInt(disVid)));
       }
 
       // 2. Date range — convert JS Date → Firestore Timestamp for WHERE clauses
@@ -142,11 +151,33 @@ const ShoBilledChallan = () => {
         constraints.push(where("DispatchDate", "<=", Timestamp.fromDate(to)));
       }
 
-      // 3. Always order by DispatchDate descending (required for inequality fields)
-      constraints.push(orderBy("DispatchDate", "desc"));
+      // 3. Conditionally Order By DispatchDate (required only if Date filter exists)
+      if (fromDate || toDate) {
+        constraints.push(orderBy("DispatchDate", "desc"));
+      }
+      */
+
+      // 4. Cap reads at 20 for pure diagnostic data fetch
+      const READ_LIMIT = 20;
+      constraints.push(limit(READ_LIMIT));
 
       const q = query(collection(db, "TblDispatch"), ...constraints);
       const snapshot = await getDocs(q);
+
+      console.log("Docs returned:", snapshot.docs.length);
+
+      if (snapshot.docs.length > 0) {
+        const sampleDoc = snapshot.docs[0].data();
+        console.log("=== 🔍 DIAGNOSTIC: RAW FIRESTORE DOCUMENT ===");
+        console.log("ID:", snapshot.docs[0].id);
+        console.log("Raw Data:", sampleDoc);
+        console.log("-> DisVid value:", sampleDoc.DisVid, "| type:", typeof sampleDoc.DisVid);
+        console.log("-> DispatchDate type:", sampleDoc.DispatchDate?.constructor?.name || typeof sampleDoc.DispatchDate);
+        console.log("=============================================");
+      }
+
+      // Warn user if cap was hit
+      setLimitHit(snapshot.docs.length === READ_LIMIT);
       // ────────────────────────────────────────────────────────────────────
 
       const resultData = snapshot.docs.map(ds => {
@@ -173,7 +204,7 @@ const ShoBilledChallan = () => {
         row.BillNum = String(row.BillNum || "").trim();
 
         return row;
-      });
+      }).filter(row => row.BillNum && String(row.BillNum).trim() !== "");
 
       setDispatches(resultData);
       setDataLoaded(true);
@@ -249,6 +280,7 @@ const ShoBilledChallan = () => {
     setDispatches([]);
     setDataLoaded(false);
     setError("");
+    setLimitHit(false);
   };
 
   /* ================= CLIENT-SIDE SEARCH FILTER ================= */
@@ -353,9 +385,11 @@ const ShoBilledChallan = () => {
     if (!window.confirm(`Delete ${selectedIds.length} record(s)?`)) return;
 
     try {
-      for (let id of selectedIds) {
-        await deleteDoc(doc(db, "TblDispatch", id));
-      }
+      await Promise.all(
+        selectedIds.map(id =>
+          deleteDoc(doc(db, "TblDispatch", id))
+        )
+      );
       setDispatches(prev => prev.filter(d => !selectedIds.includes(d.id)));
       setSelectedIds([]);
     } catch (error) {
@@ -427,8 +461,13 @@ const ShoBilledChallan = () => {
   };
 
   /* ================= UI RENDER ================= */
-  const billedCount = dispatches.filter(d => d.BillNum && d.BillNum.trim() !== "").length;
-  const unbilledCount = dispatches.filter(d => !d.BillNum || d.BillNum.trim() === "").length;
+  const billedCount = useMemo(() =>
+    dispatches.filter(d => d.BillNum && d.BillNum.trim() !== "").length,
+    [dispatches]);
+
+  const unbilledCount = useMemo(() =>
+    dispatches.filter(d => !d.BillNum || d.BillNum.trim() === "").length,
+    [dispatches]);
 
   return (
     <div className="container">
@@ -553,7 +592,18 @@ const ShoBilledChallan = () => {
           )}
           <span className="loaded-records">
             <strong>Loaded Records:</strong> {totalRecords}
+            {limitHit && (
+              <span className="limit-badge"> ⚠️ Limit 500</span>
+            )}
           </span>
+        </div>
+      )}
+
+      {/* Limit Warning Banner */}
+      {limitHit && dataLoaded && (
+        <div className="message limit-warning">
+          <strong>⚠️ Result Capped at 500 Records</strong> — Your query matched more than 500 records.
+          Please narrow your filters (e.g. shorter date range or select a specific factory) to see all data.
         </div>
       )}
 
@@ -615,7 +665,10 @@ const ShoBilledChallan = () => {
               <tbody>
                 {paginatedDispatches.length > 0 ? (
                   paginatedDispatches.map(d => (
-                    <tr key={d.id} className={d.BillNum ? 'billed-row' : 'unbilled-row'}>
+                    <tr
+                      key={d.id}
+                      className={d.BillNum ? 'billed-row' : 'unbilled-row'}
+                    >
                       {isAdmin && (
                         <td className="checkbox-cell">
                           <input
