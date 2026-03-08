@@ -22,9 +22,16 @@ service cloud.firestore {
     match /VehicleMaster/{document} {
       allow read, write: if true;
     }
-    
+
+    // User profiles - each user can only read/write their own doc
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Factories - readable by any logged-in user, writable only by admins
     match /factories/{document} {
-      allow read, write: if true;
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.token.admin == true;
     }
 
     // Default deny for any other unknown collections
