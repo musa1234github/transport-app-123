@@ -1,4 +1,4 @@
-﻿// ShowPayment.jsx
+// ShowPayment.jsx
 import React, { useEffect, useState, useMemo } from "react";
 import {
   collection,
@@ -9,7 +9,8 @@ import {
   updateDoc,
   doc,
   serverTimestamp,
-  orderBy
+  orderBy,
+  limit
 } from "firebase/firestore";
 import { db } from "../firebaseConfig";
 import * as XLSX from 'xlsx';
@@ -153,10 +154,11 @@ const ShowPayment = ({ userRole }) => {
           console.warn('⚠️ Factories collection is empty. Falling back to BillTable scan.');
           console.warn('💡 Run the migration script: node populate_factories_collection.js');
 
-          // FALLBACK: If Factories collection doesn't exist yet, scan BillTable
+          // FALLBACK: If Factories collection doesn't exist yet, scan BillTable (capped)
           const billQuery = query(
             collection(db, "BillTable"),
-            where("PaymentReceived", ">", 0)
+            where("PaymentReceived", ">", 0),
+            limit(1000)
           );
           const billSnap = await getDocs(billQuery);
 
@@ -253,6 +255,15 @@ const ShowPayment = ({ userRole }) => {
     setLoading(true);
     try {
       console.log("🔍 Applied Filters:", appliedFilters);
+
+      // Guard against unfiltered reads that could scan the whole BillTable
+      if (!appliedFilters.factoryFilter && !appliedFilters.fromDate && !appliedFilters.toDate) {
+        alert("Please select at least a factory or date range to load data");
+        setAllRows([]);
+        setHasRequestedData(false);
+        setLoading(false);
+        return;
+      }
 
       const hasDateFilter = appliedFilters.fromDate || appliedFilters.toDate;
       let fromDateObj = null;

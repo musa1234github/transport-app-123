@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { db } from "../firebaseConfig";
 import "./ShowBill.css";
 
@@ -182,12 +182,12 @@ const ShowBill = ({ userRole }) => {
         );
         const factoriesSnap = await getDocs(factoriesQuery);
 
-        if (factoriesSnap.empty) {
-          console.warn('⚠️ Factories collection is empty. Falling back to BillTable scan.');
+      if (factoriesSnap.empty) {
+        console.warn('⚠️ Factories collection is empty. Falling back to BillTable scan.');
 
-          // FALLBACK
-          const billQuery = query(collection(db, "BillTable"));
-          const billSnap = await getDocs(billQuery);
+        // FALLBACK (capped): If Factories collection is empty, scan a sample of BillTable
+        const billQuery = query(collection(db, "BillTable"), limit(1000));
+        const billSnap = await getDocs(billQuery);
 
           const factorySet = new Set();
           billSnap.docs.forEach(b => {
