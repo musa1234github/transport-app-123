@@ -69,6 +69,13 @@ const ShowPayment = ({ userRole }) => {
   const [factories, setFactories] = useState([]); // Separate state for factories
   const [loadingFactories, setLoadingFactories] = useState(true); // Track factory loading
 
+  // Edit State
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingPayment, setEditingPayment] = useState(null);
+  const [editFormData, setEditFormData] = useState({
+    PaymentDate: ""
+  });
+
   /* ===== CLIENT-SIDE PAGINATION STATES ===== */
   const RECORDS_PER_PAGE = 20;
   const [currentPage, setCurrentPage] = useState(1); // 1-indexed
@@ -583,6 +590,47 @@ const ShowPayment = ({ userRole }) => {
     setShowConfirmDelete(true);
   };
 
+  const handleEditClick = (payment) => {
+    setEditingPayment(payment);
+    let pd = "";
+    if (payment.PaymentDate && !isNaN(payment.PaymentDate.getTime())) {
+      const d = payment.PaymentDate;
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      pd = `${yyyy}-${mm}-${dd}`;
+    }
+    setEditFormData({
+      PaymentDate: pd
+    });
+    setShowEditModal(true);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingPayment) return;
+    setLoading(true);
+    try {
+      const updateData = { UpdatedAt: serverTimestamp() };
+      if (editFormData.PaymentDate) {
+        const pd = new Date(editFormData.PaymentDate);
+        pd.setHours(12, 0, 0, 0);
+        updateData.PaymentRecDate = Timestamp.fromDate(pd);
+      }
+
+      await updateDoc(doc(db, "BillTable", editingPayment.id), updateData);
+
+      alert("Payment date updated successfully!");
+      setShowEditModal(false);
+      setEditingPayment(null);
+      await load();
+    } catch (error) {
+      console.error("Error updating payment:", error);
+      alert(`Error updating payment: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const confirmDelete = async () => {
     setLoading(true);
     try {
@@ -813,6 +861,7 @@ const ShowPayment = ({ userRole }) => {
               <th className="table-header">Payment Received</th>
               <th className="table-header">Shortage</th>
               <th className="table-header">Bill Type</th>
+              {isAdmin && <th className="table-header">Actions</th>}
             </tr>
           </thead>
           <tbody>
@@ -847,11 +896,27 @@ const ShowPayment = ({ userRole }) => {
                     {formatCurrency(r.Shortage)}
                   </td>
                   <td className="table-cell">{r.BillType || "N/A"}</td>
+                  {isAdmin && (
+                    <td className="table-cell" style={{ textAlign: "center" }}>
+                      <button
+                        onClick={() => handleEditClick(r)}
+                        style={{ marginRight: 5, padding: "4px 8px", cursor: "pointer", backgroundColor: "#0d6efd", color: "white", border: "none", borderRadius: "4px" }}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => { setSelectedPayments([r.id]); setShowConfirmDelete(true); }}
+                        style={{ padding: "4px 8px", cursor: "pointer", backgroundColor: "#dc3545", color: "white", border: "none", borderRadius: "4px" }}
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))
             ) : !loading && (
               <tr>
-                <td colSpan={isAdmin ? "12" : "11"} className="no-data-message">
+                <td colSpan={isAdmin ? "13" : "11"} className="no-data-message">
                   {!hasRequestedData ? "Click 'Apply Filters' to load payment records." : "No payment records found. Try adjusting your filters."}
                 </td>
               </tr>
@@ -895,6 +960,44 @@ const ShowPayment = ({ userRole }) => {
           </div>
         </div>
       )}
+
+      {/* ===== EDIT MODAL (Only for Admin) ===== */}
+      {isAdmin && showEditModal && editingPayment && (
+        <div className="modal-overlay">
+          <div className="modal-content" style={{ maxWidth: "400px" }}>
+            <h3 style={{ marginTop: 0 }}>Edit Payment Details</h3>
+
+            <div style={{ marginBottom: "15px", textAlign: "left" }}>
+              <label style={{ display: "block", marginBottom: "5px", fontWeight: "bold" }}>Payment Date:</label>
+              <input
+                type="date"
+                value={editFormData.PaymentDate}
+                onChange={(e) => setEditFormData({ ...editFormData, PaymentDate: e.target.value })}
+                className="filter-input"
+                style={{ width: "100%" }}
+              />
+            </div>
+
+            <div className="modal-buttons" style={{ marginTop: "20px" }}>
+              <button
+                onClick={() => setShowEditModal(false)}
+                disabled={loading}
+                className="modal-button cancel-button"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveEdit}
+                disabled={loading}
+                className="filter-button apply-button"
+              >
+                {loading ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 };

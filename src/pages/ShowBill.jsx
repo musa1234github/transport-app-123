@@ -182,12 +182,12 @@ const ShowBill = ({ userRole }) => {
         );
         const factoriesSnap = await getDocs(factoriesQuery);
 
-      if (factoriesSnap.empty) {
-        console.warn('⚠️ Factories collection is empty. Falling back to BillTable scan.');
+        if (factoriesSnap.empty) {
+          console.warn('⚠️ Factories collection is empty. Falling back to BillTable scan.');
 
-        // FALLBACK (capped): If Factories collection is empty, scan a sample of BillTable
-        const billQuery = query(collection(db, "BillTable"), limit(1000));
-        const billSnap = await getDocs(billQuery);
+          // FALLBACK (capped): If Factories collection is empty, scan a sample of BillTable
+          const billQuery = query(collection(db, "BillTable"), limit(1000));
+          const billSnap = await getDocs(billQuery);
 
           const factorySet = new Set();
           billSnap.docs.forEach(b => {
@@ -292,10 +292,8 @@ const ShowBill = ({ userRole }) => {
     setLoading(true);
     try {
       if (!appliedFilters.fromDate && !appliedFilters.toDate && !appliedFilters.factoryFilter && !searchBill) {
-        alert("Please select at least a factory, date range, or search term to load data");
-        setLoading(false);
-        setDataLoaded(false);
         // Do not clear the UI if they just fat-fingered applying with empty filters
+        setLoading(false);
         return;
       }
 
@@ -551,7 +549,7 @@ const ShowBill = ({ userRole }) => {
   useEffect(() => {
     // Only load data if appliedFilters have changed and data hasn't been loaded yet
     // OR if we're applying new filters
-    if (Object.values(appliedFilters).some(filter => filter !== "")) {
+    if (appliedFilters.fromDate || appliedFilters.toDate || appliedFilters.factoryFilter || appliedFilters.timestamp) {
       load();
     }
   }, [appliedFilters]);
@@ -569,9 +567,11 @@ const ShowBill = ({ userRole }) => {
 
     // Mark that we want to load data
     setAppliedFilters({
+      ...appliedFilters,
       fromDate: fromDate,
       toDate: toDateFilter,
-      factoryFilter: factoryFilter
+      factoryFilter: factoryFilter,
+      timestamp: Date.now() // to force trigger useEffect
     });
   };
 

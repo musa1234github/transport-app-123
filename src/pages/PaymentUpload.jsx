@@ -349,9 +349,9 @@ const PaymentUpload = () => {
   const downloadTemplate = () => {
     const sampleData = [
       ["BillNumber", "PaymentNumber", "PaymentDate", "ActualAmount", "TDS", "GST", "PaymentReceived", "Shortage"],
-      ["BILL-001", "PAY-001", "15-01-2026", 50000, 2500, 9000, 48000, "500"],
-      ["BILL-002", "PAY-002", "16-01-2026", 75000, 3750, 13500, 72000, "250"],
-      ["BILL-003", "PAY-003", "17-01-2026", 60000, 3000, 10800, 57600, "-300"]
+      ["BILL-001", "PAY-001", "15-01-26", 50000, 2500, 9000, 48000, "500"],
+      ["BILL-002", "PAY-002", "16-01-26", 75000, 3750, 13500, 72000, "250"],
+      ["BILL-003", "PAY-003", "17-01-26", 60000, 3000, 10800, 57600, "-300"]
     ];
 
     const ws = XLSX.utils.aoa_to_sheet(sampleData);
@@ -404,7 +404,7 @@ const PaymentUpload = () => {
           Excel must have columns: BillNumber, PaymentNumber, PaymentDate, ActualAmount, TDS, GST, PaymentReceived, Shortage
         </p>
         <p style={{ margin: "10px 0", color: "#6c757d", fontSize: "14px" }}>
-          <strong>Important:</strong> Date format must be <strong>dd-mm-yyyy</strong> (e.g., 15-01-2026)
+          <strong>Important:</strong> Date format must be <strong>dd-mm-yy</strong> (e.g., 15-01-26)
         </p>
 
         <div style={{ marginBottom: "15px" }}>
