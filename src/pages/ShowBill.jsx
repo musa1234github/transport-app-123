@@ -332,7 +332,14 @@ const ShowBill = ({ userRole }) => {
 
       // Build query with cursor pagination
       let billQuery;
-      if (direction === 'next' && cursorDoc) {
+      const isFiltering = appliedFilters.fromDate || appliedFilters.toDate || appliedFilters.factoryFilter;
+
+      if (isFiltering) {
+        billQuery = query(
+          collection(db, "BillTable"),
+          ...queryConstraints
+        );
+      } else if (direction === 'next' && cursorDoc) {
         billQuery = query(
           collection(db, "BillTable"),
           ...queryConstraints,
@@ -372,7 +379,7 @@ const ShowBill = ({ userRole }) => {
       }
 
       // Check if there are more pages
-      const hasMore = docs.length > BILLS_PER_PAGE;
+      const hasMore = !isFiltering && docs.length > BILLS_PER_PAGE;
       const displayDocs = hasMore ? docs.slice(0, BILLS_PER_PAGE) : docs;
 
       // Update pagination cursors
@@ -380,7 +387,10 @@ const ShowBill = ({ userRole }) => {
         setFirstDoc(displayDocs[0]);
         setLastDoc(displayDocs[displayDocs.length - 1]);
 
-        if (direction === 'next') {
+        if (isFiltering) {
+          setHasNextPage(false);
+          setHasPrevPage(false);
+        } else if (direction === 'next') {
           setHasNextPage(hasMore);
           setHasPrevPage(true);
         } else if (direction === 'prev') {
@@ -426,41 +436,49 @@ const ShowBill = ({ userRole }) => {
         };
       });
 
-      // 🔥 Fetch TblDispatch for all bills in one batch query and aggregate totals
+      // 🔥 Fetch TblDispatch for all bills in batch queries and aggregate totals
       const billIds = displayDocs.map(b => b.id).filter(Boolean);
       if (billIds.length > 0) {
-        // Firestore `in` supports up to 30 items; for ≤20 bills/page this is safe
-        const dispatchSnap = await getDocs(
-          query(collection(db, "TblDispatch"), where("BillID", "in", billIds))
-        );
-        dispatchSnap.docs.forEach(d => {
-          const r = d.data();
-          const bid = r.BillID;
-          if (!billMap[bid]) return;
-          const row = billMap[bid];
+        // Firestore `in` supports up to 30 items, so chunk the billIds
+        const chunkSize = 30;
+        const chunkedBillIds = [];
+        for (let i = 0; i < billIds.length; i += chunkSize) {
+          chunkedBillIds.push(billIds.slice(i, i + chunkSize));
+        }
 
-          // ✅ Collect Dispatch Month from DispatchDate (not from BillDate)
-          const dispatchDateObj = toDate(r.DispatchDate);
-          if (dispatchDateObj) {
-            const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-            const month = monthNames[dispatchDateObj.getMonth()];
-            if (!row._months) row._months = new Set();
-            row._months.add(month);
-          }
+        for (const chunk of chunkedBillIds) {
+          const dispatchSnap = await getDocs(
+            query(collection(db, "TblDispatch"), where("BillID", "in", chunk))
+          );
+          dispatchSnap.docs.forEach(d => {
+            const r = d.data();
+            const bid = r.BillID;
+            if (!billMap[bid]) return;
+            const row = billMap[bid];
 
-          const fp = toNum(r.FinalPrice);
-          const taxable = toNum(r.UnitPrice) * toNum(r.DispatchQuantity);
-          // A dispatch has a valid negotiated FinalPrice if it's > 0 AND less than TaxableAmount
-          const fpValid = fp > 0 && fp < taxable;
+            // ✅ Collect Dispatch Month from DispatchDate (not from BillDate)
+            const dispatchDateObj = toDate(r.DispatchDate);
+            if (dispatchDateObj) {
+              const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+              const month = monthNames[dispatchDateObj.getMonth()];
+              if (!row._months) row._months = new Set();
+              row._months.add(month);
+            }
 
-          row["LR Quantity"] += 1;
-          row["Bill Quantity"] += toNum(r.DispatchQuantity);
-          row["Taxable Amount"] += taxable;
-          row["_totalFinalPrice"] += fp;
-          row["_dispatchCount"] += 1;
-          row["_fpValidCount"] += fpValid ? 1 : 0;
-        });
+            const fp = toNum(r.FinalPrice);
+            const taxable = toNum(r.UnitPrice) * toNum(r.DispatchQuantity);
+            // A dispatch has a valid negotiated FinalPrice if it's > 0 AND less than TaxableAmount
+            const fpValid = fp > 0 && fp < taxable;
+
+            row["LR Quantity"] += 1;
+            row["Bill Quantity"] += toNum(r.DispatchQuantity);
+            row["Taxable Amount"] += taxable;
+            row["_totalFinalPrice"] += fp;
+            row["_dispatchCount"] += 1;
+            row["_fpValidCount"] += fpValid ? 1 : 0;
+          });
+        }
 
         // ── Formula from stored procedure (fixed GST rate 18%, TDS 0.984%) ──
         const GST_RATE = 0.18;
@@ -1094,7 +1112,7 @@ const ShowBill = ({ userRole }) => {
               </button>
 
               <span className="pagination-info">
-                Showing {displayRows.length} bills (max {BILLS_PER_PAGE} per page)
+                Showing {displayRows.length} bills {(appliedFilters.fromDate || appliedFilters.toDate || appliedFilters.factoryFilter) ? "(All filtered results)" : `(max ${BILLS_PER_PAGE} per page)`}
               </span>
 
               <button

@@ -19,6 +19,7 @@ import {
 } from "firebase/firestore";
 import * as XLSX from "xlsx";
 import { FixedSizeList as List } from "react-window";
+import { decrementMonthlySummary } from "../utils/dispatchSummaryHelper";
 
 const FACTORY_NAME_FIXES = {
   MANIGARH: "MANIGARH"
@@ -178,7 +179,7 @@ const Row = React.memo(({ index, style, data }) => {
                 Edit
               </button>
               <button
-                onClick={() => data.handleDelete(d.id)}
+                onClick={() => data.handleDelete(d)}
                 style={{ padding: "5px 10px", backgroundColor: "#dc3545", color: "white", border: "none", borderRadius: 3, cursor: "pointer" }}
               >
                 Delete
@@ -649,13 +650,28 @@ const ShowDispatch = () => {
   };
 
   /* ================= DELETE ================= */
-  const handleDelete = async (id) => {
+  const handleDelete = async (row) => {
     if (!isAdmin) return;
     if (!window.confirm("Delete this record?")) return;
 
-    await deleteDoc(doc(db, "TblDispatch", id));
+    await deleteDoc(doc(db, "TblDispatch", row.id));
+    await decrementMonthlySummary(row);
+
+    const id = row.id;
     setDispatches(prev => prev.filter(d => d.id !== id));
     setSelectedIds(prev => prev.filter(sid => sid !== id));
+
+    setPageHistory(prev => prev.map(page => ({
+      ...page,
+      rows: page.rows.filter(d => d.id !== id)
+    })));
+    setQueryCache(prev => {
+      const next = { ...prev };
+      for (let k in next) {
+        next[k] = { ...next[k], rows: next[k].rows.filter(d => d.id !== id) };
+      }
+      return next;
+    });
   };
 
   const handleDeleteSelected = async () => {
@@ -663,14 +679,32 @@ const ShowDispatch = () => {
     if (!window.confirm(`Delete ${selectedIds.length} records?`)) return;
 
     const batch = writeBatch(db);
+    const toDelete = dispatches.filter(d => selectedIds.includes(d.id));
+
     selectedIds.forEach(id => {
       batch.delete(doc(db, "TblDispatch", id));
     });
 
     await batch.commit();
 
+    for (const row of toDelete) {
+      await decrementMonthlySummary(row);
+    }
+
     setDispatches(prev => prev.filter(d => !selectedIds.includes(d.id)));
     setSelectedIds([]);
+
+    setPageHistory(prev => prev.map(page => ({
+      ...page,
+      rows: page.rows.filter(d => !selectedIds.includes(d.id))
+    })));
+    setQueryCache(prev => {
+      const next = { ...prev };
+      for (let k in next) {
+        next[k] = { ...next[k], rows: next[k].rows.filter(d => !selectedIds.includes(d.id)) };
+      }
+      return next;
+    });
   };
 
   /* ================= CHECKBOX ================= */
@@ -693,6 +727,7 @@ const ShowDispatch = () => {
       workerRef.current.postMessage({
         type: "SET_DATA",
         data: dispatches,
+        searchTerm: searchTerm,
         seq
       });
     } else {
