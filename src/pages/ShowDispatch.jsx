@@ -1,4 +1,4 @@
-﻿
+
 import React, { useEffect, useState, useRef, useMemo } from "react";
 import { db, auth } from "../firebaseConfig";
 import {
@@ -105,7 +105,7 @@ const areEqual = (prevProps, nextProps) => {
   const isEditingNext = nextData.editId === nextItem.id;
   if (isEditingPrev !== isEditingNext) return false;
 
-  if (isEditingNext && prevData.editChallan !== nextData.editChallan) return false;
+  if (isEditingNext && (prevData.editChallan !== nextData.editChallan || prevData.editDate !== nextData.editDate)) return false;
 
   if (prevData.isAdmin !== nextData.isAdmin) return false;
   if (prevData.gridTemplateColumns !== nextData.gridTemplateColumns) return false;
@@ -146,7 +146,14 @@ const Row = React.memo(({ index, style, data }) => {
               style={{ padding: 4, width: "100%", boxSizing: "border-box" }}
             />
           ) : col === "DispatchDate" ? (
-            formatShortDate(d[col])
+            data.editId === d.id ? (
+              <input
+                type="date"
+                value={data.editDate}
+                onChange={e => data.setEditDate(e.target.value)}
+                style={{ padding: 4, width: "100%", boxSizing: "border-box" }}
+              />
+            ) : formatShortDate(d[col])
           ) : (
             d[col]
           )}
@@ -258,6 +265,7 @@ const ShowDispatch = () => {
 
   const [editId, setEditId] = useState(null);
   const [editChallan, setEditChallan] = useState("");
+  const [editDate, setEditDate] = useState("");
 
   const DOCS_PER_PAGE = 100; // Production-grade limit
 
@@ -627,26 +635,38 @@ const ShowDispatch = () => {
   const handleEdit = (row) => {
     setEditId(row.id);
     setEditChallan(row.ChallanNo || "");
+    setEditDate(row.DispatchDate ? formatDateForInput(row.DispatchDate) : "");
   };
 
   const handleSave = async (id) => {
-    await updateDoc(doc(db, "TblDispatch", id), {
+    const updatedData = {
       ChallanNo: editChallan
-    });
+    };
+
+    let newDate = null;
+    if (editDate) {
+      const [year, month, day] = editDate.split("-");
+      newDate = new Date(year, month - 1, day);
+      updatedData.DispatchDate = Timestamp.fromDate(newDate);
+    }
+
+    await updateDoc(doc(db, "TblDispatch", id), updatedData);
 
     setDispatches(prev =>
       prev.map(d =>
-        d.id === id ? { ...d, ChallanNo: editChallan } : d
+        d.id === id ? { ...d, ChallanNo: editChallan, DispatchDate: newDate } : d
       )
     );
 
     setEditId(null);
     setEditChallan("");
+    setEditDate("");
   };
 
   const handleCancel = () => {
     setEditId(null);
     setEditChallan("");
+    setEditDate("");
   };
 
   /* ================= DELETE ================= */
@@ -772,6 +792,8 @@ const ShowDispatch = () => {
     editId,
     editChallan,
     setEditChallan,
+    editDate,
+    setEditDate,
     handleSave,
     handleCancel,
     handleEdit,
@@ -782,7 +804,8 @@ const ShowDispatch = () => {
     gridTemplateColumns,
     isAdmin,
     editId,
-    editChallan
+    editChallan,
+    editDate
   ]);
 
   const isAllSelected =

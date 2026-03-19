@@ -26,8 +26,14 @@ service cloud.firestore {
       allow read, write: if request.auth != null;
     }
 
-    // Factories - readable by any logged-in user, writable only by admins
+    // Factories (capital F) - readable by any logged-in user, writable only by admins
     match /Factories/{document} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.token.admin == true;
+    }
+
+    // factories (lowercase) - same rules, used by FactoryList, GstUpload, GstReport etc.
+    match /factories/{document} {
       allow read: if request.auth != null;
       allow write: if request.auth != null && request.auth.token.admin == true;
     }

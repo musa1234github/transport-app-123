@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { db } from "../firebaseConfig";
-import { collection, getDocs, query, orderBy, where, updateDoc, doc, serverTimestamp, limit } from "firebase/firestore";
+import { collection, getDocs, query, where, updateDoc, doc, serverTimestamp, limit } from "firebase/firestore";
+import { useAuth } from "../context/AuthContext";
 import * as XLSX from 'xlsx';
 import './GstUpload.css';
 
 const GstUpload = () => {
+    const { user } = useAuth();
     const [factories, setFactories] = useState([]);
     const [selectedFactoryId, setSelectedFactoryId] = useState('');
     const [selectedFile, setSelectedFile] = useState(null);
@@ -14,23 +16,31 @@ const GstUpload = () => {
     const [isUploading, setIsUploading] = useState(false);
     const [previewData, setPreviewData] = useState([]);
 
+    // Wait for the authenticated user before fetching factories
     useEffect(() => {
-        fetchFactories();
-    }, []);
+        if (user) {
+            fetchFactories();
+        }
+    }, [user]);
 
     const fetchFactories = async () => {
         setIsLoading(true);
         try {
-            const q = query(collection(db, "factories"), orderBy("factoryName"));
+            // No orderBy — avoids requiring a Firestore composite index.
+            // We sort the results client-side instead.
+            const q = query(collection(db, "factories"));
             const snap = await getDocs(q);
-            const data = snap.docs.map(d => ({
-                value: d.data().factoryName,  // ← exact text used for BillTable query
-                text: d.data().factoryName
-            }));
+            const data = snap.docs
+                .map(d => ({
+                    value: d.data().factoryName,
+                    text: d.data().factoryName
+                }))
+                .filter(f => f.value) // skip docs with no factoryName
+                .sort((a, b) => a.text.localeCompare(b.text)); // sort A→Z client-side
             setFactories(data);
             setErrorMessage('');
         } catch (error) {
-            setErrorMessage('Failed to load factories. Please try again.');
+            setErrorMessage('Failed to load factories: ' + (error.message || error.code || "Unknown Error"));
             console.error('Error fetching factories:', error);
         } finally {
             setIsLoading(false);
@@ -151,8 +161,7 @@ const GstUpload = () => {
             }
 
             // Build O(1) lookup map
-            // Key = "YYYY-M-D_gstInt_billNumber" — includes Bill Number so two bills
-            // on the same date with the same GST amount never collide.
+            // Key = "YYYY-M-D_gstInt"
             const billMap = new Map();
             billSnap.docs.forEach(d => {
                 const data = d.data();
@@ -179,16 +188,16 @@ const GstUpload = () => {
                     return;
                 }
 
-                // Bill Number — support common field name variants
-                const billNum = String(
-                    data.BillNum ?? data.BillNumber ?? data.BillNo ?? data.billNumber ?? ''
-                ).trim();
-
                 // Math.trunc strips decimals so 2430.2 (Excel) and 2430.20 (Firestore) both → 2430
                 const gstInt = Math.trunc(Number(rawGst));
-                const key = `${dateKey}_${gstInt}_${billNum}`;
+                const key = `${dateKey}_${gstInt}`;
                 console.log("[GstUpload] Map key added:", key);
-                billMap.set(key, d);
+                
+                // Keep an array of matched docs in case of duplicate amounts on the same date
+                if (!billMap.has(key)) {
+                    billMap.set(key, []);
+                }
+                billMap.get(key).push(d);
             });
 
             console.log(`[GstUpload] Loaded ${billMap.size} BillTable records for factory "${selectedFactoryId}"`);
@@ -205,11 +214,10 @@ const GstUpload = () => {
                 const row = dataRows[i];
                 if (!row || row.length === 0) continue;
 
-                // Col 0 → GST Amount | Col 1 → Bill Date | Col 2 → GST Update Date | Col 3 → Bill Number
+                // Col 0 → GST Amount | Col 1 → Bill Date | Col 2 → GST Update Date
                 const gstAmount = parseFloat(row[0]);
                 const billDate = parseDate(row[1]);
                 const gstUpdateDate = parseDate(row[2]);
-                const billNum = String(row[3] ?? '').trim();
 
                 if (isNaN(gstAmount)) {
                     failedRecords.push(`Row ${i + 2}: Invalid GST Amount`);
@@ -226,11 +234,6 @@ const GstUpload = () => {
                     failureCount++;
                     continue;
                 }
-                if (!billNum) {
-                    failedRecords.push(`Row ${i + 2}: Missing Bill Number (Column 4)`);
-                    failureCount++;
-                    continue;
-                }
 
                 const dateKey =
                     billDate.getFullYear() + "-" +
@@ -238,19 +241,22 @@ const GstUpload = () => {
                     billDate.getDate();
 
                 // Key must match the one built from Firestore data above
-                const key = `${dateKey}_${Math.trunc(gstAmount)}_${billNum}`;
+                const key = `${dateKey}_${Math.trunc(gstAmount)}`;
 
                 if (i < 3) console.log(`[GstUpload] Excel key (row ${i + 2}):`, key);
 
-                const matchedDoc = billMap.get(key);
+                const matchedDocs = billMap.get(key);
 
-                if (!matchedDoc) {
+                if (!matchedDocs || matchedDocs.length === 0) {
                     failedRecords.push(
-                        `Row ${i + 2}: No match found (Bill No. ${billNum}, GST ${Math.trunc(gstAmount)}, Date ${billDate.toLocaleDateString()})`
+                        `Row ${i + 2}: No match found (GST ${Math.trunc(gstAmount)}, Date ${billDate.toLocaleDateString()})`
                     );
                     failureCount++;
                     continue;
                 }
+
+                // Pop one so duplicate excel rows map to separate firebase documents
+                const matchedDoc = matchedDocs.pop();
 
                 // ── 4. UPDATE GstReceivedDate in BillTable ─────────────────
                 try {
@@ -337,8 +343,6 @@ const GstUpload = () => {
                     <strong>2) Bill Date</strong>
                     <br />
                     <strong>3) GST Update Date</strong>
-                    <br />
-                    <strong>4) Bill Number</strong>
                 </p>
             </div>
 
