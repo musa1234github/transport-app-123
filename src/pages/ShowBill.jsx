@@ -334,10 +334,26 @@ const ShowBill = ({ userRole }) => {
       let billQuery;
       const isFiltering = appliedFilters.fromDate || appliedFilters.toDate || appliedFilters.factoryFilter;
 
-      if (isFiltering) {
+      if (isFiltering && direction === 'next' && cursorDoc) {
         billQuery = query(
           collection(db, "BillTable"),
-          ...queryConstraints
+          ...queryConstraints,
+          startAfter(cursorDoc),
+          limit(BILLS_PER_PAGE + 1)   // ✅ FIXED: limit added for filtered next-page
+        );
+      } else if (isFiltering && direction === 'prev' && cursorDoc) {
+        billQuery = query(
+          collection(db, "BillTable"),
+          ...queryConstraints,
+          endBefore(cursorDoc),
+          limitToLast(BILLS_PER_PAGE + 1)  // ✅ FIXED: limit added for filtered prev-page
+        );
+      } else if (isFiltering) {
+        // ✅ FIXED: was missing limit — caused 600+ reads for just 2 results!
+        billQuery = query(
+          collection(db, "BillTable"),
+          ...queryConstraints,
+          limit(BILLS_PER_PAGE + 1)
         );
       } else if (direction === 'next' && cursorDoc) {
         billQuery = query(
@@ -378,25 +394,25 @@ const ShowBill = ({ userRole }) => {
         docs = billSnap.docs;
       }
 
-      // Check if there are more pages
-      const hasMore = !isFiltering && docs.length > BILLS_PER_PAGE;
+      // Check if there are more pages — works for BOTH filtered and non-filtered
+      const hasMore = docs.length > BILLS_PER_PAGE;  // ✅ FIXED: removed !isFiltering exclusion
       const displayDocs = hasMore ? docs.slice(0, BILLS_PER_PAGE) : docs;
+      console.log(`📊 Docs fetched: ${docs.length}, showing: ${displayDocs.length}, hasMore: ${hasMore}`);
 
       // Update pagination cursors
       if (displayDocs.length > 0) {
         setFirstDoc(displayDocs[0]);
         setLastDoc(displayDocs[displayDocs.length - 1]);
 
-        if (isFiltering) {
-          setHasNextPage(false);
-          setHasPrevPage(false);
-        } else if (direction === 'next') {
+        // ✅ FIXED: pagination now works for filtered results too
+        if (direction === 'next') {
           setHasNextPage(hasMore);
           setHasPrevPage(true);
         } else if (direction === 'prev') {
           setHasPrevPage(hasMore);
           setHasNextPage(true);
         } else {
+          // initial load (filtered or not)
           setHasNextPage(hasMore);
           setHasPrevPage(false);
         }

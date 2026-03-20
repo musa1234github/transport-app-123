@@ -1,38 +1,39 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // Strict rules for Dispatch Data
+
+    // Dispatch Data — any authenticated user can read/write
     match /TblDispatch/{document} {
-      allow read, write: if true;
-    }
-
-    // Other known collections - maintaining existing access level (permissive)
-    // You should restrict these as well based on your requirements
-    match /BillTable/{document} {
-      allow read, write: if true;
-    }
-    
-    match /PaymentTable/{document} {
-      allow read, write: if true;
-    }
-    
-    match /VehicleMaster/{document} {
-      allow read, write: if true;
-    }
-
-    // User profiles - each user can only read/write their own doc
-    match /users/{userId} {
       allow read, write: if request.auth != null;
     }
 
-    // Factories (capital F) - readable by any logged-in user, writable only by admins
+    // Billing Table — any authenticated user can read/write
+    match /BillTable/{document} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Payment Table — any authenticated user can read/write
+    match /PaymentTable/{document} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Vehicle Master — any authenticated user can read/write
+    match /VehicleMaster/{document} {
+      allow read, write: if request.auth != null;
+    }
+
+    // User profiles — each user can only read/write their own document
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Factories (capital F) — readable by any logged-in user, writable only by admins
     match /Factories/{document} {
       allow read: if request.auth != null;
       allow write: if request.auth != null && request.auth.token.admin == true;
     }
 
-    // factories (lowercase) - same rules, used by FactoryList, GstUpload, GstReport etc.
+    // factories (lowercase) — same rules, used by FactoryList, GstUpload, GstReport etc.
     match /factories/{document} {
       allow read: if request.auth != null;
       allow write: if request.auth != null && request.auth.token.admin == true;
