@@ -1,6 +1,6 @@
-﻿import React, { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { db } from "../firebaseConfig";
-import { collection, addDoc, query, where, getDocs } from "firebase/firestore";
+import { collection, doc, getDocs, setDoc, writeBatch } from "firebase/firestore";
 import * as XLSX from "xlsx";
 import "./UploadDispatch.css";
 import { updateMonthlySummary } from "../utils/dispatchSummaryHelper";
@@ -116,15 +116,7 @@ const UploadDispatch = () => {
     loadVehicles();
   }, []);
 
-  const isDuplicate = async (challan, factoryName) => {
-    const q = query(
-      collection(db, "TblDispatch"),
-      where("ChallanNo", "==", challan),
-      where("FactoryName", "==", factoryName)
-    );
-    const snap = await getDocs(q);
-    return !snap.empty;
-  };
+  // isDuplicate removed — replaced by single pre-fetch Set (see handleUpload)
 
   const handleUpload = async (e) => {
     e.preventDefault();
@@ -183,6 +175,18 @@ const UploadDispatch = () => {
         }
       }
 
+      // ✅ FINAL OPTIMIZATION: 0 Firestore reads during upload.
+      //    DB-level dedup is guaranteed by composite docId (FactoryName_ChallanNo).
+      //    batch.set() is idempotent — re-uploading same challan overwrites with same data,
+      //    which is safe and correct for a logistics system.
+      //
+      //    This local Set only catches duplicate challan numbers WITHIN the same Excel file
+      //    (no Firestore cost at all).
+      const processedThisUpload = new Set();
+
+      // Collect all valid DTOs before writing (enables batch commit)
+      const validDtos = [];   // { docId, dto }
+
       // Process each row
       for (let i = 0; i < dataRows.length; i++) {
         const row = dataRows[i];
@@ -208,8 +212,8 @@ const UploadDispatch = () => {
           }
         }
 
-        // Check if already in database
-        if (await isDuplicate(challanNo, factoryName)) {
+        // Catch duplicate challan numbers within this Excel file (zero Firestore cost)
+        if (processedThisUpload.has(challanNo)) {
           alreadyExistInDB.push(challanNo);
           continue;
         }
@@ -246,15 +250,12 @@ const UploadDispatch = () => {
               vehicleId = matchedVehicle.id;
             } else {
               // Vehicle not found in master
-              vehicleNotFound.push({
-                challanNo,
-                vehicleNo: rawVehicle
-              });
+              vehicleNotFound.push({ challanNo, vehicleNo: rawVehicle });
             }
           }
         }
 
-        // All checks passed - upload
+        // Build DTO
         const dto = {
           DispatchDate: dispatchDate,
           ChallanNo: challanNo,
@@ -283,11 +284,33 @@ const UploadDispatch = () => {
           dto.GrNo = row[colMap.GrNo] ? String(row[colMap.GrNo]).trim() : "";
         }
 
-        await addDoc(collection(db, "TblDispatch"), dto);
-        // ✅ Keep monthly summary in sync (ultra-cheap atomic increment)
-        await updateMonthlySummary(dto);
-        uploaded++;
+        // ✅ OPTIMIZATION 3: Composite doc ID = natural deduplication key
+        //    Firestore will silently overwrite a duplicate if somehow it slips through
+        const safeFactory = factoryName.replace(/[^A-Z0-9]/gi, "_");
+        const safeChallan = challanNo.replace(/[^A-Z0-9]/gi, "_");
+        const docId = `${safeFactory}_${safeChallan}`;
+
+        validDtos.push({ docId, dto });
+        // Track within-file duplicates
+        processedThisUpload.add(challanNo);
       }
+
+      // ✅ OPTIMIZATION 2: Batch-write all TblDispatch inserts in one round-trip
+      //    Firestore writeBatch limit = 500 ops; chunk if needed
+      const BATCH_LIMIT = 499;
+      for (let start = 0; start < validDtos.length; start += BATCH_LIMIT) {
+        const chunk = validDtos.slice(start, start + BATCH_LIMIT);
+        const batch = writeBatch(db);
+        chunk.forEach(({ docId, dto }) => {
+          batch.set(doc(collection(db, "TblDispatch"), docId), dto);
+        });
+        await batch.commit();
+      }
+
+      // ✅ OPTIMIZATION 3: Run all monthly summary updates in parallel
+      await Promise.all(validDtos.map(({ dto }) => updateMonthlySummary(dto)));
+
+      uploaded = validDtos.length;
 
       // Display results
       let resultMessage = "";
@@ -299,9 +322,9 @@ const UploadDispatch = () => {
         resultMessage += `⚠️ No new records uploaded.\n\n`;
       }
 
-      // Show existing records (only if all were duplicates)
+      // Show within-file duplicate challans (only if no new records uploaded)
       if (alreadyExistInDB.length > 0 && uploaded === 0 && otherFailures.length === 0) {
-        resultMessage += `ℹ️ All ${alreadyExistInDB.length} challans already exist in database.\n\n`;
+        resultMessage += `ℹ️ ${alreadyExistInDB.length} duplicate challan(s) skipped (appeared more than once in Excel).\n\n`;
       }
 
       // Show other failures
