@@ -1,4 +1,4 @@
-﻿import { useOutletContext } from "react-router-dom";
+import { useOutletContext } from "react-router-dom";
 import React, { useState, useEffect } from "react";
 import * as XLSX from "xlsx";
 import {
@@ -6,11 +6,16 @@ import {
   query,
   where,
   getDocs,
+  getDoc,
   updateDoc,
   doc,
   addDoc,
   serverTimestamp,
-  setDoc
+  setDoc,
+  writeBatch,
+  orderBy,
+  limit,
+  deleteDoc
 } from "firebase/firestore";
 import { db } from "../firebaseConfig";
 
@@ -164,7 +169,107 @@ const PaymentUpload = () => {
     setUploadLog(prev => [...prev, { timestamp, message, type }].slice(-20));
   };
 
+  const handleUndoLastUpload = async () => {
+    setLoading(true);
+    setUploadLog([]);
+    addLog("Searching for most recent upload session...", "info");
+    
+    try {
+        // Query only COMPLETED sessions. 
+        // ⚠️ ENGINER'S NOTE: Needs Composite Index on [status] + [createdAt (desc)]
+        const sessionQuery = query(
+            collection(db, "UploadSessions"), 
+            where("status", "==", "COMPLETED"),
+            orderBy("createdAt", "desc"), 
+            limit(1)
+        );
+        const sessionSnap = await getDocs(sessionQuery);
+        
+        if (sessionSnap.empty) {
+            addLog("No eligible completed sessions found to undo.", "warning");
+            setLoading(false);
+            return;
+        }
+        
+        const lastSession = sessionSnap.docs[0];
+        const sessionId = lastSession.id;
+        addLog(`Found Session: ${sessionId} (File: ${lastSession.data().fileName}). Fetching logs...`, "info");
+        
+        // ⚠️ ENGINER'S NOTE: Ensure Firestore Index exists on UploadLogs.sessionId for this query to work optimally!
+        const logsQuery = query(collection(db, "UploadLogs"), where("sessionId", "==", sessionId));
+        const logsSnap = await getDocs(logsQuery);
+        
+        if (logsSnap.empty) {
+            addLog("No changes found for this session.", "warning");
+            setLoading(false);
+            return;
+        }
+
+        // Safer confirmation showing exactly what we are undoing BEFORE we commit
+        if (!window.confirm(`⚠️ DANGER: Undo ${logsSnap.size} records from the last upload session? This will safely revert to their original state.`)) {
+            setLoading(false);
+            return;
+        }
+        
+        let batch = writeBatch(db);
+        let batchOpCount = 0;
+        let restored = 0;
+        let deleted = 0;
+        
+        for (const logDoc of logsSnap.docs) {
+            const data = logDoc.data();
+            const [colName, docId] = data.docPath.split("/");
+            const docRef = doc(db, colName, docId);
+            
+            if (batchOpCount >= 450) {
+                await batch.commit();
+                batch = writeBatch(db);
+                batchOpCount = 0;
+            }
+            
+            if (data.action === "UPDATE") {
+                // IMPORTANT: use merge: true to avoid overwriting fields added by other systems since
+                batch.set(docRef, data.oldData, { merge: true });
+                restored++;
+            } else if (data.action === "CREATE") {
+                // Soft Delete Strategy
+                batch.set(docRef, { 
+                    isDeleted: true,
+                    deletedAt: serverTimestamp() 
+                }, { merge: true });
+                deleted++;
+            }
+            batchOpCount++;
+
+            // Delete the audit log so DB doesn't bloat endlessly
+            batch.delete(logDoc.ref);
+            batchOpCount++;
+        }
+
+        if (batchOpCount > 0) {
+            await batch.commit();
+        }
+
+        // Mark session as UNDONE to prevent multiple rollbacks, executed asynchronously outside batch tracking limits
+        await updateDoc(doc(db, "UploadSessions", sessionId), { 
+            status: "UNDONE",
+            undoneAt: serverTimestamp()
+        });
+        
+        addLog(`Undo complete. Restored: ${restored}, Deleted/Soft-Deleted: ${deleted} documents.`, "success");
+        alert(`Undo Successful! Restored ${restored} updates, deleted ${deleted} creations.`);
+    } catch (error) {
+        console.error(error);
+        addLog(`Undo failed: ${error.message}`, "error");
+        alert("Undo failed!");
+    }
+    
+    setLoading(false);
+  };
+
   const handleUpload = async () => {
+    if (loading) return; // Prevent accidental double-click parallel uploading operations
+    
     if (!file || !factory) {
       alert("Select Factory and Excel file");
       return;
@@ -177,6 +282,22 @@ const PaymentUpload = () => {
     // Ensure factory exists in Factories collection
     await ensureFactoryExists(factory);
 
+    // --- STUCK SESSION RECOVERY ---
+    try {
+        const stuckQuery = query(collection(db, "UploadSessions"), where("status", "==", "IN_PROGRESS"));
+        const stuckSnap = await getDocs(stuckQuery);
+        if (!stuckSnap.empty) {
+            const recoveryBatch = writeBatch(db);
+            stuckSnap.docs.forEach(d => {
+                recoveryBatch.update(d.ref, { status: "FAILED", failedAt: serverTimestamp() });
+            });
+            await recoveryBatch.commit();
+            addLog(`Recovered ${stuckSnap.size} stuck sessions (marked FAILED).`, "warning");
+        }
+    } catch (err) {
+        console.error("Failed to recover stuck sessions:", err);
+    }
+
     const reader = new FileReader();
 
     reader.onload = async (e) => {
@@ -185,20 +306,49 @@ const PaymentUpload = () => {
         const ws = wb.Sheets[wb.SheetNames[0]];
         const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false });
 
+        if (rows.length <= 1) {
+          setLoading(false);
+          addLog("Excel file is empty", "warning");
+          return;
+        }
+
+        // ⚠️ ENGINER'S NOTE: Manual log cleanup removed. Configure Firestore strictly applying Native TTL Policy on `UploadLogs.timestamp` field dynamically truncating > 30 Days.
+        
+        // --- NEW: CREATE UPLOAD SESSION ---
+        const sessionRef = doc(collection(db, "UploadSessions"));
+        const sessionId = sessionRef.id;
+        await setDoc(sessionRef, {
+          sessionId: sessionId,
+          factory: factory,
+          fileName: file.name,
+          totalRows: rows.length - 1,
+          uploadedBy: userRole, 
+          status: "IN_PROGRESS",
+          createdAt: serverTimestamp()
+        });
+        addLog(`Upload Session Created: ${sessionId} (Status: IN_PROGRESS)`, "info");
+
         let success = 0;
         let skipped = 0;
         let failed = 0;
-        const paymentMap = new Map();
+        
+        let batch = writeBatch(db);
+        let batchOpCount = 0;
+        
+        const seenDocs = new Set(); // Prevents logging updates to the same doc twice in one session
+        const billExistsCache = new Map(); // Strictly tracks BillTable existence avoiding fake invoice creations
+        const seenRows = new Set(); // Prevent exact identical rows from overriding duplicates
 
-        addLog(`Found ${rows.length - 1} rows in Excel file`, "info");
+        // Note: Audit Logging generates 1 read per unique document touched. Expected and optimal for tracking.
+        addLog(`Found ${rows.length - 1} rows in Excel file. Uploading with Audit Tracking...`, "info");
 
         for (let i = 1; i < rows.length; i++) {
           const row = rows[i];
           if (!row || row.every(v => v === null || v === "")) continue;
 
-          // Column mapping - Using dd-mm-yy format
-          const billNumber = String(row[0] || "").trim();
-          const paymentNumber = String(row[1] || "").trim();
+          // Column mapping - Using dd-mm-yy format naturally casing combinations
+          const billNumber = String(row[0] || "").trim().toUpperCase();
+          const paymentNumber = String(row[1] || "").trim().toUpperCase();
           const paymentDate = parseDate(row[2]); // Expecting dd-mm-yy format
           const actualAmount = safeNum(row[3]);
           const tds = safeNum(row[4]);
@@ -209,23 +359,36 @@ const PaymentUpload = () => {
           const shortageCleaned = shortageStr.replace(/[-â€“]/g, "").trim();
           const shortage = safeNum(shortageCleaned);
 
-          addLog(`Processing row ${i}: Bill ${billNumber}, Payment ${paymentNumber}`, "info");
+          // Prevent exact duplicate processing within the same document loop
+          const uniqueRowKey = `${billNumber}_${paymentNumber}`;
+          if (seenRows.has(uniqueRowKey)) {
+             skipped++;
+             continue;
+          }
+          seenRows.add(uniqueRowKey);
 
-          // Validate required fields
-          if (!billNumber) {
-            addLog(`Row ${i} skipped: Missing Bill Number`, "warning");
+          // Validate required fields and enforce format
+          if (!billNumber || !billNumber.match(/^BILL/i)) {
+            addLog(`Row ${i} skipped: Invalid Bill Number (Must start with BILL)`, "warning");
             skipped++;
             continue;
           }
 
-          if (!paymentNumber) {
-            addLog(`Row ${i} skipped: Missing Payment Number`, "warning");
+          if (!paymentNumber || paymentNumber.length < 3) {
+            addLog(`Row ${i} skipped: Invalid or Missing Payment Number`, "warning");
             skipped++;
             continue;
           }
 
-          if (paymentReceived === 0) {
-            addLog(`Row ${i} skipped: Payment Received is 0`, "warning");
+          // Strict Financial Validations
+          if (paymentReceived < 0) {
+            addLog(`Row ${i} skipped: Negative Payment Received`, "warning");
+            skipped++;
+            continue;
+          }
+          
+          if (actualAmount <= 0) {
+            addLog(`Row ${i} skipped: Actual Amount must be strictly greater than 0`, "warning");
             skipped++;
             continue;
           }
@@ -236,94 +399,127 @@ const PaymentUpload = () => {
             continue;
           }
 
-          /* ===== FIND BILL ===== */
-          const billQuery = query(
-            collection(db, "BillTable"),
-            where("BillNum", "==", billNumber)
-          );
-
-          const billSnapshot = await getDocs(billQuery);
-          const billDoc = billSnapshot.docs.find(doc =>
-            doc.data().FactoryName === factory
-          );
-
-          if (!billDoc) {
-            addLog(`Row ${i} skipped: Bill ${billNumber} not found in ${factory}`, "warning");
-            skipped++;
-            continue;
+          /* ===== COMMIT BATCH IF LIMIT REACHED ===== */
+          if (batchOpCount >= 450) {
+            addLog(`Committing batch writes (${batchOpCount} ops)...`, "info");
+            await batch.commit();
+            batch = writeBatch(db);
+            batchOpCount = 0;
           }
 
-          const billId = billDoc.id;
+          /* ===== DOC ID STRATEGY ===== */
+          const billId = `${factory}_${billNumber}`;
+          const paymentId = `${factory}_${paymentNumber}`;
+          
+          const billRef = doc(db, "BillTable", billId);
+          const paymentRef = doc(db, "PaymentTable", paymentId);
 
-          /* ===== FIND OR CREATE PAYMENT ===== */
-          let paymentId = null;
-
-          if (!paymentMap.has(paymentNumber)) {
-            const paymentQuery = query(
-              collection(db, "PaymentTable"),
-              where("DocNumber", "==", paymentNumber)
-            );
-
-            const paymentSnapshot = await getDocs(paymentQuery);
-
-            if (!paymentSnapshot.empty) {
-              paymentId = paymentSnapshot.docs[0].id;
-              paymentMap.set(paymentNumber, { id: paymentId, exists: true });
-              addLog(`Row ${i}: Using existing payment ${paymentNumber}`, "info");
-
-              // Update existing payment date if needed
-              await updateDoc(doc(db, "PaymentTable", paymentId), {
-                PayRecDate: paymentDate,
-                Shortage: shortage,
-                UpdatedAt: serverTimestamp()
-              });
-            } else {
-              try {
-                const paymentRef = await addDoc(collection(db, "PaymentTable"), {
-                  DocNumber: paymentNumber,
-                  PayRecDate: paymentDate,
-                  Shortage: shortage,
-                  FactoryName: factory,
-                  CreatedOn: serverTimestamp()
-                });
-
-                paymentId = paymentRef.id;
-                paymentMap.set(paymentNumber, { id: paymentId, exists: false });
-                addLog(`Row ${i}: Created new payment ${paymentNumber}`, "success");
-              } catch (error) {
-                addLog(`Row ${i}: Failed to create payment ${paymentNumber}: ${error.message}`, "error");
-                failed++;
-                continue;
-              }
-            }
-          } else {
-            paymentId = paymentMap.get(paymentNumber).id;
+          /* ===== STRICT VALIDATION & AUDIT LOGGING ===== */
+          const billPath = `BillTable/${billId}`;
+          const paymentPath = `PaymentTable/${paymentId}`;
+          
+          const docsToFetch = [];
+          // Force fetch if we haven't resolved Bill existence yet
+          if (!billExistsCache.has(billPath)) {
+              docsToFetch.push({ ref: billRef, path: billPath });
+          }
+          if (!seenDocs.has(paymentPath)) {
+              docsToFetch.push({ ref: paymentRef, path: paymentPath });
           }
 
-          /* ===== UPDATE BILL WITH PAYMENT INFO ===== */
-          try {
-            await updateDoc(doc(db, "BillTable", billId), {
-              PaymentReceived: paymentReceived,
-              ActualAmount: actualAmount,
-              Tds: tds,
-              Gst: gst,
-              PId: paymentId,
-              PaymentNumber: paymentNumber,
-              // DENORMALIZED FIELDS - Eliminate N+1 queries to PaymentTable
-              PaymentDocNumber: paymentNumber,
-              PaymentRecDate: paymentDate,
-              PaymentShortage: shortage,
-              Shortage: shortage, // Keep for backward compatibility
-              UpdatedAt: serverTimestamp()
+          let currentBillExists = billExistsCache.get(billPath);
+          let fetchedBillData = null;
+          let fetchedPaymentData = null;
+
+          if (docsToFetch.length > 0) {
+            // Accelerate latency via parallel fetches
+            const snapshots = await Promise.all(docsToFetch.map(item => getDoc(item.ref)));
+            
+            snapshots.forEach((snap, index) => {
+               const path = docsToFetch[index].path;
+               if (path === billPath) {
+                   currentBillExists = snap.exists();
+                   billExistsCache.set(billPath, currentBillExists);
+                   fetchedBillData = snap;
+               } else if (path === paymentPath) {
+                   fetchedPaymentData = snap;
+               }
             });
+          }
 
-            success++;
-            addLog(`Row ${i}: Updated Bill ${billNumber} with payment ${paymentNumber} (${paymentReceived})`, "success");
-          } catch (error) {
-            failed++;
-            addLog(`Row ${i}: Failed to update Bill ${billNumber}: ${error.message}`, "error");
+          // STRICT MODE: Abort if Bill doesn't exist
+          if (!currentBillExists) {
+              addLog(`Row ${i} skipped: STRICT MODE - Bill ${billNumber} does not exist in DB!`, "error");
+              skipped++;
+              continue;
+          }
+
+          // Proceed with Audit Logging now that destruction is avoided
+          if (fetchedBillData && !seenDocs.has(billPath)) {
+              batch.set(doc(collection(db, "UploadLogs")), {
+                  sessionId: sessionId,
+                  docPath: billPath,
+                  action: "UPDATE", // Bill is guaranteed to exist at this point
+                  oldData: fetchedBillData.data(),
+                  timestamp: serverTimestamp()
+              });
+              batchOpCount++;
+              seenDocs.add(billPath);
+          }
+
+          if (fetchedPaymentData && !seenDocs.has(paymentPath)) {
+              batch.set(doc(collection(db, "UploadLogs")), {
+                  sessionId: sessionId,
+                  docPath: paymentPath,
+                  action: fetchedPaymentData.exists() ? "UPDATE" : "CREATE",
+                  oldData: fetchedPaymentData.exists() ? fetchedPaymentData.data() : null,
+                  timestamp: serverTimestamp()
+              });
+              batchOpCount++;
+              seenDocs.add(paymentPath);
+          }
+
+          // Payment Table (Upsert)
+          batch.set(paymentRef, {
+            DocNumber: paymentNumber,
+            PayRecDate: paymentDate,
+            Shortage: shortage,
+            FactoryName: factory,
+            UpdatedAt: serverTimestamp(),
+            // Ensure CreateOn exists if first time but don't strictly require it so we just keep UpdatedAt as main trace
+          }, { merge: true });
+          batchOpCount++;
+          
+          // Bill Table Update (Upsert to prevent full batch failure if bill doesn't exist)
+          batch.set(billRef, {
+            PaymentReceived: paymentReceived,
+            ActualAmount: actualAmount,
+            Tds: tds,
+            Gst: gst,
+            PId: paymentId,
+            PaymentNumber: paymentNumber,
+            // DENORMALIZED FIELDS - Eliminate N+1 queries to PaymentTable
+            PaymentDocNumber: paymentNumber,
+            PaymentRecDate: paymentDate,
+            PaymentShortage: shortage,
+            Shortage: shortage, // Keep for backward compatibility
+            UpdatedAt: serverTimestamp()
+          }, { merge: true });
+          batchOpCount++;
+          
+          success++;
+          if (i % 50 === 0) {
+             addLog(`Processed ${i} rows...`, "info");
           }
         }
+
+        if (batchOpCount > 0) {
+          addLog(`Committing final batch writes (${batchOpCount} ops)...`, "info");
+          await batch.commit();
+        }
+        
+        // Finalize Session Status
+        await updateDoc(sessionRef, { status: "COMPLETED", completedAt: serverTimestamp() });
 
         setLoading(false);
 
@@ -445,6 +641,23 @@ const PaymentUpload = () => {
             }}
           >
             {loading ? "Uploading..." : "Upload Payments"}
+          </button>
+          
+          <button
+            onClick={handleUndoLastUpload}
+            disabled={loading}
+            style={{
+              padding: "10px 20px",
+              backgroundColor: loading ? "#cccccc" : "#dc3545",
+              color: "white",
+              border: "none",
+              borderRadius: "4px",
+              cursor: loading ? "not-allowed" : "pointer",
+              fontSize: "16px",
+              flex: 1
+            }}
+          >
+            Undo Last Upload
           </button>
 
           <button
