@@ -1,4 +1,4 @@
-﻿import React, { useState } from "react";
+import React, { useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import * as XLSX from "xlsx";
 import {
@@ -9,7 +9,8 @@ import {
   addDoc,
   updateDoc,
   doc,
-  serverTimestamp
+  serverTimestamp,
+  writeBatch
 } from "firebase/firestore";
 import { db } from "../firebaseConfig";
 import "./BillUpload.css";
@@ -189,49 +190,92 @@ const BillUpload = () => {
 
         // Update progress: parsing complete
         setProgress(5);
-        addLog(`Parsed ${totalRowsCount} rows from Excel file`, "info");
+        addLog(`Parsed ${totalRowsCount} rows from Excel file. Preparing data...`, "info");
+
+        const parsedRows = [];
+        const uniqueChallans = new Set();
+        const uniqueBills = new Set();
 
         for (let i = 1; i < rows.length; i++) {
           const row = rows[i];
-          setCurrentRow(i);
-          
-          // Calculate current progress percentage
-          const currentProgress = 5 + Math.floor((i / rows.length) * 90);
-          setProgress(currentProgress);
-          
           if (!row || row.every(v => v === null || v === "")) {
             skipped++;
             continue;
           }
 
-          // Map columns based on factory
-          let challanNo, quantity, unitPrice, finalPrice, billNum, billDate, billTypeOrLR, deliveryNum;
-
-          if (factory === "MP BIRLA") {
-            challanNo = String(row[0] || "").trim();
-            quantity = safeNum(row[4]);
-            unitPrice = safeNum(row[6]);
-            finalPrice = safeNum(row[7]);
-            billNum = String(row[8] || "").trim();
-            billDate = parseExcelDate(row[9], factory);
-            billTypeOrLR = String(row[10] || "").trim();
-            deliveryNum = String(row[11] || "").trim();
-          } else {
-            challanNo = String(row[0] || "").trim();
-            quantity = safeNum(row[4]);
-            unitPrice = safeNum(row[6]);
-            finalPrice = safeNum(row[7]);
-            billNum = String(row[8] || "").trim();
-            billDate = parseExcelDate(row[9], factory);
-            billTypeOrLR = String(row[10] || "").trim();
-            deliveryNum = String(row[11] || "").trim();
-          }
+          let challanNo = String(row[0] || "").trim();
+          const quantity = safeNum(row[4]);
+          const unitPrice = safeNum(row[6]);
+          const finalPrice = safeNum(row[7]);
+          const billNum = String(row[8] || "").trim();
+          const billDate = parseExcelDate(row[9], factory);
+          const billTypeOrLR = String(row[10] || "").trim();
+          const deliveryNum = String(row[11] || "").trim();
 
           // For MP BIRLA, clean up challan number (remove .0 if present)
           if (factory === "MP BIRLA" && challanNo.endsWith('.0')) {
             challanNo = challanNo.replace(/\.0$/, '');
           }
 
+          if (challanNo) uniqueChallans.add(challanNo);
+          if (billNum) uniqueBills.add(billNum);
+
+          parsedRows.push({
+            originalRowIndex: i,
+            challanNo, quantity, unitPrice, finalPrice, billNum, billDate, billTypeOrLR, deliveryNum
+          });
+        }
+
+        setProgress(10);
+        addLog(`Prefetching data from database (Bulk Read Optimization)...`, "info");
+
+        // --- BATCH PREFETCH DISPATCHES ---
+        const dispatchMap = {};
+        const challansArray = Array.from(uniqueChallans);
+        for (let i = 0; i < challansArray.length; i += 30) {
+          const chunk = challansArray.slice(i, i + 30);
+          const dq = query(
+            collection(db, "TblDispatch"),
+            where("FactoryName", "==", factory),
+            where("ChallanNo", "in", chunk)
+          );
+          const ds = await getDocs(dq);
+          ds.forEach(d => {
+            dispatchMap[d.data().ChallanNo] = { id: d.id, ...d.data() };
+          });
+        }
+
+        // --- BATCH PREFETCH BILLS ---
+        const billCache = {};
+        const billsArray = Array.from(uniqueBills);
+        for (let i = 0; i < billsArray.length; i += 30) {
+          const chunk = billsArray.slice(i, i + 30);
+          const bq = query(
+            collection(db, "BillTable"),
+            where("FactoryName", "==", factory),
+            where("BillNum", "in", chunk)
+          );
+          const bs = await getDocs(bq);
+          bs.forEach(d => {
+            billCache[d.data().BillNum] = d.id;
+          });
+        }
+
+        setProgress(15);
+        addLog(`Prefetch complete. Preparing batches for ultra-fast upload...`, "info");
+
+        const batchLogs = [];
+        const CHUNK_SIZE = 400; // Ensure we stay under 500 limit for nested ops
+        let batch = writeBatch(db);
+        let currentBatchOps = 0;
+        let batchCount = 0;
+        const batchTotal = Math.ceil(parsedRows.length / (CHUNK_SIZE / 2));  // Roughly
+
+        for (let i = 0; i < parsedRows.length; i++) {
+          const rowData = parsedRows[i];
+          const rowIndex = rowData.originalRowIndex;
+          
+          const { challanNo, quantity, unitPrice, finalPrice, billNum, billDate, billTypeOrLR, deliveryNum } = rowData;
           const billType = getBillType(billTypeOrLR, factory);
 
           // VALIDATION
@@ -240,54 +284,42 @@ const BillUpload = () => {
                           !billNum ? "Missing BillNum" : "Invalid BillDate";
             
             failedList.push({
-              row: i + 1,
+              row: rowIndex + 1,
               challanNo: challanNo || "Empty",
               billNum: billNum || "Empty",
               error: "Missing required fields",
               reason: reason
             });
-            
-            addLog(`Row ${i+1}: ${reason} (ChallanNo: ${challanNo || 'empty'}, BillNum: ${billNum || 'empty'})`, "warning");
+            batchLogs.push({ msg: `Row ${rowIndex+1}: ${reason}`, type: "warning" });
             failed++;
             continue;
           }
 
           try {
-            const dq = query(
-              collection(db, "TblDispatch"),
-              where("ChallanNo", "==", challanNo),
-              where("FactoryName", "==", factory)
-            );
-
-            const ds = await getDocs(dq);
-            if (ds.empty) {
+            const dispatchDoc = dispatchMap[challanNo];
+            
+            if (!dispatchDoc) {
               failedList.push({
-                row: i + 1,
+                row: rowIndex + 1,
                 challanNo,
                 billNum,
                 error: "Dispatch not found",
                 reason: `Challan ${challanNo} not found in ${factory} factory`
               });
-              addLog(`Row ${i+1}: Dispatch not found for challan ${challanNo} in ${factory}`, "warning");
+              batchLogs.push({ msg: `Row ${rowIndex+1}: Dispatch not found for challan ${challanNo} in ${factory}`, type: "warning" });
               failed++;
               continue;
             }
 
-            const dispatchDoc = ds.docs[0];
-
-            const bq = query(
-              collection(db, "BillTable"),
-              where("BillNum", "==", billNum),
-              where("FactoryName", "==", factory)
-            );
-
-            const bs = await getDocs(bq);
             let billId;
-
-            if (!bs.empty) {
-              billId = bs.docs[0].id;
-              addLog(`Row ${i+1}: Using existing bill ${billNum}`, "info");
+            if (billCache[billNum]) {
+              billId = billCache[billNum]; // Use cached
             } else {
+              // Create new bill via Batch reference
+              const newBillRef = doc(collection(db, "BillTable"));
+              billId = newBillRef.id;
+              billCache[billNum] = billId; // Cache immediately
+              
               const billData = {
                 BillNum: billNum,
                 BillDate: billDate,
@@ -299,14 +331,12 @@ const BillUpload = () => {
               if (factory === "JSW" && billTypeOrLR) {
                 billData.LRNumber = billTypeOrLR;
               }
-              
               if (factory === "MP BIRLA" && billTypeOrLR) {
                 billData.OriginalBillType = billTypeOrLR;
               }
               
-              const billRef = await addDoc(collection(db, "BillTable"), billData);
-              billId = billRef.id;
-              addLog(`Row ${i+1}: Created new bill ${billNum}`, "success");
+              batch.set(newBillRef, billData);
+              currentBatchOps++;
             }
 
             const updateData = {
@@ -323,23 +353,62 @@ const BillUpload = () => {
               updateData.LRNumber = billTypeOrLR;
             }
             
-            await updateDoc(doc(db, "TblDispatch", dispatchDoc.id), updateData);
-
+            batch.update(doc(db, "TblDispatch", dispatchDoc.id), updateData);
+            currentBatchOps++;
             success++;
-            addLog(`Row ${i+1}: Successfully updated challan ${challanNo}`, "success");
+
+            // COMMIT BATCH IF FULL
+            if (currentBatchOps >= CHUNK_SIZE) {
+              try {
+                await batch.commit();
+              } catch (e) {
+                console.warn("Batch failed, retrying...", e);
+                await new Promise(r => setTimeout(r, 1000));
+                await batch.commit(); // Simple retry mechanism
+              }
+              
+              batchCount++;
+              
+              // Smooth UI Progress every batch
+              const currentProgress = 15 + Math.floor((i / parsedRows.length) * 85);
+              setProgress(currentProgress);
+              setCurrentRow(rowIndex);
+              
+              addLog(`Committed batch ${batchCount} (${i + 1}/${parsedRows.length} rows processed)`, "success");
+
+              // Reset batch
+              batch = writeBatch(db);
+              currentBatchOps = 0;
+            }
 
           } catch (err) {
             failedList.push({
-              row: i + 1,
+              row: rowIndex + 1,
               challanNo: challanNo || "Unknown",
               billNum: billNum || "Unknown",
               error: err.message,
               reason: "Processing error"
             });
             failed++;
-            addLog(`Row ${i+1}: Failed challan ${challanNo || 'Unknown'} - ${err.message}`, "error");
-            console.error(`Error processing row ${i+1}:`, err);
           }
+        }
+
+        // COMMIT REMAINING OPS
+        if (currentBatchOps > 0) {
+          try {
+            await batch.commit();
+          } catch (e) {
+            await new Promise(r => setTimeout(r, 1000));
+            await batch.commit();
+          }
+        }
+        
+        // Flush final warnings silently if too many
+        if (batchLogs.length > 0) {
+          setUploadLog(prev => {
+            const newLogs = batchLogs.map(l => ({ timestamp: new Date().toLocaleTimeString(), message: l.msg, type: l.type }));
+            return [...prev, ...newLogs].slice(-30);
+          });
         }
 
         // Update progress: processing complete
