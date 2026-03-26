@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from "../firebaseConfig";
-import { collection, getDocs, query, where, updateDoc, doc, serverTimestamp, limit } from "firebase/firestore";
+import { collection, getDocs, query, where, updateDoc, doc, serverTimestamp, limit, Timestamp } from "firebase/firestore";
 import { useAuth } from "../context/AuthContext";
 import * as XLSX from 'xlsx';
 import './GstUpload.css';
@@ -132,82 +132,101 @@ const GstUpload = () => {
         let failedRecords = [];
 
         try {
-            // ── 1. LOAD ALL FACTORY BILLS ONCE ──────────────────────────────
-            // BillTable is the correct source — it has BillDate, Gst and FactoryName.
-            console.log(`[GstUpload] Querying BillTable where FactoryName == "${selectedFactoryId}"`);
-
-            const billQuery = query(
-                collection(db, "BillTable"),
-                where("FactoryName", "==", selectedFactoryId)
-            );
-            const billSnap = await getDocs(billQuery);
-
-            // Debug: show a sample doc so you can see the EXACT FactoryName stored
-            if (billSnap.docs.length > 0) {
-                const sample = billSnap.docs[0].data();
-                console.log("[GstUpload] ✅ Records found! Sample doc:", sample);
-                console.log("[GstUpload] FactoryName in Firestore:", JSON.stringify(sample.FactoryName));
-            } else {
-                // Load one random doc so you can see the actual FactoryName value stored
-                const sampleSnap = await getDocs(query(collection(db, "BillTable"), limit(1)));
-                if (sampleSnap.docs.length > 0) {
-                    const sampleData = sampleSnap.docs[0].data();
-                    console.warn("[GstUpload] ⚠️ 0 bills matched. You selected:", JSON.stringify(selectedFactoryId));
-                    console.warn("[GstUpload] ⚠️ BillTable actual FactoryName value:", JSON.stringify(sampleData.FactoryName));
-                    console.warn("[GstUpload] ⚠️ Full sample doc:", sampleData);
-                } else {
-                    console.warn("[GstUpload] ⚠️ BillTable collection appears to be empty!");
-                }
-            }
-
-            // Build O(1) lookup map
-            // Key = "YYYY-M-D_gstInt"
-            const billMap = new Map();
-            billSnap.docs.forEach(d => {
-                const data = d.data();
-
-                // Firestore Timestamp → JS Date
-                const billDateRaw = data.BillDate?.toDate
-                    ? data.BillDate.toDate()
-                    : data.BillDate ? new Date(data.BillDate) : null;
-                if (!billDateRaw || isNaN(billDateRaw)) {
-                    console.warn("[GstUpload] Skipped doc (bad BillDate):", d.id, data.BillDate);
-                    return;
-                }
-
-                const dateKey =
-                    billDateRaw.getFullYear() + "-" +
-                    (billDateRaw.getMonth() + 1) + "-" +
-                    billDateRaw.getDate();
-
-                // Support: Gst (ASP.NET) + common React casings
-                const rawGst =
-                    data.Gst ?? data.GSTAmount ?? data.GstAmount ?? data.gstAmount ?? null;
-                if (rawGst == null) {
-                    console.warn("[GstUpload] Skipped doc (no GST field):", d.id, "fields:", Object.keys(data));
-                    return;
-                }
-
-                // Math.trunc strips decimals so 2430.2 (Excel) and 2430.20 (Firestore) both → 2430
-                const gstInt = Math.trunc(Number(rawGst));
-                const key = `${dateKey}_${gstInt}`;
-                console.log("[GstUpload] Map key added:", key);
-                
-                // Keep an array of matched docs in case of duplicate amounts on the same date
-                if (!billMap.has(key)) {
-                    billMap.set(key, []);
-                }
-                billMap.get(key).push(d);
-            });
-
-            console.log(`[GstUpload] Loaded ${billMap.size} BillTable records for factory "${selectedFactoryId}"`);
-
-            // ── 2. READ EXCEL ────────────────────────────────────────────────
+            // ── 1. READ EXCEL & FIND DATE RANGE ──────────────────────────────
             const buffer = await selectedFile.arrayBuffer();
             const wb = XLSX.read(buffer);
             const sheet = wb.Sheets[wb.SheetNames[0]];
             const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
             const dataRows = rows.slice(1); // skip header
+
+            let minDate = null;
+            let maxDate = null;
+
+            for (let i = 0; i < dataRows.length; i++) {
+                const row = dataRows[i];
+                if (!row || row.length === 0) continue;
+                const bDate = parseDate(row[1]);
+                if (bDate && !isNaN(bDate)) {
+                    if (!minDate || bDate < minDate) minDate = bDate;
+                    if (!maxDate || bDate > maxDate) maxDate = bDate;
+                }
+            }
+
+            if (!minDate || !maxDate) {
+                setErrorMessage("Could not parse dates from the Excel file.");
+                setIsUploading(false);
+                return;
+            }
+
+            // Expand date range by 3 days for safety (timezone/boundary issues)
+            const startDate = new Date(minDate);
+            startDate.setDate(startDate.getDate() - 3);
+            startDate.setHours(0, 0, 0, 0);
+
+            const endDate = new Date(maxDate);
+            endDate.setDate(endDate.getDate() + 3);
+            endDate.setHours(23, 59, 59, 999);
+
+            // ── 2. OPTIMIZED FIRESTORE QUERY ─────────────────────────────────
+            console.log(`[GstUpload] Querying BillTable for "${selectedFactoryId}" between ${startDate.toISOString()} and ${endDate.toISOString()}`);
+            
+            let billSnap;
+            try {
+                const optimalQuery = query(
+                    collection(db, "BillTable"),
+                    where("FactoryName", "==", selectedFactoryId),
+                    where("BillDate", ">=", Timestamp.fromDate(startDate)),
+                    where("BillDate", "<=", Timestamp.fromDate(endDate))
+                );
+                billSnap = await getDocs(optimalQuery);
+                console.log(`[GstUpload] ✅ OPTIMAL FETCH: Loaded ${billSnap.docs.length} bills in date range.`);
+            } catch (err) {
+                if (err.message && err.message.includes("index")) {
+                    console.warn("⚠️ [GstUpload] Missing composite index! Check Firebase Console.", err.message);
+                    console.warn("⚠️ Falling back to full factory download (high read cost!).");
+                    
+                    const fallbackQuery = query(
+                        collection(db, "BillTable"),
+                        where("FactoryName", "==", selectedFactoryId)
+                    );
+                    billSnap = await getDocs(fallbackQuery);
+                    console.log(`[GstUpload] ⚠️ FALLBACK FETCH: Loaded ${billSnap.docs.length} total factory bills.`);
+                } else {
+                    throw err;
+                }
+            }
+
+            // Build O(1) lookup map
+            const billMap = new Map();
+            if (billSnap && billSnap.docs) {
+                billSnap.docs.forEach(d => {
+                    const data = d.data();
+
+                    const billDateRaw = data.BillDate?.toDate
+                        ? data.BillDate.toDate()
+                        : data.BillDate ? new Date(data.BillDate) : null;
+                    if (!billDateRaw || isNaN(billDateRaw)) return;
+
+                    const dateKey =
+                        billDateRaw.getFullYear() + "-" +
+                        (billDateRaw.getMonth() + 1) + "-" +
+                        billDateRaw.getDate();
+
+                    const rawGst =
+                        data.Gst ?? data.GSTAmount ?? data.GstAmount ?? data.gstAmount ?? null;
+                    if (rawGst == null) return;
+
+                    const gstInt = Math.trunc(Number(rawGst));
+                    const key = `${dateKey}_${gstInt}`;
+                    
+                    if (!billMap.has(key)) {
+                        billMap.set(key, []);
+                    }
+                    billMap.get(key).push(d);
+                });
+            }
+
+            console.log(`[GstUpload] Built lookup map with ${billMap.size} unique keys.`);
 
             // ── 3. MATCH EACH ROW AGAINST IN-MEMORY MAP ──────────────────────
             for (let i = 0; i < dataRows.length; i++) {

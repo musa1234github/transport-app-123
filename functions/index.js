@@ -59,17 +59,49 @@ exports.exportDispatches = onRequest(
       // =========================
       // 🔥 FIRESTORE QUERY
       // =========================
-      const snapshot = await admin.firestore()
-        .collection("TblDispatch")
-        .where("FactoryName", "==", factory)
+      let queryReq = admin.firestore().collection("TblDispatch");
+
+      if (factory !== "ALL") {
+        queryReq = queryReq.where("FactoryName", "==", factory);
+      }
+
+      queryReq = queryReq
         .where("DispatchDate", ">=", from)
         .where("DispatchDate", "<=", to)
-        .get();
+        .limit(1000); // Safety limit for performance and cost
+
+      const snapshot = await queryReq.get();
 
       console.log("Documents Found:", snapshot.size);
 
       if (snapshot.empty) {
         return res.status(404).send("No records found");
+      }
+
+      // =========================
+      // 📦 FETCH PAYMENTS & GST INFO
+      // =========================
+      const billIds = new Set();
+      snapshot.forEach(doc => {
+        const data = doc.data();
+        if (data.BillID) {
+          billIds.add(data.BillID);
+        }
+      });
+
+      const billMap = {};
+      if (billIds.size > 0) {
+        const billArray = Array.from(billIds);
+        for (let i = 0; i < billArray.length; i += 30) {
+          const chunk = billArray.slice(i, i + 30);
+          const billsSnap = await admin.firestore()
+            .collection("BillTable")
+            .where(admin.firestore.FieldPath.documentId(), "in", chunk)
+            .get();
+          billsSnap.forEach(b => {
+            billMap[b.id] = b.data();
+          });
+        }
       }
 
       // =========================
@@ -81,26 +113,41 @@ exports.exportDispatches = onRequest(
         const data = doc.data();
 
         let dispatchDate = "";
-
         if (data.DispatchDate) {
-          // If Firestore Timestamp
           if (typeof data.DispatchDate.toDate === "function") {
             dispatchDate = data.DispatchDate.toDate();
-          }
-          // If already JS Date
-          else if (data.DispatchDate instanceof Date) {
+          } else if (data.DispatchDate instanceof Date) {
             dispatchDate = data.DispatchDate;
-          }
-          // If string
-          else {
+          } else {
             dispatchDate = new Date(data.DispatchDate);
+          }
+        }
+        
+        const billInfo = data.BillID ? billMap[data.BillID] || {} : {};
+        
+        let paymentDate = "";
+        if (billInfo.PaymentRecDate) {
+          if (typeof billInfo.PaymentRecDate.toDate === "function") {
+             paymentDate = billInfo.PaymentRecDate.toDate();
+          } else if (billInfo.PaymentRecDate instanceof Date) {
+             paymentDate = billInfo.PaymentRecDate;
+          } else {
+             paymentDate = new Date(billInfo.PaymentRecDate);
           }
         }
 
         rows.push({
           id: doc.id,
           ...data,
-          DispatchDate: dispatchDate
+          DispatchDate: dispatchDate,
+          // Augmented Payments & GST Fields
+          GST: billInfo.Gst || 0,
+          TDS: billInfo.Tds || 0,
+          ActualAmount: billInfo.ActualAmount || 0,
+          PaymentReceived: billInfo.PaymentReceived || 0,
+          PaymentShortage: billInfo.PaymentShortage || 0,
+          PaymentNumber: billInfo.PaymentNumber || "",
+          PaymentDate: paymentDate
         });
       });
 

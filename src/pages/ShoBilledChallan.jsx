@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState, useCallback, useMemo } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { db, auth } from "../firebaseConfig";
 import {
   collection,
@@ -126,16 +126,9 @@ const ShoBilledChallan = () => {
       // ── Build server-side query constraints ──────────────────────────────
       const constraints = [];
 
-      // ==========================================
-      // ⚠️ TEMPORARY DIAGNOSTIC TEST
-      // ==========================================
-      /*
-      // 1. Factory filter — Firestore WHERE on DisVid
+      // 1. Factory filter — Firestore WHERE on FactoryName
       if (filterFactory) {
-        const disVid = Object.keys(factoryMap)
-          .find(key => factoryMap[key] === filterFactory);
-
-        constraints.push(where("DisVid", "==", parseInt(disVid)));
+        constraints.push(where("FactoryName", "==", filterFactory));
       }
 
       // 2. Date range — convert JS Date → Firestore Timestamp for WHERE clauses
@@ -155,10 +148,9 @@ const ShoBilledChallan = () => {
       if (fromDate || toDate) {
         constraints.push(orderBy("DispatchDate", "desc"));
       }
-      */
 
-      // 4. Cap reads at 20 for pure diagnostic data fetch
-      const READ_LIMIT = 20;
+      // 4. Cap reads at 500 
+      const READ_LIMIT = 500;
       constraints.push(limit(READ_LIMIT));
 
       const q = query(collection(db, "TblDispatch"), ...constraints);
@@ -204,7 +196,7 @@ const ShoBilledChallan = () => {
         row.BillNum = String(row.BillNum || "").trim();
 
         return row;
-      }).filter(row => row.BillNum && String(row.BillNum).trim() !== "");
+      });
 
       setDispatches(resultData);
       setDataLoaded(true);
@@ -288,7 +280,12 @@ const ShoBilledChallan = () => {
     if (!dataLoaded) return [];
 
     return dispatches.filter(d => {
-      const { searchTerm } = appliedFilters;
+      const { searchTerm, filterFactory } = appliedFilters;
+
+      // Factory filter (client-side fallback to ensure strict match)
+      if (filterFactory && d.FactoryName && d.FactoryName !== filterFactory) {
+        return false;
+      }
 
       // Search term filtering
       if (searchTerm) {

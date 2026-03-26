@@ -136,6 +136,7 @@ const DispatchExport = () => {
           style={{ padding: 8, width: 200, fontSize: 14 }}
         >
           <option value="">Select Factory</option>
+          <option value="ALL">All Factories</option>
           <option value="JSW">JSW</option>
           <option value="ULTRATECH">ULTRATECH</option>
           <option value="MANIGARH">MANIGARH</option>

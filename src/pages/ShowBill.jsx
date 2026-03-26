@@ -484,8 +484,8 @@ const ShowBill = ({ userRole }) => {
 
             const fp = toNum(r.FinalPrice);
             const taxable = toNum(r.UnitPrice) * toNum(r.DispatchQuantity);
-            // A dispatch has a valid negotiated FinalPrice if it's > 0 AND less than TaxableAmount
-            const fpValid = fp > 0 && fp < taxable;
+            // Allow valid FinalPrice if it's > 0 when TaxableAmount is 0, or if it's <= TaxableAmount
+            const fpValid = fp > 0 && (taxable === 0 || fp <= taxable);
 
             row["LR Quantity"] += 1;
             row["Bill Quantity"] += toNum(r.DispatchQuantity);
@@ -518,9 +518,17 @@ const ShowBill = ({ userRole }) => {
           const allHaveFP = row["_dispatchCount"] > 0
             && row["_fpValidCount"] === row["_dispatchCount"];
 
-          const base = allHaveFP ? row["_totalFinalPrice"] : row["Taxable Amount"];
+          const totalFP = row["_totalFinalPrice"];
+          const base = allHaveFP ? totalFP : row["Taxable Amount"];
 
-          row["Final Price"] = allHaveFP ? row["_totalFinalPrice"] : 0;
+          // If db had 0 for Taxable (missing UnitPrice), UI Taxable gets the base used for tax calculation
+          if (row["Taxable Amount"] === 0 && base > 0) {
+            row["Taxable Amount"] = base;
+          }
+
+          // "only the final price should be the zero if the final amount is equel to the taxable else final amount"
+          row["Final Price"] = (totalFP === row["Taxable Amount"]) ? 0 : totalFP;
+
           row["GST"] = base * GST_RATE;
           row["TDS"] = base * TDS_RATE;
           row["Actual Amount"] = base + row["GST"];

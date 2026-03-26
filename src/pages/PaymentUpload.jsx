@@ -368,8 +368,8 @@ const PaymentUpload = () => {
           seenRows.add(uniqueRowKey);
 
           // Validate required fields and enforce format
-          if (!billNumber || !billNumber.match(/^BILL/i)) {
-            addLog(`Row ${i} skipped: Invalid Bill Number (Must start with BILL)`, "warning");
+          if (!billNumber || billNumber.length < 3) {
+            addLog(`Row ${i} skipped: Invalid or Missing Bill Number`, "warning");
             skipped++;
             continue;
           }
@@ -447,20 +447,18 @@ const PaymentUpload = () => {
             });
           }
 
-          // STRICT MODE: Abort if Bill doesn't exist
+          // Log a warning if Bill doesn't exist, but allow the upload to proceed
           if (!currentBillExists) {
-              addLog(`Row ${i} skipped: STRICT MODE - Bill ${billNumber} does not exist in DB!`, "error");
-              skipped++;
-              continue;
+              addLog(`Row ${i} warning: Bill ${billNumber} does not exist in DB yet - will be created`, "warning");
           }
 
-          // Proceed with Audit Logging now that destruction is avoided
+          // Proceed with Audit Logging
           if (fetchedBillData && !seenDocs.has(billPath)) {
               batch.set(doc(collection(db, "UploadLogs")), {
                   sessionId: sessionId,
                   docPath: billPath,
-                  action: "UPDATE", // Bill is guaranteed to exist at this point
-                  oldData: fetchedBillData.data(),
+                  action: fetchedBillData.exists() ? "UPDATE" : "CREATE",
+                  oldData: fetchedBillData.exists() ? fetchedBillData.data() : null,
                   timestamp: serverTimestamp()
               });
               batchOpCount++;
