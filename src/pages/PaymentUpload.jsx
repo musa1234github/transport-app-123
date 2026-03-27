@@ -15,7 +15,8 @@ import {
   writeBatch,
   orderBy,
   limit,
-  deleteDoc
+  deleteDoc,
+  Timestamp
 } from "firebase/firestore";
 import { db } from "../firebaseConfig";
 
@@ -359,6 +360,10 @@ const PaymentUpload = () => {
           const shortageCleaned = shortageStr.replace(/[-â€“]/g, "").trim();
           const shortage = safeNum(shortageCleaned);
 
+          // Optional columns: BillDate (col 8), BillType (col 9)
+          const billDate = parseDate(row[8]); // Optional, dd-mm-yy format
+          const billType = String(row[9] || "").trim();
+
           // Prevent exact duplicate processing within the same document loop
           const uniqueRowKey = `${billNumber}_${paymentNumber}`;
           if (seenRows.has(uniqueRowKey)) {
@@ -480,7 +485,7 @@ const PaymentUpload = () => {
           // Payment Table (Upsert)
           batch.set(paymentRef, {
             DocNumber: paymentNumber,
-            PayRecDate: paymentDate,
+            PayRecDate: Timestamp.fromDate(paymentDate),
             Shortage: shortage,
             FactoryName: factory,
             UpdatedAt: serverTimestamp(),
@@ -489,7 +494,9 @@ const PaymentUpload = () => {
           batchOpCount++;
           
           // Bill Table Update (Upsert to prevent full batch failure if bill doesn't exist)
-          batch.set(billRef, {
+          const billUpdateData = {
+            FactoryName: factory,  // CRITICAL: Required for ShowPayment factory filter
+            BillNum: billNumber,   // Ensure bill number is always set
             PaymentReceived: paymentReceived,
             ActualAmount: actualAmount,
             Tds: tds,
@@ -498,11 +505,15 @@ const PaymentUpload = () => {
             PaymentNumber: paymentNumber,
             // DENORMALIZED FIELDS - Eliminate N+1 queries to PaymentTable
             PaymentDocNumber: paymentNumber,
-            PaymentRecDate: paymentDate,
+            PaymentRecDate: Timestamp.fromDate(paymentDate),
             PaymentShortage: shortage,
             Shortage: shortage, // Keep for backward compatibility
             UpdatedAt: serverTimestamp()
-          }, { merge: true });
+          };
+          // Only write BillDate/BillType if provided in Excel (avoid overwriting existing values with empty)
+          if (billDate) billUpdateData.BillDate = Timestamp.fromDate(billDate);
+          if (billType) billUpdateData.BillType = billType;
+          batch.set(billRef, billUpdateData, { merge: true });
           batchOpCount++;
           
           success++;
@@ -542,10 +553,10 @@ const PaymentUpload = () => {
 
   const downloadTemplate = () => {
     const sampleData = [
-      ["BillNumber", "PaymentNumber", "PaymentDate", "ActualAmount", "TDS", "GST", "PaymentReceived", "Shortage"],
-      ["BILL-001", "PAY-001", "15-01-26", 50000, 2500, 9000, 48000, "500"],
-      ["BILL-002", "PAY-002", "16-01-26", 75000, 3750, 13500, 72000, "250"],
-      ["BILL-003", "PAY-003", "17-01-26", 60000, 3000, 10800, 57600, "-300"]
+      ["BillNumber", "PaymentNumber", "PaymentDate", "ActualAmount", "TDS", "GST", "PaymentReceived", "Shortage", "BillDate", "BillType"],
+      ["BILL-001", "PAY-001", "15-01-26", 50000, 2500, 9000, 48000, "500", "01-01-26", "Transport"],
+      ["BILL-002", "PAY-002", "16-01-26", 75000, 3750, 13500, 72000, "250", "05-01-26", "Transport"],
+      ["BILL-003", "PAY-003", "17-01-26", 60000, 3000, 10800, 57600, "-300", "10-01-26", "Loading"]
     ];
 
     const ws = XLSX.utils.aoa_to_sheet(sampleData);
@@ -595,10 +606,10 @@ const PaymentUpload = () => {
       }}>
         <h4>Upload Payment Excel File:</h4>
         <p style={{ margin: "10px 0", color: "#6c757d" }}>
-          Excel must have columns: BillNumber, PaymentNumber, PaymentDate, ActualAmount, TDS, GST, PaymentReceived, Shortage
+          Excel must have columns: BillNumber, PaymentNumber, PaymentDate, ActualAmount, TDS, GST, PaymentReceived, Shortage, BillDate (optional), BillType (optional)
         </p>
         <p style={{ margin: "10px 0", color: "#6c757d", fontSize: "14px" }}>
-          <strong>Important:</strong> Date format must be <strong>dd-mm-yy</strong> (e.g., 15-01-26)
+          <strong>Important:</strong> Date format must be <strong>dd-mm-yy</strong> (e.g., 15-01-26). BillDate and BillType are optional but recommended.
         </p>
 
         <div style={{ marginBottom: "15px" }}>

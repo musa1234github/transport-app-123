@@ -19,7 +19,19 @@ import './ShowPayment.css';
 /* ===== HELPER FUNCTIONS ===== */
 const toDate = (v) => {
   if (!v) return null;
-  if (v.seconds) return new Date(v.seconds * 1000);
+  // Firestore Timestamp object with toDate() method
+  if (typeof v.toDate === 'function') return v.toDate();
+  // Plain object with seconds property (serialized Timestamp)
+  if (v.seconds !== undefined) return new Date(v.seconds * 1000);
+  // Already a Date object
+  if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
+  // Number (epoch milliseconds or seconds)
+  if (typeof v === 'number') {
+    // If the number is very large, it's likely epoch ms; if small, epoch seconds
+    const d = v > 1e12 ? new Date(v) : new Date(v * 1000);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  // String fallback
   const d = new Date(v);
   return isNaN(d.getTime()) ? null : d;
 };
@@ -276,36 +288,80 @@ const ShowPayment = ({ userRole }) => {
       let fromDateObj = null;
       let toDateObj = null;
 
-      let queryConstraints = [];
-
-      // Add factory filter
-      if (appliedFilters.factoryFilter) {
-        queryConstraints.push(where("FactoryName", "==", appliedFilters.factoryFilter));
-      }
-
-      // Add date range filter on PaymentRecDate
       if (appliedFilters.fromDate) {
         fromDateObj = new Date(appliedFilters.fromDate);
         fromDateObj.setHours(0, 0, 0, 0);
-        queryConstraints.push(where("PaymentRecDate", ">=", Timestamp.fromDate(fromDateObj)));
       }
       if (appliedFilters.toDate) {
         toDateObj = new Date(appliedFilters.toDate);
         toDateObj.setHours(23, 59, 59, 999);
-        queryConstraints.push(where("PaymentRecDate", "<=", Timestamp.fromDate(toDateObj)));
       }
 
-      // orderBy must come after where clauses
-      queryConstraints.push(orderBy("PaymentRecDate", "desc"));
+      let queryConstraints = [];
 
-      // Fetch ALL matching records — no limit, no cursor
-      // This avoids composite index requirement for startAfter/endBefore
+      // Add factory filter — single equality filter, no composite index needed
+      if (appliedFilters.factoryFilter) {
+        queryConstraints.push(where("FactoryName", "==", appliedFilters.factoryFilter));
+      }
+
+      // Fetch ALL matching records for this factory
+      // PaymentReceived > 0 and date filtering are done client-side
+      // to avoid composite index requirements
       const billQuery = query(collection(db, "BillTable"), ...queryConstraints);
       const billSnap = await getDocs(billQuery);
 
       console.log(`📦 Firestore returned ${billSnap.docs.length} docs`);
 
-      const billData = processDocs(billSnap.docs, fromDateObj, toDateObj, hasDateFilter);
+      // DEBUG: Log all docs that contain specific bill numbers for troubleshooting
+      billSnap.docs.forEach(d => {
+        const data = d.data();
+        const billNum = data.BillNum || "";
+        // Log docs with bill numbers containing common identifiers for debugging
+        if (billNum.includes("1073") || billNum.includes("1074")) {
+          console.log(`🔍 DEBUG Doc ${d.id}:`, {
+            BillNum: billNum,
+            PaymentReceived: data.PaymentReceived,
+            PaymentRecDate: data.PaymentRecDate,
+            PaymentDate: data.PaymentDate,
+            PaymentNumber: data.PaymentNumber,
+            FactoryName: data.FactoryName,
+            hasPayment: toNum(data.PaymentReceived) > 0
+          });
+        }
+      });
+
+      // Filter to only records with payments, then apply date filter
+      const paidDocs = billSnap.docs.filter(d => toNum(d.data().PaymentReceived) > 0);
+      console.log(`💰 Records with payments: ${paidDocs.length}`);
+
+      let billData = processDocs(paidDocs, fromDateObj, toDateObj, hasDateFilter);
+
+      // DEBUG: Log if specific bills were filtered out by date
+      if (hasDateFilter) {
+        const debugBills = paidDocs.filter(d => {
+          const bn = (d.data().BillNum || "");
+          return bn.includes("1073") || bn.includes("1074");
+        });
+        debugBills.forEach(d => {
+          const data = d.data();
+          const recDate = toDate(data.PaymentRecDate) || toDate(data.PaymentDate) || null;
+          const inRange = billData.some(bd => bd.id === d.id);
+          console.log(`📅 DEBUG Date filter for ${d.id}:`, {
+            PaymentRecDate: data.PaymentRecDate,
+            resolvedDate: recDate,
+            fromDate: fromDateObj,
+            toDate: toDateObj,
+            passedDateFilter: inRange
+          });
+        });
+      }
+
+      // Sort client-side by payment date descending (handles both PaymentRecDate and PaymentDate)
+      billData.sort((a, b) => {
+        const dateA = a.PaymentDate ? a.PaymentDate.getTime() : 0;
+        const dateB = b.PaymentDate ? b.PaymentDate.getTime() : 0;
+        return dateB - dateA;
+      });
 
       console.log(`✅ Total matching records: ${billData.length}`);
 
