@@ -336,6 +336,59 @@ const ShowPayment = ({ userRole }) => {
 
       let billData = processDocs(paidDocs, fromDateObj, toDateObj, hasDateFilter);
 
+      // ===== ENRICH MISSING BillDate/BillType FROM ORIGINAL BILL DOCS =====
+      // BillUpload creates bill docs (with auto-generated IDs) that have BillDate & BillType.
+      // PaymentUpload creates separate docs (with deterministic IDs like FACTORY_BILLNUM)
+      // that may NOT have BillDate/BillType. We use the already-fetched billSnap
+      // to build a lookup and fill in the gaps — no extra Firestore reads needed.
+      const billInfoLookup = {};  // BillNum → { BillDate, BillType }
+
+      // Build lookup from ALL docs in the snapshot (not just paid ones)
+      billSnap.docs.forEach(d => {
+        const data = d.data();
+        const billNum = data.BillNum || "";
+        if (!billNum) return;
+
+        const billDate = toDate(data.BillDate);
+        const billType = data.BillType || "";
+
+        // Store the info if this doc has BillDate or BillType
+        // Prefer docs that have BOTH fields; update only if better data found
+        if (billDate || billType) {
+          const existing = billInfoLookup[billNum];
+          if (!existing) {
+            billInfoLookup[billNum] = { BillDate: billDate, BillType: billType };
+          } else {
+            // Merge: fill in missing fields from this doc
+            if (!existing.BillDate && billDate) existing.BillDate = billDate;
+            if (!existing.BillType && billType) existing.BillType = billType;
+          }
+        }
+      });
+
+      // Fill in missing BillDate/BillType on payment records
+      let enrichedCount = 0;
+      billData.forEach(row => {
+        if ((!row.BillDate || !row.BillType) && row.BillNum) {
+          const lookup = billInfoLookup[row.BillNum];
+          if (lookup) {
+            if (!row.BillDate && lookup.BillDate) {
+              row.BillDate = lookup.BillDate;
+              row.BillDateObj = lookup.BillDate;
+              row.BillDateSortKey = formatDate(lookup.BillDate);
+            }
+            if (!row.BillType && lookup.BillType) {
+              row.BillType = lookup.BillType;
+            }
+            enrichedCount++;
+          }
+        }
+      });
+
+      if (enrichedCount > 0) {
+        console.log(`📋 Enriched ${enrichedCount} payment records with BillDate/BillType from original bill docs`);
+      }
+
       // DEBUG: Log if specific bills were filtered out by date
       if (hasDateFilter) {
         const debugBills = paidDocs.filter(d => {
