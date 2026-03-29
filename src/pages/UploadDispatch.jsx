@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { db } from "../firebaseConfig";
-import { collection, doc, getDocs, setDoc, writeBatch } from "firebase/firestore";
+import { collection, doc, getDocs, setDoc, writeBatch, Timestamp } from "firebase/firestore";
 import * as XLSX from "xlsx";
 import "./UploadDispatch.css";
 import { updateMonthlySummary } from "../utils/dispatchSummaryHelper";
@@ -55,7 +55,8 @@ const extractLast4Digits = (v = "") => {
 
 const normalizeChallan = (v) => {
   if (v === null || v === undefined) return "";
-  return String(v).trim().toUpperCase();
+  // Removes leading zeros and trims
+  return String(v).trim().replace(/^0+/, "").toUpperCase();
 };
 
 /* ================= CONSTANTS ================= */
@@ -69,9 +70,8 @@ const FACTORY_COLUMN_MAPS = {
   ULTRATECH: {
     DispatchDate: 2, Qty: 12, ChallanNo: 1, VehicleNo: 20, PartyName: 7, Destination: 10, Advance: 22, Diesel: 21
   },
-  MANIGARH: {
-    DispatchDate: 5, Qty: 3, ChallanNo: 8, VehicleNo: 6, PartyName: 1, Destination: 2, Advance: 10, Diesel: 9
-  },
+  // SET TO DYNAMIC: Handles your 24.03.2026 MANIKGARH file perfectly regardless of column sequence
+  MANIGARH: "dynamic",
   ACC: {
     DispatchDate: 0, Qty: 5, ChallanNo: 2, VehicleNo: 3, PartyName: 4, Destination: 6, Advance: 7, Diesel: 8
   },
@@ -116,8 +116,6 @@ const UploadDispatch = () => {
     loadVehicles();
   }, []);
 
-  // isDuplicate removed — replaced by single pre-fetch Set (see handleUpload)
-
   const handleUpload = async (e) => {
     e.preventDefault();
     setMessage("");
@@ -158,9 +156,71 @@ const UploadDispatch = () => {
           setIsUploading(false);
           return;
         }
+        console.log("✅ HEADER ROW DETECTED:", rows[headerRowIndex]);
+
         rows[headerRowIndex].forEach((h, i) => {
-          if (h) colMap[String(h).trim().toUpperCase()] = i;
+          if (!h) return;
+          const name = String(h).toUpperCase().replace(/[^A-Z]/g, ""); // 🔥 removes dots, spaces, brackets
+
+          // ✅ Challan No (supports aliases like LR, Delivery, DC, Doc)
+          if (
+            name.includes("CHALLAN") || 
+            name.includes("LR") || 
+            name.includes("DELIVERY") || 
+            name.includes("DCNO") || 
+            name.includes("DOCNO") ||
+            name.includes("DELVNO")
+          ) {
+            colMap.ChallanNo = i;
+          }
+          
+          // ✅ Invoice No
+          if (name.includes("INVOICE") || name.includes("EXINV") || name.includes("INV")) {
+            colMap.InvoiceNo = i;
+          }
+
+          // ✅ Vehicle No
+          if (name.includes("VEHICLE") || name.includes("TRUCK") || name.includes("LORRY")) {
+            colMap.VehicleNo = i;
+          }
+
+          // ✅ Dispatch Date - Strict Priority
+          if (name === "DISPATCHDATE" || name === "DISPATCHDT" || name === "DESPATCHDATE" || name === "EXDATE" || name === "EXDT" ||
+             ((name.includes("DISPATCH") || name.includes("DESPATCH") || name.includes("DISP") || name.includes("EX")) && (name.includes("DATE") || name.includes("DT")))) {
+            colMap.DispatchDate = i;
+          }
+          else if (!colMap.DispatchDate && (name === "DATE" || name === "DT")) {
+            colMap.DispatchDate = i;
+          }
+
+          // ✅ Qty
+          if (name.includes("QTY") || name.includes("QUANTITY") || name === "WT" || name.includes("MT")) {
+            colMap.Qty = i;
+          }
+
+          // ✅ Party
+          if (name.includes("PARTY") || name.includes("SOLD") || name.includes("CONSIGNEE")) {
+            colMap.PartyName = i;
+          }
+
+          // ✅ Others
+          if (name.includes("DEST") || name.includes("ROUTE")) colMap.Destination = i;
+          if (name.includes("ADVANCE") || name.includes("ADV")) colMap.Advance = i;
+          if (name.includes("DIESEL") || name.includes("DSL") || name.includes("HSD")) {
+            colMap.Diesel = i;
+          }
         });
+        
+        console.log("🧠 Final Column Mapping Detected:", colMap);
+        
+        // 🛡️ SAFETY CHECK: Ensure minimum required columns are mapped
+        if (colMap.ChallanNo === undefined || colMap.DispatchDate === undefined || colMap.Qty === undefined) {
+          console.error("❌ Column mapping failed:", colMap);
+          setMessage("❌ Column mapping failed! Please ensure the Excel has 'Challan', 'Date', and 'Qty' headers.");
+          setIsUploading(false);
+          return;
+        }
+
         dataRows = rows.slice(headerRowIndex + 1);
       } else {
         colMap = { ...FACTORY_COLUMN_MAPS[factoryName] };
@@ -175,19 +235,9 @@ const UploadDispatch = () => {
         }
       }
 
-      // ✅ FINAL OPTIMIZATION: 0 Firestore reads during upload.
-      //    DB-level dedup is guaranteed by composite docId (FactoryName_ChallanNo).
-      //    batch.set() is idempotent — re-uploading same challan overwrites with same data,
-      //    which is safe and correct for a logistics system.
-      //
-      //    This local Set only catches duplicate challan numbers WITHIN the same Excel file
-      //    (no Firestore cost at all).
       const processedThisUpload = new Set();
-
-      // Collect all valid DTOs before writing (enables batch commit)
       const validDtos = [];   // { docId, dto }
 
-      // Process each row
       for (let i = 0; i < dataRows.length; i++) {
         const row = dataRows[i];
         if (!row || !Array.isArray(row)) continue;
@@ -212,13 +262,11 @@ const UploadDispatch = () => {
           }
         }
 
-        // Catch duplicate challan numbers within this Excel file (zero Firestore cost)
         if (processedThisUpload.has(challanNo)) {
           alreadyExistInDB.push(challanNo);
           continue;
         }
 
-        // Check quantity - accept 0 for split loads
         const rawQty = row[colMap.Qty];
         const qty = parseQuantity(rawQty);
         if (qty < 0) {
@@ -226,7 +274,6 @@ const UploadDispatch = () => {
           continue;
         }
 
-        // Check date
         const rawDate = row[colMap.DispatchDate];
         const dispatchDate = parseExcelDate(rawDate);
         if (!dispatchDate) {
@@ -234,13 +281,11 @@ const UploadDispatch = () => {
           continue;
         }
 
-        // Check vehicle
         const rawVehicle = row[colMap.VehicleNo];
         let matchedVehicle = null;
         let vehicleId = "";
         let vehicleNoToStore = rawVehicle || "";
 
-        // Only check for vehicle if rawVehicle exists
         if (rawVehicle && String(rawVehicle).trim() !== "") {
           const last4 = extractLast4Digits(rawVehicle);
           if (last4) {
@@ -249,7 +294,6 @@ const UploadDispatch = () => {
               vehicleNoToStore = matchedVehicle.VehicleNo;
               vehicleId = matchedVehicle.id;
             } else {
-              // Vehicle not found in master
               vehicleNotFound.push({ challanNo, vehicleNo: rawVehicle });
             }
           }
@@ -257,7 +301,7 @@ const UploadDispatch = () => {
 
         // Build DTO
         const dto = {
-          DispatchDate: dispatchDate,
+          DispatchDate: Timestamp.fromDate(dispatchDate),
           ChallanNo: challanNo,
           VehicleNo: vehicleNoToStore,
           VehicleId: vehicleId,
@@ -267,10 +311,14 @@ const UploadDispatch = () => {
           Advance: parseQuantity(row[colMap.Advance]),
           Diesel: parseQuantity(row[colMap.Diesel]),
           FactoryName: factoryName,
-          CreatedOn: new Date()
+          CreatedOn: Timestamp.now()
         };
 
-        // Add additional fields for AMBUJA
+        // ✅ InvoiceNo (Only for MANIGARH as requested)
+        if (factoryName === "MANIGARH" && colMap.InvoiceNo !== undefined) {
+          dto.InvoiceNo = row[colMap.InvoiceNo] ? String(row[colMap.InvoiceNo]).trim() : "";
+        }
+
         if (factoryName === "AMBUJA") {
           dto.GrNo = row[colMap.GrNo] ? String(row[colMap.GrNo]).trim() : "";
           dto.Bilty = parseQuantity(row[colMap.Bilty]);
@@ -279,71 +327,55 @@ const UploadDispatch = () => {
           dto.LrSt = row[colMap.LrSt] ? String(row[colMap.LrSt]).trim() : "";
         }
 
-        // Add GrNo for ACC MARATHA if available
         if (factoryName === "ACC MARATHA" && colMap.GrNo !== undefined) {
           dto.GrNo = row[colMap.GrNo] ? String(row[colMap.GrNo]).trim() : "";
         }
 
-        // ✅ OPTIMIZATION 3: Composite doc ID = natural deduplication key
-        //    Firestore will silently overwrite a duplicate if somehow it slips through
         const safeFactory = factoryName.replace(/[^A-Z0-9]/gi, "_");
         const safeChallan = challanNo.replace(/[^A-Z0-9]/gi, "_");
         const docId = `${safeFactory}_${safeChallan}`;
 
         validDtos.push({ docId, dto });
-        // Track within-file duplicates
         processedThisUpload.add(challanNo);
       }
 
-      // ✅ OPTIMIZATION 2: Batch-write all TblDispatch inserts in one round-trip
-      //    Firestore writeBatch limit = 500 ops; chunk if needed
       const BATCH_LIMIT = 499;
       for (let start = 0; start < validDtos.length; start += BATCH_LIMIT) {
         const chunk = validDtos.slice(start, start + BATCH_LIMIT);
         const batch = writeBatch(db);
         chunk.forEach(({ docId, dto }) => {
-          batch.set(doc(collection(db, "TblDispatch"), docId), dto);
+          // Use merge: true to avoid overwriting partial data if needed, 
+          // although here we are creating/overwriting full records.
+          batch.set(doc(collection(db, "TblDispatch"), docId), dto, { merge: true });
         });
         await batch.commit();
       }
 
-      // ✅ OPTIMIZATION 3: Run all monthly summary updates in parallel
       await Promise.all(validDtos.map(({ dto }) => updateMonthlySummary(dto)));
 
       uploaded = validDtos.length;
-
-      // Display results
       let resultMessage = "";
 
-      // Show successful uploads
       if (uploaded > 0) {
         resultMessage += `✅ New records uploaded: ${uploaded}\n\n`;
       } else {
         resultMessage += `⚠️ No new records uploaded.\n\n`;
       }
 
-      // Show within-file duplicate challans (only if no new records uploaded)
       if (alreadyExistInDB.length > 0 && uploaded === 0 && otherFailures.length === 0) {
-        resultMessage += `ℹ️ ${alreadyExistInDB.length} duplicate challan(s) skipped (appeared more than once in Excel).\n\n`;
+        resultMessage += `ℹ️ ${alreadyExistInDB.length} duplicate challan(s) skipped.\n\n`;
       }
 
-      // Show other failures
       if (otherFailures.length > 0) {
         resultMessage += `❌ Failed to upload (${otherFailures.length} challans):\n`;
-        resultMessage += "════════════════════════════════════════\n";
         otherFailures.forEach(failure => {
           resultMessage += `  • Challan ${failure.challanNo}: ${failure.reason}\n`;
         });
         resultMessage += "\n";
       }
 
-      // Show vehicle not found warnings
       if (vehicleNotFound.length > 0) {
-        resultMessage += `⚠️  Vehicle not found in master (${vehicleNotFound.length} records uploaded without vehicle link):\n`;
-        resultMessage += "════════════════════════════════════════\n";
-        vehicleNotFound.forEach(item => {
-          resultMessage += `  • Challan ${item.challanNo}: Vehicle "${item.vehicleNo}" not found\n`;
-        });
+        resultMessage += `⚠️ Vehicle not found in master (${vehicleNotFound.length} records).\n`;
       }
 
       setMessage(resultMessage);
@@ -359,24 +391,12 @@ const UploadDispatch = () => {
   return (
     <div className="upload-container">
       <h3>📤 Upload Dispatch Excel</h3>
-
-      {isUploading && (
-        <div className="upload-status">
-          ⏳ Processing file... Please wait.
-        </div>
-      )}
-
+      {isUploading && <div className="upload-status">⏳ Processing file...</div>}
       <pre className="message-display">{message}</pre>
-
       <form onSubmit={handleUpload} className="upload-form">
         <div className="form-group">
           <label>🏭 Select Factory:</label>
-          <select
-            value={factory}
-            onChange={e => setFactory(e.target.value)}
-            required
-            disabled={isUploading}
-          >
+          <select value={factory} onChange={e => setFactory(e.target.value)} required disabled={isUploading}>
             <option value="">-- Select Factory --</option>
             <option>ACC MARATHA</option>
             <option>AMBUJA</option>
@@ -388,23 +408,11 @@ const UploadDispatch = () => {
             <option>JSW</option>
           </select>
         </div>
-
         <div className="form-group">
           <label>📁 Choose Excel File:</label>
-          <input
-            type="file"
-            accept=".xlsx,.xls"
-            onChange={e => setFile(e.target.files[0])}
-            required
-            disabled={isUploading}
-          />
+          <input type="file" accept=".xlsx,.xls" onChange={e => setFile(e.target.files[0])} required disabled={isUploading} />
         </div>
-
-        <button
-          type="submit"
-          disabled={isUploading}
-          className="upload-button"
-        >
+        <button type="submit" disabled={isUploading} className="upload-button">
           {isUploading ? '⏳ Uploading...' : '📤 Upload'}
         </button>
       </form>

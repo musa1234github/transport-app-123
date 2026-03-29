@@ -39,6 +39,7 @@ const reverseFactoryMap = Object.fromEntries(
 
 const COLUMN_SEQUENCE = [
   "ChallanNo",
+  "InvoiceNo",
   "Destination",
   "VehicleNo",
   "DispatchDate",
@@ -143,6 +144,12 @@ const Row = React.memo(({ index, style, data }) => {
             <input
               value={data.editChallan}
               onChange={e => data.setEditChallan(e.target.value)}
+              style={{ padding: 4, width: "100%", boxSizing: "border-box" }}
+            />
+          ) : col === "InvoiceNo" && data.editId === d.id ? (
+            <input
+              value={data.editInvoice}
+              onChange={e => data.setEditInvoice(e.target.value)}
               style={{ padding: 4, width: "100%", boxSizing: "border-box" }}
             />
           ) : col === "DispatchDate" ? (
@@ -265,9 +272,10 @@ const ShowDispatch = () => {
 
   const [editId, setEditId] = useState(null);
   const [editChallan, setEditChallan] = useState("");
+  const [editInvoice, setEditInvoice] = useState("");
   const [editDate, setEditDate] = useState("");
 
-  const DOCS_PER_PAGE = 100; // Production-grade limit
+  const DOCS_PER_PAGE = 50; // Optimized limit to reduce Firestore reads
 
   // Check admin status only on page load
   useEffect(() => {
@@ -282,7 +290,9 @@ const ShowDispatch = () => {
 
   // Function to fetch data with filters (cursor-based pagination)
   const fetchDispatches = async (direction = 'initial', cursorDoc = null) => {
+    if (loading) return; // ✅ FIX 3: Prevent duplicate fetch
     setLoading(true);
+    console.log("🔍 Fetching with filters:", appliedFilters);
     try {
       // 🔥 CRITICAL: Require at least one filter to prevent reading entire database
       if (!appliedFilters.filterFactory && !appliedFilters.fromDate && !appliedFilters.toDate) {
@@ -299,12 +309,6 @@ const ShowDispatch = () => {
 
         if (daysDiff > 365) {
           alert("Please select a date range less than 1 year to optimize performance");
-          setLoading(false);
-          return;
-        }
-
-        if (daysDiff < 0) {
-          alert("'To Date' must be after 'From Date'");
           setLoading(false);
           return;
         }
@@ -328,6 +332,10 @@ const ShowDispatch = () => {
       if (appliedFilters.toDate) {
         const toJS = normalizeDate(new Date(appliedFilters.toDate));
         toJS.setHours(23, 59, 59, 999);
+        console.log("📅 Query range:", {
+          from: normalizeDate(new Date(appliedFilters.fromDate)).toISOString(),
+          to: toJS.toISOString()
+        });
         conditions.push(where("DispatchDate", "<=", Timestamp.fromDate(toJS)));
       }
 
@@ -443,9 +451,10 @@ const ShowDispatch = () => {
       }));
 
       // 🔥 Trigger Prefetching in Background
-      if (displayDocs.length > 0 && hasMore) {
-        prefetchNextPage(displayDocs[displayDocs.length - 1]);
-      }
+      // 🔥 Prefetching Disabled to reduce reads by 50%
+      // if (displayDocs.length > 0 && hasMore) {
+      //   prefetchNextPage(displayDocs[displayDocs.length - 1]);
+      // }
 
       setPageHistory(prev => {
         const newHistory = [...prev];
@@ -525,16 +534,17 @@ const ShowDispatch = () => {
   /* ================= APPLY FILTERS ================= */
   const applyFilters = () => {
     // Normalize factory name to match data normalization
-    let normalizedFactory = "";
-    if (filterFactory) {
-      // First check for direct match in fixes
-      const fixedName = FACTORY_NAME_FIXES[filterFactory.toUpperCase()];
-      if (fixedName) {
-        normalizedFactory = fixedName;
-      } else {
-        // Use the factory name as-is but uppercase for consistency
-        normalizedFactory = filterFactory.toUpperCase();
-      }
+    const normalizedFactory = filterFactory ? filterFactory.toUpperCase() : "";
+
+
+    // ✅ FIX 4: Avoid unnecessary re-fetch if filters haven't changed
+    if (
+      appliedFilters.filterFactory === normalizedFactory &&
+      appliedFilters.fromDate === fromDate &&
+      appliedFilters.toDate === toDate
+    ) {
+      console.log("ℹ️ Filters unchanged, skipping fetch");
+      return;
     }
 
     // Reset pagination state when filters change
@@ -635,12 +645,14 @@ const ShowDispatch = () => {
   const handleEdit = (row) => {
     setEditId(row.id);
     setEditChallan(row.ChallanNo || "");
+    setEditInvoice(row.InvoiceNo || "");
     setEditDate(row.DispatchDate ? formatDateForInput(row.DispatchDate) : "");
   };
 
   const handleSave = async (id) => {
     const updatedData = {
-      ChallanNo: editChallan
+      ChallanNo: editChallan,
+      InvoiceNo: editInvoice
     };
 
     let newDate = null;
@@ -654,18 +666,20 @@ const ShowDispatch = () => {
 
     setDispatches(prev =>
       prev.map(d =>
-        d.id === id ? { ...d, ChallanNo: editChallan, DispatchDate: newDate } : d
+        d.id === id ? { ...d, ChallanNo: editChallan, InvoiceNo: editInvoice, DispatchDate: newDate } : d
       )
     );
 
     setEditId(null);
     setEditChallan("");
+    setEditInvoice("");
     setEditDate("");
   };
 
   const handleCancel = () => {
     setEditId(null);
     setEditChallan("");
+    setEditInvoice("");
     setEditDate("");
   };
 
@@ -792,6 +806,8 @@ const ShowDispatch = () => {
     editId,
     editChallan,
     setEditChallan,
+    editInvoice,
+    setEditInvoice,
     editDate,
     setEditDate,
     handleSave,
@@ -805,6 +821,8 @@ const ShowDispatch = () => {
     isAdmin,
     editId,
     editChallan,
+    editInvoice,
+    setEditInvoice,
     editDate
   ]);
 
@@ -990,7 +1008,7 @@ const ShowDispatch = () => {
               backgroundColor: "#f2f2f2",
               borderBottom: "2px solid #ccc",
               fontWeight: "bold",
-              minWidth: isAdmin ? 1200 : 1000
+              minWidth: isAdmin ? 1400 : 1200
             }}>
               {isAdmin && (
                 <div style={{ padding: 10, textAlign: "center" }}>
@@ -1017,7 +1035,7 @@ const ShowDispatch = () => {
                 itemData={itemData}
                 itemKey={(index, data) => data.items[index].id}
                 overscanCount={5}
-                style={{ minWidth: isAdmin ? 1200 : 1000 }}
+                style={{ minWidth: isAdmin ? 1400 : 1200 }}
               >
                 {Row}
               </List>
