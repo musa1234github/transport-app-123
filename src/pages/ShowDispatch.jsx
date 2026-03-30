@@ -275,7 +275,7 @@ const ShowDispatch = () => {
   const [editInvoice, setEditInvoice] = useState("");
   const [editDate, setEditDate] = useState("");
 
-  const DOCS_PER_PAGE = 50; // Optimized limit to reduce Firestore reads
+  const DOCS_PER_PAGE = 20; // Reduced to 20 to strictly control costs and meet the 'Under 20 reads' goal.
 
   // Check admin status only on page load
   useEffect(() => {

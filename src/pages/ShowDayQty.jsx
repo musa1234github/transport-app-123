@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { db } from "../firebaseConfig";
 import { collection, query, where, getDocs, orderBy, limit } from "firebase/firestore";
 import "./ShowDayQty.css";
@@ -199,7 +199,7 @@ const ShowDayQty = () => {
         firestoreQuery = query(
           collection(db, "TblDispatch"),
           orderBy("DispatchDate", "desc"),
-          limit(500)
+          limit(200)
         );
       }
 

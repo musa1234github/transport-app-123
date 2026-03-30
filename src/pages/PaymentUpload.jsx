@@ -336,12 +336,46 @@ const PaymentUpload = () => {
         let batch = writeBatch(db);
         let batchOpCount = 0;
         
-        const seenDocs = new Set(); // Prevents logging updates to the same doc twice in one session
-        const billExistsCache = new Map(); // Strictly tracks BillTable existence avoiding fake invoice creations
-        const seenRows = new Set(); // Prevent exact identical rows from overriding duplicates
+        // --- [NEW] SPEED OPTIMIZATION: BULK PREFETCH EXISTING RECORDS ---
+        addLog("Prefetching existing records for auditing...", "info");
+        
+        const billNums = new Set();
+        const payNums = new Set();
+        const billLookup = new Map();     // path -> doc
+        const paymentLookup = new Map();  // path -> doc
+        const seenRows = new Set();
+        const seenDocs = new Set();
 
-        // Note: Audit Logging generates 1 read per unique document touched. Expected and optimal for tracking.
-        addLog(`Found ${rows.length - 1} rows in Excel file. Uploading with Audit Tracking...`, "info");
+        // 1. Gather all unique IDs from the file
+        for (let i = 1; i < rows.length; i++) {
+          const r = rows[i];
+          if (!r || r.every(v => v === null || v === "")) continue;
+          
+          const bn = String(r[0] || "").trim().toUpperCase();
+          const pn = String(r[1] || "").trim().toUpperCase();
+          if (bn) billNums.add(bn);
+          if (pn) payNums.add(pn);
+        }
+
+        // 2. Bulk fetch Bills in chunks of 30
+        const billNumsArr = Array.from(billNums);
+        for (let i = 0; i < billNumsArr.length; i += 30) {
+          const chunk = billNumsArr.slice(i, i + 30);
+          const qBill = query(collection(db, "BillTable"), where("FactoryName", "==", factory), where("BillNum", "in", chunk));
+          const snap = await getDocs(qBill);
+          snap.forEach(d => billLookup.set(`BillTable/${d.id}`, d));
+        }
+
+        // 3. Bulk fetch Payments in chunks of 30
+        const payNumsArr = Array.from(payNums);
+        for (let i = 0; i < payNumsArr.length; i += 30) {
+          const chunk = payNumsArr.slice(i, i + 30);
+          const qPay = query(collection(db, "PaymentTable"), where("FactoryName", "==", factory), where("DocNumber", "in", chunk));
+          const snap = await getDocs(qPay);
+          snap.forEach(d => paymentLookup.set(`PaymentTable/${d.id}`, d));
+        }
+
+        addLog(`Prefetch complete (${billLookup.size} bills, ${paymentLookup.size} payments found).`, "success");
 
         for (let i = 1; i < rows.length; i++) {
           const row = rows[i];
@@ -365,6 +399,11 @@ const PaymentUpload = () => {
           const billType = String(row[9] || "").trim();
 
           // Prevent exact duplicate processing within the same document loop
+          const billId = `${factory}_${billNumber}`;
+          const paymentId = `${factory}_${paymentNumber}`;
+          const billPath = `BillTable/${billId}`;
+          const paymentPath = `PaymentTable/${paymentId}`;
+
           const uniqueRowKey = `${billNumber}_${paymentNumber}`;
           if (seenRows.has(uniqueRowKey)) {
              skipped++;
@@ -412,70 +451,34 @@ const PaymentUpload = () => {
             batchOpCount = 0;
           }
 
-          /* ===== DOC ID STRATEGY ===== */
-          const billId = `${factory}_${billNumber}`;
-          const paymentId = `${factory}_${paymentNumber}`;
-          
           const billRef = doc(db, "BillTable", billId);
           const paymentRef = doc(db, "PaymentTable", paymentId);
 
-          /* ===== STRICT VALIDATION & AUDIT LOGGING ===== */
-          const billPath = `BillTable/${billId}`;
-          const paymentPath = `PaymentTable/${paymentId}`;
-          
-          const docsToFetch = [];
-          // Force fetch if we haven't resolved Bill existence yet
-          if (!billExistsCache.has(billPath)) {
-              docsToFetch.push({ ref: billRef, path: billPath });
-          }
-          if (!seenDocs.has(paymentPath)) {
-              docsToFetch.push({ ref: paymentRef, path: paymentPath });
-          }
+          /* ===== ZERO-READ AUDIT LOGGING (Lookup from Map) ===== */
+          const billSnap = billLookup.get(billPath);
+          const paymentSnap = paymentLookup.get(paymentPath);
+          const currentBillExists = !!billSnap;
 
-          let currentBillExists = billExistsCache.get(billPath);
-          let fetchedBillData = null;
-          let fetchedPaymentData = null;
-
-          if (docsToFetch.length > 0) {
-            // Accelerate latency via parallel fetches
-            const snapshots = await Promise.all(docsToFetch.map(item => getDoc(item.ref)));
-            
-            snapshots.forEach((snap, index) => {
-               const path = docsToFetch[index].path;
-               if (path === billPath) {
-                   currentBillExists = snap.exists();
-                   billExistsCache.set(billPath, currentBillExists);
-                   fetchedBillData = snap;
-               } else if (path === paymentPath) {
-                   fetchedPaymentData = snap;
-               }
-            });
-          }
-
-          // Log a warning if Bill doesn't exist, but allow the upload to proceed
-          if (!currentBillExists) {
-              addLog(`Row ${i} warning: Bill ${billNumber} does not exist in DB yet - will be created`, "warning");
-          }
-
-          // Proceed with Audit Logging
-          if (fetchedBillData && !seenDocs.has(billPath)) {
+          // Log Audit for BillTable
+          if (!seenDocs.has(billPath)) {
               batch.set(doc(collection(db, "UploadLogs")), {
                   sessionId: sessionId,
                   docPath: billPath,
-                  action: fetchedBillData.exists() ? "UPDATE" : "CREATE",
-                  oldData: fetchedBillData.exists() ? fetchedBillData.data() : null,
+                  action: currentBillExists ? "UPDATE" : "CREATE",
+                  oldData: currentBillExists ? billSnap.data() : null,
                   timestamp: serverTimestamp()
               });
               batchOpCount++;
               seenDocs.add(billPath);
           }
 
-          if (fetchedPaymentData && !seenDocs.has(paymentPath)) {
+          // Log Audit for PaymentTable
+          if (!seenDocs.has(paymentPath)) {
               batch.set(doc(collection(db, "UploadLogs")), {
                   sessionId: sessionId,
                   docPath: paymentPath,
-                  action: fetchedPaymentData.exists() ? "UPDATE" : "CREATE",
-                  oldData: fetchedPaymentData.exists() ? fetchedPaymentData.data() : null,
+                  action: paymentSnap ? "UPDATE" : "CREATE",
+                  oldData: paymentSnap ? paymentSnap.data() : null,
                   timestamp: serverTimestamp()
               });
               batchOpCount++;

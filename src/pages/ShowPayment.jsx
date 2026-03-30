@@ -99,6 +99,15 @@ const ShowPayment = ({ userRole }) => {
   const [factoryFilter, setFactoryFilter] = useState("");
   const [paymentTypeFilter, setPaymentTypeFilter] = useState("");
 
+  /* ===== SERVER-SIDE PAGINATION STATES ===== */
+  const BILLS_PER_PAGE = 20;
+  const [firstDoc, setFirstDoc] = useState(null);
+  const [lastDoc, setLastDoc] = useState(null);
+  const [hasNextPage, setHasNextPage] = useState(false);
+  const [hasPrevPage, setHasPrevPage] = useState(false);
+  const [pageHistory, setPageHistory] = useState([]);
+  const [currentPageIndex, setCurrentPageIndex] = useState(0);
+
   /* ===== APPLY FILTERS STATE ===== */
   const [appliedFilters, setAppliedFilters] = useState({
     fromDate: "",
@@ -270,158 +279,119 @@ const ShowPayment = ({ userRole }) => {
   /* ================= LOAD ALL MATCHING PAYMENT DATA ================= */
   // Uses client-side pagination to avoid composite index requirement.
   // Fetches ALL records matching the filter and paginates in memory.
-  const load = async () => {
+  /* ================= LOAD DATA WITH CURSOR PAGINATION ================= */
+  const load = async (direction = 'initial', cursorDoc = null) => {
     setLoading(true);
     try {
-      console.log("🔍 Applied Filters:", appliedFilters);
-
-      // Guard against unfiltered reads that could scan the whole BillTable
       if (!appliedFilters.factoryFilter && !appliedFilters.fromDate && !appliedFilters.toDate) {
-        alert("Please select at least a factory or date range to load data");
-        setAllRows([]);
-        setHasRequestedData(false);
         setLoading(false);
         return;
       }
 
-      const hasDateFilter = appliedFilters.fromDate || appliedFilters.toDate;
-      let fromDateObj = null;
-      let toDateObj = null;
-
-      if (appliedFilters.fromDate) {
-        fromDateObj = new Date(appliedFilters.fromDate);
-        fromDateObj.setHours(0, 0, 0, 0);
-      }
-      if (appliedFilters.toDate) {
-        toDateObj = new Date(appliedFilters.toDate);
-        toDateObj.setHours(23, 59, 59, 999);
-      }
-
       let queryConstraints = [];
+      queryConstraints.push(orderBy("BillDate", "desc"));
 
-      // Add factory filter — single equality filter, no composite index needed
       if (appliedFilters.factoryFilter) {
         queryConstraints.push(where("FactoryName", "==", appliedFilters.factoryFilter));
       }
 
-      // Fetch ALL matching records for this factory
-      // PaymentReceived > 0 and date filtering are done client-side
-      // to avoid composite index requirements
-      const billQuery = query(collection(db, "BillTable"), ...queryConstraints);
-      const billSnap = await getDocs(billQuery);
-
-      console.log(`📦 Firestore returned ${billSnap.docs.length} docs`);
-
-      // DEBUG: Log all docs that contain specific bill numbers for troubleshooting
-      billSnap.docs.forEach(d => {
-        const data = d.data();
-        const billNum = data.BillNum || "";
-        // Log docs with bill numbers containing common identifiers for debugging
-        if (billNum.includes("1073") || billNum.includes("1074")) {
-          console.log(`🔍 DEBUG Doc ${d.id}:`, {
-            BillNum: billNum,
-            PaymentReceived: data.PaymentReceived,
-            PaymentRecDate: data.PaymentRecDate,
-            PaymentDate: data.PaymentDate,
-            PaymentNumber: data.PaymentNumber,
-            FactoryName: data.FactoryName,
-            hasPayment: toNum(data.PaymentReceived) > 0
-          });
-        }
-      });
-
-      // Filter to only records with payments, then apply date filter
-      const paidDocs = billSnap.docs.filter(d => toNum(d.data().PaymentReceived) > 0);
-      console.log(`💰 Records with payments: ${paidDocs.length}`);
-
-      let billData = processDocs(paidDocs, fromDateObj, toDateObj, hasDateFilter);
-
-      // ===== ENRICH MISSING BillDate/BillType FROM ORIGINAL BILL DOCS =====
-      // BillUpload creates bill docs (with auto-generated IDs) that have BillDate & BillType.
-      // PaymentUpload creates separate docs (with deterministic IDs like FACTORY_BILLNUM)
-      // that may NOT have BillDate/BillType. We use the already-fetched billSnap
-      // to build a lookup and fill in the gaps — no extra Firestore reads needed.
-      const billInfoLookup = {};  // BillNum → { BillDate, BillType }
-
-      // Build lookup from ALL docs in the snapshot (not just paid ones)
-      billSnap.docs.forEach(d => {
-        const data = d.data();
-        const billNum = data.BillNum || "";
-        if (!billNum) return;
-
-        const billDate = toDate(data.BillDate);
-        const billType = data.BillType || "";
-
-        // Store the info if this doc has BillDate or BillType
-        // Prefer docs that have BOTH fields; update only if better data found
-        if (billDate || billType) {
-          const existing = billInfoLookup[billNum];
-          if (!existing) {
-            billInfoLookup[billNum] = { BillDate: billDate, BillType: billType };
-          } else {
-            // Merge: fill in missing fields from this doc
-            if (!existing.BillDate && billDate) existing.BillDate = billDate;
-            if (!existing.BillType && billType) existing.BillType = billType;
-          }
-        }
-      });
-
-      // Fill in missing BillDate/BillType on payment records
-      let enrichedCount = 0;
-      billData.forEach(row => {
-        if ((!row.BillDate || !row.BillType) && row.BillNum) {
-          const lookup = billInfoLookup[row.BillNum];
-          if (lookup) {
-            if (!row.BillDate && lookup.BillDate) {
-              row.BillDate = lookup.BillDate;
-              row.BillDateObj = lookup.BillDate;
-              row.BillDateSortKey = formatDate(lookup.BillDate);
-            }
-            if (!row.BillType && lookup.BillType) {
-              row.BillType = lookup.BillType;
-            }
-            enrichedCount++;
-          }
-        }
-      });
-
-      if (enrichedCount > 0) {
-        console.log(`📋 Enriched ${enrichedCount} payment records with BillDate/BillType from original bill docs`);
+      if (appliedFilters.fromDate) {
+        const d = new Date(appliedFilters.fromDate);
+        d.setHours(0, 0, 0, 0);
+        queryConstraints.push(where("BillDate", ">=", Timestamp.fromDate(d)));
       }
 
-      // DEBUG: Log if specific bills were filtered out by date
-      if (hasDateFilter) {
-        const debugBills = paidDocs.filter(d => {
-          const bn = (d.data().BillNum || "");
-          return bn.includes("1073") || bn.includes("1074");
-        });
-        debugBills.forEach(d => {
-          const data = d.data();
-          const recDate = toDate(data.PaymentRecDate) || toDate(data.PaymentDate) || null;
-          const inRange = billData.some(bd => bd.id === d.id);
-          console.log(`📅 DEBUG Date filter for ${d.id}:`, {
-            PaymentRecDate: data.PaymentRecDate,
-            resolvedDate: recDate,
-            fromDate: fromDateObj,
-            toDate: toDateObj,
-            passedDateFilter: inRange
-          });
-        });
+      if (appliedFilters.toDate) {
+        const d = new Date(appliedFilters.toDate);
+        d.setHours(23, 59, 59, 999);
+        queryConstraints.push(where("BillDate", "<=", Timestamp.fromDate(d)));
       }
 
-      // Sort client-side by payment date descending (handles both PaymentRecDate and PaymentDate)
-      billData.sort((a, b) => {
-        const dateA = a.PaymentDate ? a.PaymentDate.getTime() : 0;
-        const dateB = b.PaymentDate ? b.PaymentDate.getTime() : 0;
-        return dateB - dateA;
-      });
+      let billQuery;
+      if (direction === 'next' && cursorDoc) {
+        billQuery = query(collection(db, "BillTable"), ...queryConstraints, startAfter(cursorDoc), limit(BILLS_PER_PAGE + 1));
+      } else if (direction === 'prev' && cursorDoc) {
+        billQuery = query(collection(db, "BillTable"), ...queryConstraints, endBefore(cursorDoc), limitToLast(BILLS_PER_PAGE + 1));
+      } else {
+        billQuery = query(collection(db, "BillTable"), ...queryConstraints, limit(BILLS_PER_PAGE + 1));
+      }
 
-      console.log(`✅ Total matching records: ${billData.length}`);
+      const snap = await getDocs(billQuery);
+      const docs = snap.docs;
+
+      const hasMore = docs.length > BILLS_PER_PAGE;
+      const displayDocs = hasMore ? docs.slice(0, BILLS_PER_PAGE) : docs;
+
+      // Update pagination states
+      if (displayDocs.length > 0) {
+        setFirstDoc(displayDocs[0]);
+        setLastDoc(displayDocs[displayDocs.length - 1]);
+        if (direction === 'next') {
+          setHasNextPage(hasMore);
+          setHasPrevPage(true);
+        } else if (direction === 'prev') {
+          setHasPrevPage(hasMore);
+          setHasNextPage(true);
+        } else {
+          setHasNextPage(hasMore);
+          setHasPrevPage(false);
+        }
+      }
+
+      // Initial processing
+      let billData = processDocs(displayDocs, null, null, false);
+      
+      // Filter only paid ones for the report view
+      billData = billData.filter(r => r.PaymentReceived > 0);
+
+      // ===== BULK ENRICH MISSING BillDate/BillType (Zero-Read Optimization) =====
+      const billNums = billData.filter(r => !r.BillDate || !r.BillType).map(r => r.BillNum);
+      if (billNums.length > 0) {
+        const lookup = {};
+        const chunkSize = 30;
+        for (let i = 0; i < billNums.length; i += chunkSize) {
+          const chunk = billNums.slice(i, i + chunkSize);
+          const q = query(collection(db, "BillTable"), where("BillNum", "in", chunk));
+          const enrichSnap = await getDocs(q);
+          enrichSnap.forEach(d => {
+            const data = d.data();
+            if (data.BillDate || data.BillType) {
+              const existing = lookup[data.BillNum] || {};
+              lookup[data.BillNum] = {
+                BillDate: data.BillDate ? toDate(data.BillDate) : existing.BillDate,
+                BillType: data.BillType || existing.BillType
+              };
+            }
+          });
+        }
+
+        billData.forEach(row => {
+          const info = lookup[row.BillNum];
+          if (info) {
+            if (!row.BillDate && info.BillDate) {
+              row.BillDate = info.BillDate;
+              row.BillDateObj = info.BillDate;
+              row.BillDateSortKey = formatDate(info.BillDate);
+            }
+            if (!row.BillType && info.BillType) {
+              row.BillType = info.BillType;
+            }
+          }
+        });
+      }
 
       setAllRows(billData);
-      setCurrentPage(1);        // Reset to first page
-      setSelectedPayments([]);
-      setSelectAll(false);
+      setPageHistory(prev => {
+        const newHist = [...prev];
+        newHist[currentPageIndex] = {
+          rows: billData,
+          firstDoc: displayDocs[0],
+          lastDoc: displayDocs[displayDocs.length - 1],
+          hasNextPage: hasMore,
+          hasPrevPage: direction === 'next' ? true : (direction === 'prev' ? hasMore : false)
+        };
+        return newHist;
+      });
 
     } catch (error) {
       console.error("Error loading payment data:", error);
@@ -431,17 +401,36 @@ const ShowPayment = ({ userRole }) => {
     }
   };
 
-  /* ================= CLIENT-SIDE PAGINATION ================= */
-  // Derive current page rows from allRows whenever allRows or currentPage changes
-  const totalPages = Math.max(1, Math.ceil(allRows.length / RECORDS_PER_PAGE));
-  const hasNextPage = currentPage < totalPages;
-  const hasPrevPage = currentPage > 1;
-
+  /* ================= CLIENT-SIDE PAGINATION (Managed by state) ================= */
   const nextPage = () => {
-    if (hasNextPage) setCurrentPage(prev => prev + 1);
+    if (!hasNextPage) return;
+    const nextIdx = currentPageIndex + 1;
+    if (pageHistory[nextIdx]) {
+      const p = pageHistory[nextIdx];
+      setAllRows(p.rows);
+      setFirstDoc(p.firstDoc);
+      setLastDoc(p.lastDoc);
+      setHasNextPage(p.hasNextPage);
+      setHasPrevPage(true);
+      setCurrentPageIndex(nextIdx);
+    } else {
+      load('next', lastDoc);
+      setCurrentPageIndex(nextIdx);
+    }
   };
+
   const prevPage = () => {
-    if (hasPrevPage) setCurrentPage(prev => prev - 1);
+    const prevIdx = currentPageIndex - 1;
+    if (prevIdx < 0) return;
+    const p = pageHistory[prevIdx];
+    if (p) {
+      setAllRows(p.rows);
+      setFirstDoc(p.firstDoc);
+      setLastDoc(p.lastDoc);
+      setHasNextPage(p.hasNextPage);
+      setHasPrevPage(prevIdx > 0);
+      setCurrentPageIndex(prevIdx);
+    }
   };
 
   /* ===== LOAD FACTORIES ON COMPONENT MOUNT ===== */
@@ -506,7 +495,8 @@ const ShowPayment = ({ userRole }) => {
 
   /* ================= CLIENT-SIDE SEARCH + PAGINATION ================= */
   // Apply search filter across ALL records first
-  const filteredRows = allRows.filter(r => {
+  // Search filter across current display rows
+  const filteredRowsForSearch = allRows.filter(r => {
     if (searchTerm.trim()) {
       const tokens = searchTerm.toLowerCase().split(/\s+/);
       return tokens.every(t =>
@@ -519,9 +509,7 @@ const ShowPayment = ({ userRole }) => {
     return true;
   });
 
-  // Slice filteredRows for current page display
-  const pageStart = (currentPage - 1) * RECORDS_PER_PAGE;
-  const currentRecords = filteredRows.slice(pageStart, pageStart + RECORDS_PER_PAGE);
+  const currentRecords = filteredRowsForSearch;
 
 
 
@@ -855,7 +843,7 @@ const ShowPayment = ({ userRole }) => {
             {exporting ? 'Exporting...' : 'Export Visible to Excel'}
           </button>
           <div style={{ fontSize: '0.8em', marginTop: '5px', color: '#666' }}>
-            Note: Exports all {filteredRows.length} matching records
+            Note: Exports current visible records ({allRows.length})
           </div>
 
           {isAdmin && selectedPayments.length > 0 && (
@@ -883,7 +871,7 @@ const ShowPayment = ({ userRole }) => {
             Previous
           </button>
           <span>
-            Page {currentPage} of {totalPages} &nbsp;|&nbsp; Total Records: {filteredRows.length}
+            Page {currentPageIndex + 1} &nbsp;|&nbsp; Current Page Records: {allRows.length}
             {loading && ' (Loading...)'}
           </span>
           <button

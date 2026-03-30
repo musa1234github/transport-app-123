@@ -1,7 +1,7 @@
-﻿// src/components/DebugFirebase.jsx
+// src/components/DebugFirebase.jsx
 import React, { useEffect, useState } from 'react';
 import { db, auth } from '../firebaseConfig';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, getDocs, query, limit } from 'firebase/firestore';
 
 const DebugFirebase = () => {
   const [status, setStatus] = useState('Testing...');
@@ -24,7 +24,7 @@ const DebugFirebase = () => {
         console.log('Testing connection to TblDispatch...');
         
         const startTime = Date.now();
-        const snapshot = await getDocs(collection(db, "TblDispatch"));
+        const snapshot = await getDocs(query(collection(db, "TblDispatch"), limit(1)));
         const endTime = Date.now();
         
         console.log(`Connection successful! Took ${endTime - startTime}ms`);

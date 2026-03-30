@@ -146,79 +146,43 @@ const ShowBill = ({ userRole }) => {
   // (queryCache removed — caused stale data via Vite HMR state preservation)
   const [prefetchCache, setPrefetchCache] = useState({});
 
-  /* ================= LOAD FACTORIES WITH CACHE ================= */
+  /* ================= LOAD FACTORIES (Optimized) ================= */
   const loadFactories = async (forceRefresh = false) => {
     setLoadingFactories(true);
     try {
-      // Check cache first (24 hour expiry)
       const CACHE_KEY = 'billFactoriesCache';
-      const CACHE_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
+      const CACHE_EXPIRY_MS = 24 * 60 * 60 * 1000;
 
       if (!forceRefresh) {
         const cached = localStorage.getItem(CACHE_KEY);
         if (cached) {
           try {
             const { factories, timestamp } = JSON.parse(cached);
-            const age = Date.now() - timestamp;
-
-            if (age < CACHE_EXPIRY_MS) {
-              console.log('Using cached factories (age:', Math.round(age / 1000 / 60), 'minutes)');
+            if (Date.now() - timestamp < CACHE_EXPIRY_MS) {
               setFactories(factories);
               setLoadingFactories(false);
               return;
             }
-          } catch (e) {
-            console.error('Cache parse error:', e);
-          }
+          } catch (e) { }
         }
       }
 
-      // Cache miss or expired - load from Factories collection
-      console.log('Loading factories from Factories collection...');
+      // Hardcoded high-priority factories to avoid ANY reads if possible
+      const defaultFactories = ["JSW", "MANIGARH", "ULTRATECH", "ACC MARATHA", "AMBUJA", "DALMIA", "ORIENT"];
+
+      // Optional: Fetch from a dedicated small collection if available
       try {
-        const factoriesQuery = query(
-          collection(db, "Factories"),
-          where("hasBills", "==", true) // Or omit this where clause if all factories produce bills
-        );
-        const factoriesSnap = await getDocs(factoriesQuery);
-
-        if (factoriesSnap.empty) {
-          console.warn('⚠️ Factories collection is empty. Falling back to BillTable scan.');
-
-          // FALLBACK (capped): If Factories collection is empty, scan a sample of BillTable
-          const billQuery = query(collection(db, "BillTable"), limit(1000));
-          const billSnap = await getDocs(billQuery);
-
-          const factorySet = new Set();
-          billSnap.docs.forEach(b => {
-            const data = b.data();
-            if (data.FactoryName) {
-              factorySet.add(data.FactoryName);
-            }
-          });
-
-          const factoriesList = Array.from(factorySet).sort();
-          setFactories(factoriesList);
-
-          localStorage.setItem(CACHE_KEY, JSON.stringify({
-            factories: factoriesList,
-            timestamp: Date.now()
-          }));
-          return;
+        const factoriesSnap = await getDocs(query(collection(db, "Factories"), limit(100)));
+        if (!factoriesSnap.empty) {
+          const list = factoriesSnap.docs.map(d => d.data().displayName || d.id).sort();
+          setFactories(list);
+          localStorage.setItem(CACHE_KEY, JSON.stringify({ factories: list, timestamp: Date.now() }));
+        } else {
+          // No collection found? Use defaults instead of a heavy BillTable scan
+          setFactories(defaultFactories);
         }
-
-        const factoriesList = factoriesSnap.docs.map(doc => doc.data().displayName || doc.id).sort();
-        setFactories(factoriesList);
-
-        // Cache for next time
-        localStorage.setItem(CACHE_KEY, JSON.stringify({
-          factories: factoriesList,
-          timestamp: Date.now()
-        }));
-        console.log('Cached', factoriesList.length, 'factories');
-
       } catch (err) {
-        console.error('Error loading from Factories collection:', err);
+        setFactories(defaultFactories);
       }
     } catch (error) {
       console.error("Error loading factories:", error);

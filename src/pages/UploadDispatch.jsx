@@ -103,15 +103,34 @@ const UploadDispatch = () => {
   const [vehicles, setVehicles] = useState([]);
   const [isUploading, setIsUploading] = useState(false);
 
+  /* ================= LOAD VEHICLES WITH CACHE ================= */
   useEffect(() => {
     const loadVehicles = async () => {
-      const snap = await getDocs(collection(db, "VehicleMaster"));
-      const list = snap.docs.map(d => ({
-        id: d.id,
-        VehicleNo: d.data().VehicleNo,
-        last4: extractLast4Digits(d.data().VehicleNo)
-      }));
-      setVehicles(list);
+      try {
+        const CACHE_KEY = 'vehicleMasterCache';
+        const CACHE_EXPIRY = 24 * 60 * 60 * 1000; // 24 hours
+        
+        const cached = localStorage.getItem(CACHE_KEY);
+        if (cached) {
+          const { list, timestamp } = JSON.parse(cached);
+          if (Date.now() - timestamp < CACHE_EXPIRY) {
+            setVehicles(list);
+            return;
+          }
+        }
+
+        const snap = await getDocs(query(collection(db, "VehicleMaster"), limit(1000)));
+        const list = snap.docs.map(d => ({
+          id: d.id,
+          VehicleNo: d.data().VehicleNo,
+          last4: extractLast4Digits(d.data().VehicleNo)
+        }));
+        
+        setVehicles(list);
+        localStorage.setItem(CACHE_KEY, JSON.stringify({ list, timestamp: Date.now() }));
+      } catch (err) {
+        console.error("Vehicle load error:", err);
+      }
     };
     loadVehicles();
   }, []);
@@ -236,33 +255,46 @@ const UploadDispatch = () => {
       }
 
       const processedThisUpload = new Set();
-      const validDtos = [];   // { docId, dto }
+      const uniqueChallansForDB = new Set();
+      const rowsToProcess = [];
 
+      // 1. First pass: Collect unique challans and validate basic row data
       for (let i = 0; i < dataRows.length; i++) {
         const row = dataRows[i];
         if (!row || !Array.isArray(row)) continue;
-
-        const isEmptyRow = row.every(v =>
-          v === null || v === undefined || v === "" || (typeof v === "string" && v.trim() === "")
-        );
+        const isEmptyRow = row.every(v => v === null || v === "" || (typeof v === "string" && v.trim() === ""));
         if (isEmptyRow) continue;
 
         const challanNo = normalizeChallan(row[colMap.ChallanNo]);
         if (!challanNo) continue;
+        
+        // Skip file-level duplicates
+        if (processedThisUpload.has(challanNo)) continue;
+        processedThisUpload.add(challanNo);
+        
+        uniqueChallansForDB.add(challanNo);
+        rowsToProcess.push({ challanNo, row });
+      }
 
-        // Skip summary/total rows
-        if (factoryName === "ACC MARATHA" || factoryName === "AMBUJA") {
-          const partyName = row[colMap.PartyName];
-          if (typeof partyName === "string") {
-            const upperPartyName = partyName.toUpperCase();
-            if (upperPartyName.includes("TOTAL") || upperPartyName.includes("GRAND") ||
-              upperPartyName.includes("SUMMARY") || upperPartyName === "") {
-              continue;
-            }
-          }
-        }
+      // 2. Targeted Prefetch: check which challans already exist in DB
+      const existingInDB = new Set();
+      const challanArr = Array.from(uniqueChallansForDB);
+      for (let i = 0; i < challanArr.length; i += 30) {
+        const chunk = challanArr.slice(i, i + 30);
+        const q = query(
+          collection(db, "TblDispatch"),
+          where("FactoryName", "==", factoryName),
+          where("ChallanNo", "in", chunk)
+        );
+        const snap = await getDocs(q);
+        snap.forEach(d => existingInDB.add(d.data().ChallanNo));
+      }
 
-        if (processedThisUpload.has(challanNo)) {
+      const validDtos = [];   // { docId, dto }
+
+      for (const { challanNo, row } of rowsToProcess) {
+        // Skip DB-level duplicates to save writes and provide clean feedback
+        if (existingInDB.has(challanNo)) {
           alreadyExistInDB.push(challanNo);
           continue;
         }

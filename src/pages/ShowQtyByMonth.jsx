@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { db } from "../firebaseConfig";
 import {
   collection, query, where, getDocs, limit
@@ -40,7 +40,7 @@ const ShowQtyByMonth = () => {
       const q = query(
         collection(db, "TblDispatchMonthly"),
         where("year", "==", year),
-        limit(500)
+        limit(200)
       );
       const snap = await getDocs(q);
       console.log(`📊 TblDispatchMonthly reads for ${year}: ${snap.size}`);
