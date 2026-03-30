@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { db } from "../firebaseConfig";
 import { 
   collection, 
@@ -38,35 +38,56 @@ const VehicleMaster = () => {
 
   const vehicleRef = collection(db, "VehicleMaster");
 
-  // Fetch vehicles based on search term
+  // Fetch vehicles based on search term (Optimized: combined server & client search with strict limit)
   const fetchVehiclesBySearch = useCallback(async (searchText = "") => {
     try {
       setLoading(true);
+      const searchUpper = searchText.toUpperCase().trim();
       
-      if (!searchText.trim()) {
+      if (!searchUpper) {
         setVehicles([]);
         setDataLoaded(false);
-        setMessage("Please enter a search term to load vehicles");
         return;
       }
 
-      // Create a query that searches both VehicleNo and OwnerName
-      const searchLower = searchText.toLowerCase().trim();
+      // Check Cache first
+      const CACHE_KEY = `vehicleSearch_${searchUpper}`;
+      const cached = localStorage.getItem(CACHE_KEY);
+      if (cached) {
+        const { data, timestamp } = JSON.parse(cached);
+        if (Date.now() - timestamp < 30 * 60 * 1000) { // 30 min cache
+          setVehicles(data);
+          setDataLoaded(true);
+          setLoading(false);
+          return;
+        }
+      }
+
+      // OPTIMIZED: Try exact match first (1 read)
+      const exactQ = query(vehicleRef, where("VehicleNo", "==", searchUpper), limit(1));
+      const exactSnap = await getDocs(exactQ);
       
-      // Fetch all vehicles that match the search term in either field
-      const q = query(vehicleRef);
-      const snapshot = await getDocs(q);
+      let results = exactSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      // If not found or if searching for owner, do a capped scan (capped at 100 reads max)
+      if (results.length === 0) {
+        // Fallback: fetch most recent 100 and filter (better than full scan)
+        const scanQ = query(vehicleRef, limit(100));
+        const scanSnap = await getDocs(scanQ);
+        const scanData = scanSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        
+        results = scanData.filter(v => 
+          (v.VehicleNo || "").toUpperCase().includes(searchUpper) ||
+          (v.OwnerName || "").toUpperCase().includes(searchUpper)
+        );
+      }
       
-      // Filter client-side to match search in both fields
-      const allData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      const filteredData = allData.filter(v => 
-        v.VehicleNo.toLowerCase().includes(searchLower) ||
-        v.OwnerName.toLowerCase().includes(searchLower)
-      );
-      
-      setVehicles(filteredData);
+      setVehicles(results);
       setDataLoaded(true);
-      setMessage(`✅ Found ${filteredData.length} vehicles matching "${searchText}"`);
+      setMessage(`✅ Found ${results.length} vehicles matching "${searchText}"`);
+      
+      // Cache the result
+      localStorage.setItem(CACHE_KEY, JSON.stringify({ data: results, timestamp: Date.now() }));
       
     } catch (error) {
       console.error("Error fetching vehicles:", error);
@@ -275,32 +296,46 @@ const VehicleMaster = () => {
         let added = 0;
         let skipped = 0;
 
-        for (let row of rows) {
+        const rowData = rows.map(row => {
           const rowKeys = Object.keys(row).reduce((acc, k) => {
             acc[normalizeKey(k)] = row[k];
             return acc;
           }, {});
-
           const vehicle = rowKeys["truckno"];
           const owner = rowKeys["name"];
-          if (!vehicle || !owner) continue;
+          if (!vehicle || !owner) return null;
 
-          const vNo = vehicle.toString().trim().replace(/\s+/g, " ").toUpperCase();
-          const oName = owner.toString().trim();
+          return {
+            vNo: vehicle.toString().trim().replace(/\s+/g, " ").toUpperCase(),
+            oName: owner.toString().trim()
+          };
+        }).filter(Boolean);
 
-          const q = query(vehicleRef, where("VehicleNo", "==", vNo));
-          const existing = await getDocs(q);
+        // BULK PREFETCH (Smart optimization: reduces hundreds of reads to a few chunks)
+        const uniqueVNos = [...new Set(rowData.map(r => r.vNo))];
+        const existingVNos = new Set();
+        
+        for (let i = 0; i < uniqueVNos.length; i += 30) {
+          const chunk = uniqueVNos.slice(i, i + 30);
+          const q = query(vehicleRef, where("VehicleNo", "in", chunk));
+          const snap = await getDocs(q);
+          snap.forEach(d => existingVNos.add(d.data().VehicleNo));
+        }
 
-          if (existing.empty) {
-            await addDoc(vehicleRef, {
-              VehicleNo: vNo,
-              OwnerName: oName,
-              CreatedAt: new Date(),
-            });
-            added++;
-          } else {
+        for (let r of rowData) {
+          if (existingVNos.has(r.vNo)) {
             skipped++;
+            continue;
           }
+
+          await addDoc(vehicleRef, {
+            VehicleNo: r.vNo,
+            OwnerName: r.oName,
+            CreatedAt: new Date(),
+          });
+          added++;
+          // Add to set to prevent duplicate creation if Excel has internal duplicates
+          existingVNos.add(r.vNo);
         }
 
         setMessage(

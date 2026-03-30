@@ -1,4 +1,4 @@
-﻿import React from "react";
+import React from "react";
 import "./pages/ShowBill.css";
 import { Routes, Route, BrowserRouter, Navigate } from "react-router-dom";
 
@@ -24,6 +24,7 @@ import DispatchExport from "./pages/DispatchExport.jsx";
 import GstUpload from "./pages/GstUpload.jsx";
 import GstReport from "./pages/GstReport.jsx";
 import DeductionReport from "./pages/DeductionReport.jsx";
+import Dashboard from "./pages/Dashboard.jsx";
 
 
 /* ─────────────────────────────────────────
@@ -82,6 +83,7 @@ const AppRoutes = () => {
             : <Navigate to="/login" />
         }
       >
+        <Route index element={<Dashboard />} />
         {/* ── DISPATCH (admin + dispatcher) ── */}
         {canUploadDispatch && (
           <>

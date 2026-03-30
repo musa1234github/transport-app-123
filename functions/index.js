@@ -1,4 +1,5 @@
 const { onRequest } = require("firebase-functions/v2/https");
+const { onDocumentCreated, onDocumentDeleted } = require("firebase-functions/v2/firestore");
 const admin = require("firebase-admin");
 const XLSX = require("xlsx");
 
@@ -68,7 +69,7 @@ exports.exportDispatches = onRequest(
       queryReq = queryReq
         .where("DispatchDate", ">=", from)
         .where("DispatchDate", "<=", to)
-        .limit(1000); // Safety limit for performance and cost
+        .limit(300); // Optimized safety limit for performance and cost
 
       const snapshot = await queryReq.get();
 
@@ -184,3 +185,50 @@ exports.exportDispatches = onRequest(
     }
   }
 );
+
+/**
+ * 📊 Automations: Monthly Summary Triggers
+ * These ensure the Dashboard always shows accurate "One-Read" data.
+ */
+
+const normalizeSummaryDocId = (data) => {
+  const date = data.DispatchDate.toDate ? data.DispatchDate.toDate() : new Date(data.DispatchDate);
+  const year = date.getFullYear();
+  const month = date.getMonth() + 1;
+  const factory = (data.FactoryName || "UNKNOWN").toUpperCase().trim();
+  return { id: `${factory}_${year}_${month}`, year, month, factory };
+};
+
+exports.onDispatchCreated = onDocumentCreated("TblDispatch/{docId}", async (event) => {
+  const data = event.data.data();
+  if (!data) return;
+
+  const { id, year, month, factory } = normalizeSummaryDocId(data);
+  const qty = Number(data.DispatchQuantity) || 0;
+  const isBilled = (Number(data.UnitPrice) > 0) || data.BillStatus === true || data.IsBilled === true;
+
+  console.log(`📈 Incrementing summary ${id} by ${qty}`);
+
+  await admin.firestore().collection("TblDispatchMonthly").doc(id).set({
+    year, month, factory,
+    totalQty: admin.firestore.FieldValue.increment(qty),
+    billQty: admin.firestore.FieldValue.increment(isBilled ? qty : 0)
+  }, { merge: true });
+});
+
+exports.onDispatchDeleted = onDocumentDeleted("TblDispatch/{docId}", async (event) => {
+  const data = event.data.data();
+  if (!data) return;
+
+  const { id, year, month, factory } = normalizeSummaryDocId(data);
+  const qty = Number(data.DispatchQuantity) || 0;
+  const isBilled = (Number(data.UnitPrice) > 0) || data.BillStatus === true || data.IsBilled === true;
+
+  console.log(`📉 Decrementing summary ${id} by ${qty}`);
+
+  await admin.firestore().collection("TblDispatchMonthly").doc(id).set({
+    year, month, factory,
+    totalQty: admin.firestore.FieldValue.increment(-qty),
+    billQty: admin.firestore.FieldValue.increment(isBilled ? -qty : 0)
+  }, { merge: true });
+});

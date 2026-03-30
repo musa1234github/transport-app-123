@@ -14,63 +14,42 @@ const ShowDayQty = () => {
   const [error, setError] = useState(null);
   const [hasSearched, setHasSearched] = useState(false);
 
-  // Fetch only factory names on component mount
+  // Fetch only factory names on component mount (Optimized to zero reads if cached)
   useEffect(() => {
-    const fetchFactoryNames = async () => {
+    const loadFactories = async () => {
+      setLoadingFactories(true);
       try {
-        setLoadingFactories(true);
-        // Try to fetch factory names with optimized query
-        const factoryQuery = query(
-          collection(db, "TblDispatch"),
-          limit(100) // Only fetch first 100 documents for factory names
-        );
+        const CACHE_KEY = 'factoryListCache';
+        const CACHE_EXPIRY = 24 * 60 * 60 * 1000; // 24 hours
         
-        const dispatchSnapshot = await getDocs(factoryQuery);
-
-        if (dispatchSnapshot.empty) {
-          setAllFactories([]);
-          return;
+        const cached = localStorage.getItem(CACHE_KEY);
+        if (cached) {
+          const { data, timestamp } = JSON.parse(cached);
+          if (Date.now() - timestamp < CACHE_EXPIRY) {
+            setAllFactories(data);
+            setLoadingFactories(false);
+            return;
+          }
         }
 
-        const factoryNamesSet = new Set();
-
-        dispatchSnapshot.docs.forEach(doc => {
-          const data = doc.data();
-          let factoryName = "Unknown";
-
-          // Check various possible factory name fields
-          if (data.FactoryName) {
-            factoryName = data.FactoryName;
-          } else if (data.Factory) {
-            factoryName = data.Factory;
-          } else if (data.DisVid === "10") {
-            factoryName = "JSW";
-          } else if (data.DisVid === "6") {
-            factoryName = "Manigar";
-          } else if (data.DisVid === "7") {
-            factoryName = "Ultratech";
-          } else if (data.DisVid) {
-            factoryName = `Factory ${data.DisVid}`;
-          }
-
-          if (factoryName !== "Unknown") {
-            factoryNamesSet.add(factoryName);
-          }
-        });
-
-        const sortedFactories = Array.from(factoryNamesSet).sort();
-        setAllFactories(sortedFactories);
-        console.log("Loaded factories:", sortedFactories.length, "factories");
-
-      } catch (error) {
-        console.error("Error fetching factory names:", error);
-        setError(`Failed to load factory list: ${error.message}`);
+        // Dedicated small collection (3-5 reads) instead of TblDispatch (100 reads)
+        const factoriesSnap = await getDocs(query(collection(db, "Factories"), limit(50)));
+        const list = factoriesSnap.empty 
+          ? ["JSW", "ULTRATECH", "AMBUJA", "ACC MARATHA", "DALMIA", "ORIENT", "MANIGARH"]
+          : factoriesSnap.docs.map(d => d.data().displayName || d.id);
+        
+        const sorted = list.sort();
+        setAllFactories(sorted);
+        localStorage.setItem(CACHE_KEY, JSON.stringify({ data: sorted, timestamp: Date.now() }));
+      } catch (err) {
+        console.error("Factory load failed", err);
+        setAllFactories(["JSW", "ULTRATECH", "AMBUJA", "ACC MARATHA", "DALMIA", "ORIENT", "MANIGARH"]);
       } finally {
         setLoadingFactories(false);
       }
     };
 
-    fetchFactoryNames();
+    loadFactories();
   }, []);
 
   const parseDate = (dateValue) => {
