@@ -425,12 +425,32 @@ const ShoBilledChallan = () => {
     const excelData = filteredDispatches.map(d => {
       const row = {};
       COLUMN_SEQUENCE.forEach(k => {
-        row[k] = d[k] instanceof Date ? formatShortDate(d[k]) : d[k];
+        // If it's a date, keep it as a Date object for Excel
+        if (d[k] instanceof Date) {
+          row[k] = d[k];
+        } else if (k === "DispatchQuantity" && d[k]) {
+          // Ensure quantity is a number for Excel
+          const num = parseFloat(d[k]);
+          row[k] = isNaN(num) ? d[k] : num;
+        } else {
+          row[k] = d[k];
+        }
       });
       return row;
     });
 
-    const ws = XLSX.utils.json_to_sheet(excelData);
+    // Use cellDates: true so SheetJS handles JS Dates correctly
+    const ws = XLSX.utils.json_to_sheet(excelData, { cellDates: true });
+
+    // Set number format for DispatchDate column (index 3 -> Column D)
+    const range = XLSX.utils.decode_range(ws['!ref']);
+    for (let R = range.s.r + 1; R <= range.e.r; ++R) {
+      const cellAddress = XLSX.utils.encode_cell({ r: R, c: 3 }); // DispatchDate is 4th column (index 3)
+      if (ws[cellAddress]) {
+        ws[cellAddress].z = 'dd-mm-yy'; // Excel date format
+      }
+    }
+
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Billed Challan");
     XLSX.writeFile(wb, `Billed_Challan_${new Date().toISOString().split('T')[0]}.xlsx`);
