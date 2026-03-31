@@ -387,136 +387,31 @@ const ShowBill = ({ userRole }) => {
         setHasPrevPage(false);
       }
 
-      // Build bill map first (from BillTable)
-      const billMap = {};
-      displayDocs.forEach(b => {
+      // Build the resulting list directly from BillTable properties (no frontend joins)
+      const result = displayDocs.map(b => {
         const bill = b.data();
         const billDateObj = toDate(bill.BillDate);
-        billMap[b.id] = {
+        return {
           BillID: b.id,
-          "Dispatch Month": "", // will be computed from TblDispatch DispatchDate below
+          "Dispatch Month": bill.DispatchMonth || "", 
           "Factory Name": bill.FactoryName || "",
           "Bill Num": bill.BillNum || "",
-          // All computed from TblDispatch aggregation below
-          "LR Quantity": 0,
-          "Bill Quantity": 0,
-          "Taxable Amount": 0,
-          "Final Price": 0,
-          "Actual Amount": 0,
-          "TDS": 0,
-          "GST": 0,
-          // Temp tracking fields (deleted after aggregation)
-          _totalFinalPrice: 0,
-          _dispatchCount: 0,
-          _fpValidCount: 0,
+          "LR Quantity": bill.LRQuantity || 0,
+          "Bill Quantity": toNum(bill.BillQuantity || 0).toFixed(2),
+          "Taxable Amount": toNum(bill.TaxableAmount || 0).toFixed(2),
+          "Final Price": toNum(bill.FinalPrice || 0).toFixed(2),
+          "Actual Amount": toNum(bill.ActualAmount || 0).toFixed(2),
+          "TDS": toNum(bill.TDS || 0).toFixed(2),
+          "GST": toNum(bill.GST || 0).toFixed(2),
+          
           "Bill Date": formatDate(billDateObj),
           "Bill Type": bill.BillType || "",
           BillDateObj: billDateObj,
           BillDateSortKey: formatDateForSort(billDateObj)
         };
-      });
-
-      // 🔥 Fetch TblDispatch for all bills in batch queries and aggregate totals
-      const billIds = displayDocs.map(b => b.id).filter(Boolean);
-      if (billIds.length > 0) {
-        // Firestore `in` supports up to 30 items, so chunk the billIds
-        const chunkSize = 30;
-        const chunkedBillIds = [];
-        for (let i = 0; i < billIds.length; i += chunkSize) {
-          chunkedBillIds.push(billIds.slice(i, i + chunkSize));
-        }
-
-        for (const chunk of chunkedBillIds) {
-          const dispatchSnap = await getDocs(
-            query(collection(db, "TblDispatch"), where("BillID", "in", chunk))
-          );
-          dispatchSnap.docs.forEach(d => {
-            const r = d.data();
-            const bid = r.BillID;
-            if (!billMap[bid]) return;
-            const row = billMap[bid];
-
-            // ✅ Collect Dispatch Month from DispatchDate (not from BillDate)
-            const dispatchDateObj = toDate(r.DispatchDate);
-            if (dispatchDateObj) {
-              const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-              const month = monthNames[dispatchDateObj.getMonth()];
-              if (!row._months) row._months = new Set();
-              row._months.add(month);
-            }
-
-            const fp = toNum(r.FinalPrice);
-            const taxable = toNum(r.UnitPrice) * toNum(r.DispatchQuantity);
-            // Allow valid FinalPrice if it's > 0 when TaxableAmount is 0, or if it's <= TaxableAmount
-            const fpValid = fp > 0 && (taxable === 0 || fp <= taxable);
-
-            row["LR Quantity"] += 1;
-            row["Bill Quantity"] += toNum(r.DispatchQuantity);
-            row["Taxable Amount"] += taxable;
-            row["_totalFinalPrice"] += fp;
-            row["_dispatchCount"] += 1;
-            row["_fpValidCount"] += fpValid ? 1 : 0;
-          });
-        }
-
-        // ── Formula from stored procedure (fixed GST rate 18%, TDS 0.984%) ──
-        const GST_RATE = 0.18;
-        const TDS_RATE = 0.00984;
-
-        Object.values(billMap).forEach(row => {
-          // ✅ Finalize Dispatch Month from collected DispatchDate months
-          if (row._months && row._months.size > 0) {
-            const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-            row["Dispatch Month"] = Array.from(row._months)
-              .sort((a, b) => monthNames.indexOf(a) - monthNames.indexOf(b))
-              .join(", ");
-          } else {
-            row["Dispatch Month"] = "";
-          }
-          delete row._months;
-
-          // If ALL dispatches have a valid negotiated FinalPrice → use FinalPrice as base
-          // Otherwise → use TaxableAmount (UnitPrice × Qty) as base
-          const allHaveFP = row["_dispatchCount"] > 0
-            && row["_fpValidCount"] === row["_dispatchCount"];
-
-          const totalFP = row["_totalFinalPrice"];
-          const base = allHaveFP ? totalFP : row["Taxable Amount"];
-
-          // If db had 0 for Taxable (missing UnitPrice), UI Taxable gets the base used for tax calculation
-          if (row["Taxable Amount"] === 0 && base > 0) {
-            row["Taxable Amount"] = base;
-          }
-
-          // "only the final price should be the zero if the final amount is equel to the taxable else final amount"
-          row["Final Price"] = (totalFP === row["Taxable Amount"]) ? 0 : totalFP;
-
-          row["GST"] = base * GST_RATE;
-          row["TDS"] = base * TDS_RATE;
-          row["Actual Amount"] = base + row["GST"];
-
-          // Format all numeric fields to 2 decimal places
-          row["Bill Quantity"] = toNum(row["Bill Quantity"]).toFixed(2);
-          row["Taxable Amount"] = toNum(row["Taxable Amount"]).toFixed(2);
-          row["Final Price"] = toNum(row["Final Price"]).toFixed(2);
-          row["Actual Amount"] = toNum(row["Actual Amount"]).toFixed(2);
-          row["TDS"] = toNum(row["TDS"]).toFixed(2);
-          row["GST"] = toNum(row["GST"]).toFixed(2);
-
-          // Remove temp tracking fields
-          delete row["_totalFinalPrice"];
-          delete row["_dispatchCount"];
-          delete row["_fpValidCount"];
-        });
-      }
-
-      // Preserve original Firestore sort order (Object.values order not guaranteed)
-      const result = displayDocs.map(b => billMap[b.id]).filter(Boolean);
+      }).filter(Boolean);
 
       setRows(result);
-      // We no longer pre-fetch ALL dispatch rows logic. Only loaded on-demand!
       setDataLoaded(true);
 
 

@@ -6,7 +6,8 @@ import {
     where,
     getDocs,
     updateDoc,
-    doc
+    doc,
+    limit
 } from "firebase/firestore";
 
 const FACTORY_OPTIONS = [
@@ -84,7 +85,8 @@ const BagShortUpdate = () => {
                 const q = query(
                     collection(db, "TblDispatch"),
                     where("FactoryName", "==", factory),
-                    where("ChallanNo", "==", challanNo.trim().toUpperCase())
+                    where("ChallanNo", "==", challanNo.trim().toUpperCase()),
+                    limit(1)
                 );
                 snap = await getDocs(q);
 
@@ -115,7 +117,7 @@ const BagShortUpdate = () => {
                     constraints.push(where("DispatchDate", "<=", end));
                 }
 
-                const q = query(collection(db, "TblDispatch"), ...constraints);
+                const q = query(collection(db, "TblDispatch"), ...constraints, limit(1));
                 snap = await getDocs(q);
 
                 if (snap.empty) {

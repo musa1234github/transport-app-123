@@ -246,7 +246,7 @@ const BillUpload = () => {
         }
 
         // --- BATCH PREFETCH BILLS ---
-        const billCache = {};
+        const billDbCache = {};
         const billsArray = Array.from(uniqueBills);
         for (let i = 0; i < billsArray.length; i += 30) {
           const chunk = billsArray.slice(i, i + 30);
@@ -257,8 +257,62 @@ const BillUpload = () => {
           );
           const bs = await getDocs(bq);
           bs.forEach(d => {
-            billCache[d.data().BillNum] = d.id;
+            billDbCache[d.data().BillNum] = d.id;
           });
+        }
+
+        // --- PRE-AGGREGATE BILL TOTALS ---
+        const billTotalsCache = {};
+        
+        for (let rowData of parsedRows) {
+          const { challanNo, quantity, unitPrice, finalPrice, billNum, billDate, billTypeOrLR } = rowData;
+          if (!billNum || !challanNo) continue;
+
+          if (!billTotalsCache[billNum]) {
+             billTotalsCache[billNum] = {
+               LRQuantity: 0,
+               BillQuantity: 0,
+               TaxableAmount: 0,
+               _totalFinalPrice: 0,
+               _dispatchCount: 0,
+               _fpValidCount: 0
+             };
+          }
+
+          const fp = safeNum(finalPrice);
+          const taxable = safeNum(unitPrice) * safeNum(quantity);
+          const fpValid = fp > 0 && (taxable === 0 || fp <= taxable);
+
+          billTotalsCache[billNum].LRQuantity += 1;
+          billTotalsCache[billNum].BillQuantity += safeNum(quantity);
+          billTotalsCache[billNum].TaxableAmount += taxable;
+          billTotalsCache[billNum]._totalFinalPrice += fp;
+          billTotalsCache[billNum]._dispatchCount += 1;
+          billTotalsCache[billNum]._fpValidCount += fpValid ? 1 : 0;
+        }
+
+        const GST_RATE = 0.18;
+        const TDS_RATE = 0.00984;
+
+        // Finalize Bill Totals
+        for (const bNum in billTotalsCache) {
+          const bt = billTotalsCache[bNum];
+          const allHaveFP = bt._dispatchCount > 0 && bt._fpValidCount === bt._dispatchCount;
+          
+          const base = allHaveFP ? bt._totalFinalPrice : bt.TaxableAmount;
+          if (bt.TaxableAmount === 0 && base > 0) {
+            bt.TaxableAmount = base;
+          }
+
+          bt.FinalPrice = (bt._totalFinalPrice === bt.TaxableAmount) ? 0 : bt._totalFinalPrice;
+          bt.GST = base * GST_RATE;
+          bt.TDS = base * TDS_RATE;
+          bt.ActualAmount = base + bt.GST;
+
+          // cleanup
+          delete bt._totalFinalPrice;
+          delete bt._dispatchCount;
+          delete bt._fpValidCount;
         }
 
         setProgress(15);
@@ -312,19 +366,26 @@ const BillUpload = () => {
             }
 
             let billId;
-            if (billCache[billNum]) {
-              billId = billCache[billNum]; // Use cached
+            if (billDbCache[billNum]) {
+              billId = billDbCache[billNum]; // Use cached
+              // Also update the bill table natively if it already exists, just so its values are perfectly synced
+              const existingBillRef = doc(db, "BillTable", billId);
+              batch.set(existingBillRef, {
+                ...billTotalsCache[billNum],
+                UpdatedOn: serverTimestamp()
+              }, { merge: true });
             } else {
               // Create new bill via Batch reference
               const newBillRef = doc(collection(db, "BillTable"));
               billId = newBillRef.id;
-              billCache[billNum] = billId; // Cache immediately
+              billDbCache[billNum] = billId; // Cache immediately
               
               const billData = {
                 BillNum: billNum,
                 BillDate: billDate,
                 BillType: billType,
                 FactoryName: factory,
+                ...billTotalsCache[billNum],
                 CreatedOn: serverTimestamp()
               };
               

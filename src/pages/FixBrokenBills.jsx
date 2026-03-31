@@ -1,11 +1,12 @@
-﻿import React, { useState } from "react";
+import React, { useState } from "react";
 import {
   collection,
   query,
   where,
   getDocs,
   updateDoc,
-  doc
+  doc,
+  limit
 } from "firebase/firestore";
 import { db } from "../firebaseConfig";
 
@@ -29,7 +30,8 @@ const FixBrokenBills = () => {
       const billQ = query(
         collection(db, "BillTable"),
         where("BillNum", "==", billNum),
-        where("FactoryName", "==", factory)
+        where("FactoryName", "==", factory),
+        limit(1)
       );
 
       const billSnap = await getDocs(billQ);
