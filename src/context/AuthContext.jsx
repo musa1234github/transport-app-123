@@ -9,7 +9,7 @@ import { auth, db } from "../firebaseConfig";
    Change IDLE_TIMEOUT_MS to adjust the idle limit.
    Change WARN_BEFORE_MS to adjust when the warning appears.
 ───────────────────────────────────────── */
-const IDLE_TIMEOUT_MS = 5 * 60 * 1000;  // 5 minutes → auto logout
+const IDLE_TIMEOUT_MS = 10 * 60 * 1000;  // 10 minutes → auto logout
 const WARN_BEFORE_MS = 1 * 60 * 1000;  // warn 1 minute before logout
 
 /* Events that count as "user activity" */
