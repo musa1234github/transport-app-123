@@ -359,9 +359,41 @@ const ShowBill = ({ userRole }) => {
       }
 
       // Check if there are more pages — works for BOTH filtered and non-filtered
-      const hasMore = docs.length > BILLS_PER_PAGE;  // ✅ FIXED: removed !isFiltering exclusion
+      const hasMore = docs.length > BILLS_PER_PAGE;
       const displayDocs = hasMore ? docs.slice(0, BILLS_PER_PAGE) : docs;
       console.log(`📊 Docs fetched: ${docs.length}, showing: ${displayDocs.length}, hasMore: ${hasMore}`);
+
+      // ===== BULK PREFETCH DISPATCHES TO COMPUTE MISSING FIELDS (Dispatch Month, Amounts) =====
+      const billIds = displayDocs.map(d => d.id);
+      const dispatchGroups = {};
+
+      if (billIds.length > 0) {
+        try {
+          // Firestore 'in' query supports max 30 items, BILLS_PER_PAGE is 20, so this is safe!
+          const dispQ = query(
+            collection(db, "TblDispatch"),
+            where("BillID", "in", billIds)
+          );
+          const dispSnap = await getDocs(dispQ);
+          
+          dispSnap.forEach(dDoc => {
+            const data = dDoc.data();
+            const bId = data.BillID;
+            if (!dispatchGroups[bId]) dispatchGroups[bId] = [];
+            
+            // Format DispatchDate so getDispatchMonth can read it correctly
+            const dDateObj = toDate(data.DispatchDate);
+            const formattedDate = formatDate(dDateObj);
+            
+            dispatchGroups[bId].push({
+              ...data,
+              DispatchDateStr: formattedDate // Use this for getDispatchMonth
+            });
+          });
+        } catch (err) {
+          console.error("Error batch fetching dispatches:", err);
+        }
+      }
 
       // Update pagination cursors
       if (displayDocs.length > 0) {
@@ -391,18 +423,71 @@ const ShowBill = ({ userRole }) => {
       const result = displayDocs.map(b => {
         const bill = b.data();
         const billDateObj = toDate(bill.BillDate);
+        const bId = b.id;
+
+        // Get pre-fetched dispatches
+        const dispatches = dispatchGroups[bId] || [];
+
+        // 1. Resolve Dispatch Month
+        // Pass objects with DispatchDate mapped to the expected string format for getDispatchMonth
+        const dispatchMonthComputed = getDispatchMonth(
+          dispatches.map(d => ({ ...d, DispatchDate: d.DispatchDateStr }))
+        );
+
+        // 2. Resolve Amounts
+        let lrQty = bill.LRQuantity;
+        let billQty = toNum(bill.BillQuantity);
+        let taxAmt = toNum(bill.TaxableAmount);
+        let finalPrc = toNum(bill.FinalPrice);
+        let actualAmt = toNum(bill.ActualAmount);
+        let tdsAmt = toNum(bill.TDS || bill.Tds);
+        let gstAmt = toNum(bill.GST || bill.Gst);
+
+        // If core amount (taxAmt) is missing, but we have dispatches, calculate them dynamically!
+        if (!taxAmt && dispatches.length > 0) {
+          lrQty = dispatches.length;
+          billQty = 0;
+          taxAmt = 0;
+          let totalFinalPrice = 0;
+          let fpValidCount = 0;
+
+          dispatches.forEach(d => {
+            const dq = toNum(d.DispatchQuantity);
+            const up = toNum(d.UnitPrice);
+            const fp = toNum(d.FinalPrice);
+
+            billQty += dq;
+            const t = dq * up;
+            taxAmt += t;
+            totalFinalPrice += fp;
+
+            if (fp > 0 && (t === 0 || fp <= t)) {
+              fpValidCount++;
+            }
+          });
+
+          const allHaveFP = fpValidCount === dispatches.length;
+          const base = allHaveFP ? totalFinalPrice : taxAmt;
+          if (taxAmt === 0 && base > 0) taxAmt = base;
+
+          finalPrc = (totalFinalPrice === taxAmt) ? 0 : totalFinalPrice;
+          gstAmt = base * 0.18;
+          tdsAmt = base * 0.00984;
+          actualAmt = base + gstAmt;
+        }
+
         return {
-          BillID: b.id,
-          "Dispatch Month": bill.DispatchMonth || "", 
+          BillID: bId,
+          "Dispatch Month": bill.DispatchMonth || dispatchMonthComputed || "N/A", 
           "Factory Name": bill.FactoryName || "",
           "Bill Num": bill.BillNum || "",
-          "LR Quantity": bill.LRQuantity || 0,
-          "Bill Quantity": toNum(bill.BillQuantity || 0).toFixed(2),
-          "Taxable Amount": toNum(bill.TaxableAmount || 0).toFixed(2),
-          "Final Price": toNum(bill.FinalPrice || 0).toFixed(2),
-          "Actual Amount": toNum(bill.ActualAmount || 0).toFixed(2),
-          "TDS": toNum(bill.TDS || 0).toFixed(2),
-          "GST": toNum(bill.GST || 0).toFixed(2),
+          "LR Quantity": lrQty || 0,
+          "Bill Quantity": toNum(billQty || 0).toFixed(2),
+          "Taxable Amount": toNum(taxAmt || 0).toFixed(2),
+          "Final Price": toNum(finalPrc || 0).toFixed(2),
+          "Actual Amount": toNum(actualAmt || 0).toFixed(2),
+          "TDS": toNum(tdsAmt || 0).toFixed(2),
+          "GST": toNum(gstAmt || 0).toFixed(2),
           
           "Bill Date": formatDate(billDateObj),
           "Bill Type": bill.BillType || "",
