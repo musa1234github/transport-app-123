@@ -289,60 +289,109 @@ const ShowPayment = ({ userRole }) => {
       }
 
       let queryConstraints = [];
-      queryConstraints.push(orderBy("BillDate", "desc"));
+      const hasDateFilter = !!(appliedFilters.fromDate || appliedFilters.toDate);
 
-      if (appliedFilters.factoryFilter) {
-        queryConstraints.push(where("FactoryName", "==", appliedFilters.factoryFilter));
-      }
-
-      if (appliedFilters.fromDate) {
-        const d = new Date(appliedFilters.fromDate);
-        d.setHours(0, 0, 0, 0);
-        queryConstraints.push(where("BillDate", ">=", Timestamp.fromDate(d)));
-      }
-
-      if (appliedFilters.toDate) {
-        const d = new Date(appliedFilters.toDate);
-        d.setHours(23, 59, 59, 999);
-        queryConstraints.push(where("BillDate", "<=", Timestamp.fromDate(d)));
+      if (hasDateFilter) {
+        // A payment report should filter by the Payment Date!
+        if (appliedFilters.fromDate) {
+          const d = new Date(appliedFilters.fromDate);
+          d.setHours(0, 0, 0, 0);
+          queryConstraints.push(where("PaymentRecDate", ">=", Timestamp.fromDate(d)));
+        }
+        if (appliedFilters.toDate) {
+          const d = new Date(appliedFilters.toDate);
+          d.setHours(23, 59, 59, 999);
+          queryConstraints.push(where("PaymentRecDate", "<=", Timestamp.fromDate(d)));
+        }
+        queryConstraints.push(orderBy("PaymentRecDate", "desc"));
+        // Omitting FactoryName server-side to prevent composite index crash on (PaymentRecDate + FactoryName).
+      } else {
+        if (appliedFilters.factoryFilter) {
+          queryConstraints.push(where("FactoryName", "==", appliedFilters.factoryFilter));
+        }
+        queryConstraints.push(orderBy("BillDate", "desc"));
       }
 
       let billQuery;
+      // We use a larger scan limit (400) because limit(21) on BillTable includes UNPAID bills.
+      // We must scan ahead to find enough PAID bills to fill the report page.
+      const SCAN_LIMIT = 400;
+
       if (direction === 'next' && cursorDoc) {
-        billQuery = query(collection(db, "BillTable"), ...queryConstraints, startAfter(cursorDoc), limit(BILLS_PER_PAGE + 1));
+        billQuery = query(collection(db, "BillTable"), ...queryConstraints, startAfter(cursorDoc), limit(SCAN_LIMIT));
       } else if (direction === 'prev' && cursorDoc) {
-        billQuery = query(collection(db, "BillTable"), ...queryConstraints, endBefore(cursorDoc), limitToLast(BILLS_PER_PAGE + 1));
+        billQuery = query(collection(db, "BillTable"), ...queryConstraints, endBefore(cursorDoc), limitToLast(SCAN_LIMIT));
       } else {
-        billQuery = query(collection(db, "BillTable"), ...queryConstraints, limit(BILLS_PER_PAGE + 1));
+        billQuery = query(collection(db, "BillTable"), ...queryConstraints, limit(SCAN_LIMIT));
       }
 
       const snap = await getDocs(billQuery);
       const docs = snap.docs;
+      const serverHasMore = docs.length === SCAN_LIMIT;
 
-      const hasMore = docs.length > BILLS_PER_PAGE;
-      const displayDocs = hasMore ? docs.slice(0, BILLS_PER_PAGE) : docs;
+      // Extract all documents from server scan
+      let billData = processDocs(docs, null, null, false);
 
-      // Update pagination states
-      if (displayDocs.length > 0) {
-        setFirstDoc(displayDocs[0]);
-        setLastDoc(displayDocs[displayDocs.length - 1]);
+      // Filter only paid ones for the report view
+      let allPaidThisScan = billData.filter(r => r.PaymentReceived > 0);
+
+      // Client-side Factory filtering if we used PaymentRecDate backend query
+      if (hasDateFilter && appliedFilters.factoryFilter) {
+          allPaidThisScan = allPaidThisScan.filter(r => r.FactoryName === appliedFilters.factoryFilter);
+      }
+
+      // We only want to display up to BILLS_PER_PAGE
+      const displayData = allPaidThisScan.slice(0, BILLS_PER_PAGE);
+
+      // Determine cursors for pagination based on the ACTUAL docs returned
+      if (displayData.length > 0) {
+        const firstRowId = displayData[0].id;
+        const lastRowId = displayData[displayData.length - 1].id;
+
+        setFirstDoc(docs.find(d => d.id === firstRowId));
+
+        // If we filled a page, the last doc is the 20th item's doc.
+        // If we didn't fill a page but the server has more docs, the last doc is the very last doc scanned so we can continue from there.
+        let nextCursorDoc;
+        let canGoNext = false;
+
+        if (allPaidThisScan.length > BILLS_PER_PAGE) {
+          nextCursorDoc = docs.find(d => d.id === lastRowId);
+          canGoNext = true;
+        } else if (serverHasMore) {
+          nextCursorDoc = docs[docs.length - 1]; // Advance cursor to end of chunk explicitly
+          canGoNext = true;
+        } else {
+          nextCursorDoc = docs.find(d => d.id === lastRowId);
+          canGoNext = false;
+        }
+
+        setLastDoc(nextCursorDoc);
+
         if (direction === 'next') {
-          setHasNextPage(hasMore);
+          setHasNextPage(canGoNext);
           setHasPrevPage(true);
         } else if (direction === 'prev') {
-          setHasPrevPage(hasMore);
+          setHasPrevPage(serverHasMore || allPaidThisScan.length > BILLS_PER_PAGE);
           setHasNextPage(true);
         } else {
-          setHasNextPage(hasMore);
+          setHasNextPage(canGoNext);
           setHasPrevPage(false);
+        }
+      } else {
+        // We found NO paid bills in this 400-document scan!
+        if (serverHasMore) {
+          setLastDoc(docs[docs.length - 1]);
+          setHasNextPage(true); // Let them keep clicking next to scan further
+          setFirstDoc(null);
+        } else {
+          setHasNextPage(false);
+          setLastDoc(null);
+          setFirstDoc(null);
         }
       }
 
-      // Initial processing
-      let billData = processDocs(displayDocs, null, null, false);
-      
-      // Filter only paid ones for the report view
-      billData = billData.filter(r => r.PaymentReceived > 0);
+      billData = displayData;
 
       // ===== BULK ENRICH MISSING BillDate/BillType (Zero-Read Optimization) =====
       const billNums = billData.filter(r => !r.BillDate || !r.BillType).map(r => r.BillNum);
@@ -385,10 +434,12 @@ const ShowPayment = ({ userRole }) => {
         const newHist = [...prev];
         newHist[currentPageIndex] = {
           rows: billData,
-          firstDoc: displayDocs[0],
-          lastDoc: displayDocs[displayDocs.length - 1],
-          hasNextPage: hasMore,
-          hasPrevPage: direction === 'next' ? true : (direction === 'prev' ? hasMore : false)
+          firstDoc: billData.length > 0 ? docs.find(d => d.id === billData[0].id) : null,
+          lastDoc: billData.length > 0 ? (
+            serverHasMore && allPaidThisScan.length <= BILLS_PER_PAGE ? docs[docs.length - 1] : docs.find(d => d.id === billData[billData.length - 1].id)
+          ) : (serverHasMore ? docs[docs.length - 1] : null),
+          hasNextPage: serverHasMore || allPaidThisScan.length > BILLS_PER_PAGE,
+          hasPrevPage: direction === 'next' ? true : (direction === 'prev' ? (serverHasMore || allPaidThisScan.length > BILLS_PER_PAGE) : false)
         };
         return newHist;
       });
@@ -459,6 +510,15 @@ const ShowPayment = ({ userRole }) => {
   // Handle manual "Apply Filters" button click
   const handleApplyClick = () => {
     setCurrentPage(1); // Reset to first page
+    
+    // RESET pagination state properly
+    setFirstDoc(null);
+    setLastDoc(null);
+    setHasNextPage(false);
+    setHasPrevPage(false);
+    setPageHistory([]);
+    setCurrentPageIndex(0);
+
     setHasRequestedData(true);
     // Update appliedFilters - this will trigger the useEffect which calls load()
     setAppliedFilters({
@@ -477,6 +537,15 @@ const ShowPayment = ({ userRole }) => {
     setPaymentTypeFilter("");
     setFromDate("");
     setToDateFilter("");
+
+    // RESET pagination state
+    setFirstDoc(null);
+    setLastDoc(null);
+    setHasNextPage(false);
+    setHasPrevPage(false);
+    setPageHistory([]);
+    setCurrentPageIndex(0);
+
     setAppliedFilters({
       fromDate: "",
       toDate: "",
@@ -534,7 +603,7 @@ const ShowPayment = ({ userRole }) => {
 
   /* ================= EXPORT TO EXCEL ================= */
   const exportToExcel = () => {
-    if (filteredRows.length === 0) {
+    if (currentRecords.length === 0) {
       alert("No data available to export");
       return;
     }
@@ -542,7 +611,7 @@ const ShowPayment = ({ userRole }) => {
     setExporting(true);
     try {
       // Prepare data for export
-      const exportData = filteredRows.map(row => {
+      const exportData = currentRecords.map(row => {
         return {
           "Factory Name": row.FactoryName || "",
           "Bill Number": row.BillNum || "",
@@ -616,7 +685,7 @@ const ShowPayment = ({ userRole }) => {
 
     setExporting(true);
     try {
-      const selectedRows = filteredRows.filter(row => selectedPayments.includes(row.id));
+      const selectedRows = currentRecords.filter(row => selectedPayments.includes(row.id));
 
       const exportData = selectedRows.map(row => {
         return {
@@ -836,7 +905,7 @@ const ShowPayment = ({ userRole }) => {
         <div className="export-button-group">
           <button
             onClick={exportToExcel}
-            disabled={exporting || filteredRows.length === 0}
+            disabled={exporting || currentRecords.length === 0}
             className="export-button export-all-button"
             title="Export all filtered payments to Excel"
           >
@@ -1014,7 +1083,7 @@ const ShowPayment = ({ userRole }) => {
             ) : !loading && (
               <tr>
                 <td colSpan={isAdmin ? "13" : "11"} className="no-data-message">
-                  {!hasRequestedData ? "Click 'Apply Filters' to load payment records." : "No payment records found. Try adjusting your filters."}
+                  {!hasRequestedData ? "Click 'Apply Filters' to load payment records." : (hasNextPage ? "No paid bills found in this server scan chunk. Click 'Next' to scan older records." : "No payment records found. Try adjusting your filters.")}
                 </td>
               </tr>
             )}
@@ -1028,7 +1097,7 @@ const ShowPayment = ({ userRole }) => {
       {isAdmin && showConfirmDelete && (
         <div className="modal-overlay">
           <div className="modal-content">
-            <h3 style={{ marginTop: 0, color: '#dc3545' }}>
+            <h3 style={{ marginTop: 0, color: '#cf2f3fff' }}>
               Confirm Reset Payments
             </h3>
             <p style={{ fontSize: '16px', marginBottom: 20 }}>
