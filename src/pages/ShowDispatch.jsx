@@ -39,7 +39,7 @@ const reverseFactoryMap = Object.fromEntries(
 
 const COLUMN_SEQUENCE = [
   "ChallanNo",
-  "InvoiceNo",
+  "Ex. Number",
   "Destination",
   "VehicleNo",
   "DispatchDate",
@@ -146,7 +146,7 @@ const Row = React.memo(({ index, style, data }) => {
               onChange={e => data.setEditChallan(e.target.value)}
               style={{ padding: 4, width: "100%", boxSizing: "border-box" }}
             />
-          ) : col === "InvoiceNo" && data.editId === d.id ? (
+          ) : col === "Ex. Number" && data.editId === d.id ? (
             <input
               value={data.editInvoice}
               onChange={e => data.setEditInvoice(e.target.value)}
@@ -162,7 +162,7 @@ const Row = React.memo(({ index, style, data }) => {
               />
             ) : formatShortDate(d[col])
           ) : (
-            d[col]
+            col === "Ex. Number" ? (d["Ex. Number"] || d.InvoiceNo) : d[col]
           )}
         </div>
       ))}
@@ -645,14 +645,14 @@ const ShowDispatch = () => {
   const handleEdit = (row) => {
     setEditId(row.id);
     setEditChallan(row.ChallanNo || "");
-    setEditInvoice(row.InvoiceNo || "");
+    setEditInvoice(row["Ex. Number"] || row.InvoiceNo || "");
     setEditDate(row.DispatchDate ? formatDateForInput(row.DispatchDate) : "");
   };
 
   const handleSave = async (id) => {
     const updatedData = {
       ChallanNo: editChallan,
-      InvoiceNo: editInvoice
+      "Ex. Number": editInvoice
     };
 
     let newDate = null;
@@ -666,7 +666,7 @@ const ShowDispatch = () => {
 
     setDispatches(prev =>
       prev.map(d =>
-        d.id === id ? { ...d, ChallanNo: editChallan, InvoiceNo: editInvoice, DispatchDate: newDate } : d
+        d.id === id ? { ...d, ChallanNo: editChallan, "Ex. Number": editInvoice, DispatchDate: newDate } : d
       )
     );
 
@@ -849,7 +849,8 @@ const ShowDispatch = () => {
     const excelData = filteredDispatches.map(d => {
       const row = {};
       COLUMN_SEQUENCE.forEach(k => {
-        row[k] = d[k] instanceof Date ? formatShortDate(d[k]) : d[k];
+        let val = k === "Ex. Number" ? (d["Ex. Number"] || d.InvoiceNo) : d[k];
+        row[k] = val instanceof Date ? formatShortDate(val) : val;
       });
       return row;
     });

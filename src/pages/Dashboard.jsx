@@ -6,7 +6,7 @@ import { useAuth } from "../context/AuthContext";
 import { Link } from "react-router-dom";
 
 const Dashboard = () => {
-    const { userRole } = useAuth();
+    const { userRole, user } = useAuth();
     const [summaryData, setSummaryData] = useState([]);
     const [loading, setLoading] = useState(true);
     const [totalStats, setTotalStats] = useState({ totalQty: 0, billQty: 0, balance: 0 });
@@ -16,6 +16,7 @@ const Dashboard = () => {
 
     useEffect(() => {
         const fetchDashboardData = async () => {
+            if (!user) return; // wait for user auth before fetching
             setLoading(true);
             try {
                 // Optimized "One-Read" Summary Fetch
@@ -56,7 +57,7 @@ const Dashboard = () => {
         };
 
         fetchDashboardData();
-    }, [currentYear, currentMonth]);
+    }, [currentYear, currentMonth, user]);
 
     const fmt = (n) => Number(n).toLocaleString("en-IN", { maximumFractionDigits: 0 });
 

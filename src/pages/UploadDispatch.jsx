@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { db } from "../firebaseConfig";
-import { collection, doc, getDocs, setDoc, writeBatch, Timestamp } from "firebase/firestore";
+import { collection, doc, getDocs, setDoc, writeBatch, Timestamp, query, where, limit } from "firebase/firestore";
 import * as XLSX from "xlsx";
 import "./UploadDispatch.css";
 import { updateMonthlySummary } from "../utils/dispatchSummaryHelper";
@@ -193,8 +193,8 @@ const UploadDispatch = () => {
             colMap.ChallanNo = i;
           }
           
-          // ✅ Invoice No
-          if (name.includes("INVOICE") || name.includes("EXINV") || name.includes("INV")) {
+          // ✅ Invoice / Ex. Number
+          if (name.includes("INVOICE") || name.includes("EXINV") || name.includes("INV") || name.includes("EXNUM") || name.includes("EXNO")) {
             colMap.InvoiceNo = i;
           }
 
@@ -346,9 +346,9 @@ const UploadDispatch = () => {
           CreatedOn: Timestamp.now()
         };
 
-        // ✅ InvoiceNo (Only for MANIGARH as requested)
+        // ✅ Ex. Number (Only for MANIGARH as requested)
         if (factoryName === "MANIGARH" && colMap.InvoiceNo !== undefined) {
-          dto.InvoiceNo = row[colMap.InvoiceNo] ? String(row[colMap.InvoiceNo]).trim() : "";
+          dto["Ex. Number"] = row[colMap.InvoiceNo] ? String(row[colMap.InvoiceNo]).trim() : "";
         }
 
         if (factoryName === "AMBUJA") {
