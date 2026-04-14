@@ -96,12 +96,16 @@ const FACTORY_COLUMN_MAPS = {
 
 /* ================= COMPONENT ================= */
 
+const FACTORIES = ["ACC MARATHA","AMBUJA","DALMIA","MP BIRLA","ORIENT","MANIKGARH","ULTRATECH","JSW"];
+
 const UploadDispatch = () => {
   const [factory, setFactory] = useState("");
   const [file, setFile] = useState(null);
   const [message, setMessage] = useState("");
   const [vehicles, setVehicles] = useState([]);
   const [isUploading, setIsUploading] = useState(false);
+
+
 
   /* ================= LOAD VEHICLES WITH CACHE ================= */
   useEffect(() => {
@@ -150,7 +154,10 @@ const UploadDispatch = () => {
     factoryName = factoryName.toUpperCase().trim();
 
     let uploaded = 0;
+    let totalParsed = 0;
     let alreadyExistInDB = [];
+    let invalidDateRows = [];
+    let invalidQtyRows = [];
     let otherFailures = [];
     let vehicleNotFound = [];
 
@@ -257,6 +264,7 @@ const UploadDispatch = () => {
       const processedThisUpload = new Set();
       const uniqueChallansForDB = new Set();
       const rowsToProcess = [];
+      const inFileduplicates = [];
 
       // 1. First pass: Collect unique challans and validate basic row data
       for (let i = 0; i < dataRows.length; i++) {
@@ -267,9 +275,14 @@ const UploadDispatch = () => {
 
         const challanNo = normalizeChallan(row[colMap.ChallanNo]);
         if (!challanNo) continue;
-        
+
+        totalParsed++;
+
         // Skip file-level duplicates
-        if (processedThisUpload.has(challanNo)) continue;
+        if (processedThisUpload.has(challanNo)) {
+          inFileduplicates.push(challanNo);
+          continue;
+        }
         processedThisUpload.add(challanNo);
         
         uniqueChallansForDB.add(challanNo);
@@ -277,7 +290,8 @@ const UploadDispatch = () => {
       }
 
       // 2. Targeted Prefetch: check which challans already exist in DB
-      const existingInDB = new Set();
+      // existingInDB: Map<ChallanNo, { dispatchDate: string }>
+      const existingInDB = new Map();
       const challanArr = Array.from(uniqueChallansForDB);
       for (let i = 0; i < challanArr.length; i += 30) {
         const chunk = challanArr.slice(i, i + 30);
@@ -287,7 +301,17 @@ const UploadDispatch = () => {
           where("ChallanNo", "in", chunk)
         );
         const snap = await getDocs(q);
-        snap.forEach(d => existingInDB.add(d.data().ChallanNo));
+        snap.forEach(d => {
+          const data = d.data();
+          let storedDate = "—";
+          if (data.DispatchDate && data.DispatchDate.toDate) {
+            const dt = data.DispatchDate.toDate();
+            storedDate = dt.toLocaleDateString("en-IN", {
+              day: "2-digit", month: "short", year: "numeric"
+            }); // e.g. "05 Mar 2026"
+          }
+          existingInDB.set(data.ChallanNo, { dispatchDate: storedDate });
+        });
       }
 
       const validDtos = [];   // { docId, dto }
@@ -295,21 +319,22 @@ const UploadDispatch = () => {
       for (const { challanNo, row } of rowsToProcess) {
         // Skip DB-level duplicates to save writes and provide clean feedback
         if (existingInDB.has(challanNo)) {
-          alreadyExistInDB.push(challanNo);
+          const { dispatchDate } = existingInDB.get(challanNo);
+          alreadyExistInDB.push({ challanNo, dispatchDate });
           continue;
         }
 
         const rawQty = row[colMap.Qty];
         const qty = parseQuantity(rawQty);
-        if (qty < 0) {
-          otherFailures.push({ challanNo, reason: `Invalid quantity: ${rawQty}` });
+        if (qty <= 0) {
+          invalidQtyRows.push({ challanNo, reason: `Invalid/zero quantity: "${rawQty}"` });
           continue;
         }
 
         const rawDate = row[colMap.DispatchDate];
         const dispatchDate = parseExcelDate(rawDate);
         if (!dispatchDate) {
-          otherFailures.push({ challanNo, reason: `Invalid date: ${rawDate}` });
+          invalidDateRows.push({ challanNo, reason: `Unreadable date: "${rawDate}"` });
           continue;
         }
 
@@ -386,31 +411,87 @@ const UploadDispatch = () => {
       await Promise.all(validDtos.map(({ dto }) => updateMonthlySummary(dto)));
 
       uploaded = validDtos.length;
+      const skipped = totalParsed - uploaded
+        - alreadyExistInDB.length
+        - inFileduplicates.length
+        - invalidQtyRows.length
+        - invalidDateRows.length
+        - otherFailures.length;
+
       let resultMessage = "";
 
-      if (uploaded > 0) {
-        resultMessage += `✅ New records uploaded: ${uploaded}\n\n`;
-      } else {
-        resultMessage += `⚠️ No new records uploaded.\n\n`;
+      // ── Summary line ──────────────────────────────────────────────────
+      resultMessage += `📊 Total records in file : ${totalParsed}\n`;
+      resultMessage += `✅ Successfully uploaded  : ${uploaded}\n`;
+      const notUploaded = totalParsed - uploaded;
+      if (notUploaded > 0) {
+        resultMessage += `⛔ Not uploaded           : ${notUploaded}\n`;
+      }
+      resultMessage += `\n`;
+
+      // ── Breakdown of failures ─────────────────────────────────────────
+      if (alreadyExistInDB.length > 0) {
+        resultMessage += `ℹ️ Already exist in DB (${alreadyExistInDB.length} skipped):\n`;
+        resultMessage += `${"-".repeat(52)}\n`;
+        resultMessage += `  ${ "Challan No".padEnd(18)} Dispatch Date in DB\n`;
+        resultMessage += `${"-".repeat(52)}\n`;
+        alreadyExistInDB.slice(0, 30).forEach(({ challanNo, dispatchDate }) => {
+          resultMessage += `  ${challanNo.padEnd(18)} ${dispatchDate}\n`;
+        });
+        if (alreadyExistInDB.length > 30)
+          resultMessage += `  … and ${alreadyExistInDB.length - 30} more\n`;
+        resultMessage += `\n`;
       }
 
-      if (alreadyExistInDB.length > 0 && uploaded === 0 && otherFailures.length === 0) {
-        resultMessage += `ℹ️ ${alreadyExistInDB.length} duplicate challan(s) skipped.\n\n`;
+      if (inFileduplicates.length > 0) {
+        resultMessage += `⚠️ Duplicate within file (${inFileduplicates.length} skipped):\n`;
+        inFileduplicates.slice(0, 10).forEach(c => {
+          resultMessage += `  • Challan ${c}: Repeated row in Excel file\n`;
+        });
+        if (inFileduplicates.length > 10)
+          resultMessage += `  … and ${inFileduplicates.length - 10} more\n`;
+        resultMessage += `\n`;
+      }
+
+      if (invalidDateRows.length > 0) {
+        resultMessage += `❌ Invalid/missing date (${invalidDateRows.length} failed):\n`;
+        invalidDateRows.forEach(f => {
+          resultMessage += `  • Challan ${f.challanNo}: ${f.reason}\n`;
+        });
+        resultMessage += `\n`;
+      }
+
+      if (invalidQtyRows.length > 0) {
+        resultMessage += `❌ Invalid/zero quantity (${invalidQtyRows.length} failed):\n`;
+        invalidQtyRows.forEach(f => {
+          resultMessage += `  • Challan ${f.challanNo}: ${f.reason}\n`;
+        });
+        resultMessage += `\n`;
       }
 
       if (otherFailures.length > 0) {
-        resultMessage += `❌ Failed to upload (${otherFailures.length} challans):\n`;
-        otherFailures.forEach(failure => {
-          resultMessage += `  • Challan ${failure.challanNo}: ${failure.reason}\n`;
+        resultMessage += `❌ Other failures (${otherFailures.length}):\n`;
+        otherFailures.forEach(f => {
+          resultMessage += `  • Challan ${f.challanNo}: ${f.reason}\n`;
         });
-        resultMessage += "\n";
+        resultMessage += `\n`;
       }
 
       if (vehicleNotFound.length > 0) {
-        resultMessage += `⚠️ Vehicle not found in master (${vehicleNotFound.length} records).\n`;
+        resultMessage += `⚠️ Vehicle not found in master (${vehicleNotFound.length} records — uploaded with raw vehicle no.):\n`;
+        vehicleNotFound.slice(0, 10).forEach(({ challanNo, vehicleNo }) => {
+          resultMessage += `  • Challan ${challanNo}: Vehicle "${vehicleNo}" not registered\n`;
+        });
+        if (vehicleNotFound.length > 10)
+          resultMessage += `  … and ${vehicleNotFound.length - 10} more\n`;
+        resultMessage += `\n`;
       }
 
-      setMessage(resultMessage);
+      if (uploaded === 0 && totalParsed === 0) {
+        resultMessage = "⚠️ No valid data rows found in the file.";
+      }
+
+      setMessage(resultMessage.trim());
 
     } catch (err) {
       console.error("Upload error:", err);
@@ -420,8 +501,13 @@ const UploadDispatch = () => {
     }
   };
 
+
+
   return (
     <div className="upload-container">
+
+
+      {/* ════════ UPLOAD FORM ════════ */}
       <h3>📤 Upload Dispatch Excel</h3>
       {isUploading && <div className="upload-status">⏳ Processing file...</div>}
       <pre className="message-display">{message}</pre>

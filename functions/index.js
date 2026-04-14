@@ -69,7 +69,8 @@ exports.exportDispatches = onRequest(
       queryReq = queryReq
         .where("DispatchDate", ">=", from)
         .where("DispatchDate", "<=", to)
-        .limit(300); // Optimized safety limit for performance and cost
+        .orderBy("DispatchDate", "asc")
+        .limit(5000); // Increased limit to cover multi-month ranges
 
       const snapshot = await queryReq.get();
 

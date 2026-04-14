@@ -7,6 +7,11 @@ service cloud.firestore {
       allow read, write: if request.auth != null;
     }
 
+    // Dispatch Monthly Summaries - any authenticated user can read/write
+    match /TblDispatchMonthly/{document} {
+      allow read, write: if request.auth != null;
+    }
+
     // Billing Table — any authenticated user can read/write
     match /BillTable/{document} {
       allow read, write: if request.auth != null;
@@ -30,13 +35,13 @@ service cloud.firestore {
     // Factories (capital F) — readable by any logged-in user, writable only by admins
     match /Factories/{document} {
       allow read: if request.auth != null;
-      allow write: if request.auth != null && request.auth.token.admin == true;
+      allow write: if request.auth != null && (request.auth.token.admin == true || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin");
     }
 
     // factories (lowercase) — same rules, used by FactoryList, GstUpload, GstReport etc.
     match /factories/{document} {
       allow read: if request.auth != null;
-      allow write: if request.auth != null && request.auth.token.admin == true;
+      allow write: if request.auth != null && (request.auth.token.admin == true || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin");
     }
 
     // Upload Sessions — any authenticated user can read/write

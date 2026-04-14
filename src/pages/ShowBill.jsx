@@ -298,26 +298,10 @@ const ShowBill = ({ userRole }) => {
       let billQuery;
       const isFiltering = appliedFilters.fromDate || appliedFilters.toDate || appliedFilters.factoryFilter;
 
-      if (isFiltering && direction === 'next' && cursorDoc) {
+      if (isFiltering) {
         billQuery = query(
           collection(db, "BillTable"),
-          ...queryConstraints,
-          startAfter(cursorDoc),
-          limit(BILLS_PER_PAGE + 1)   // ✅ FIXED: limit added for filtered next-page
-        );
-      } else if (isFiltering && direction === 'prev' && cursorDoc) {
-        billQuery = query(
-          collection(db, "BillTable"),
-          ...queryConstraints,
-          endBefore(cursorDoc),
-          limitToLast(BILLS_PER_PAGE + 1)  // ✅ FIXED: limit added for filtered prev-page
-        );
-      } else if (isFiltering) {
-        // ✅ FIXED: was missing limit — caused 600+ reads for just 2 results!
-        billQuery = query(
-          collection(db, "BillTable"),
-          ...queryConstraints,
-          limit(BILLS_PER_PAGE + 1)
+          ...queryConstraints
         );
       } else if (direction === 'next' && cursorDoc) {
         billQuery = query(
@@ -359,8 +343,8 @@ const ShowBill = ({ userRole }) => {
       }
 
       // Check if there are more pages — works for BOTH filtered and non-filtered
-      const hasMore = docs.length > BILLS_PER_PAGE;
-      const displayDocs = hasMore ? docs.slice(0, BILLS_PER_PAGE) : docs;
+      const hasMore = isFiltering ? false : docs.length > BILLS_PER_PAGE;
+      const displayDocs = isFiltering ? docs : (hasMore ? docs.slice(0, BILLS_PER_PAGE) : docs);
       console.log(`📊 Docs fetched: ${docs.length}, showing: ${displayDocs.length}, hasMore: ${hasMore}`);
 
       // ===== BULK PREFETCH DISPATCHES TO COMPUTE MISSING FIELDS (Dispatch Month, Amounts) =====
@@ -369,27 +353,30 @@ const ShowBill = ({ userRole }) => {
 
       if (billIds.length > 0) {
         try {
-          // Firestore 'in' query supports max 30 items, BILLS_PER_PAGE is 20, so this is safe!
-          const dispQ = query(
-            collection(db, "TblDispatch"),
-            where("BillID", "in", billIds)
-          );
-          const dispSnap = await getDocs(dispQ);
-          
-          dispSnap.forEach(dDoc => {
-            const data = dDoc.data();
-            const bId = data.BillID;
-            if (!dispatchGroups[bId]) dispatchGroups[bId] = [];
+          // Firestore 'in' query supports max 30 items, so chunk the array
+          for (let i = 0; i < billIds.length; i += 30) {
+            const chunk = billIds.slice(i, i + 30);
+            const dispQ = query(
+              collection(db, "TblDispatch"),
+              where("BillID", "in", chunk)
+            );
+            const dispSnap = await getDocs(dispQ);
             
-            // Format DispatchDate so getDispatchMonth can read it correctly
-            const dDateObj = toDate(data.DispatchDate);
-            const formattedDate = formatDate(dDateObj);
-            
-            dispatchGroups[bId].push({
-              ...data,
-              DispatchDateStr: formattedDate // Use this for getDispatchMonth
+            dispSnap.forEach(dDoc => {
+              const data = dDoc.data();
+              const bId = data.BillID;
+              if (!dispatchGroups[bId]) dispatchGroups[bId] = [];
+              
+              // Format DispatchDate so getDispatchMonth can read it correctly
+              const dDateObj = toDate(data.DispatchDate);
+              const formattedDate = formatDate(dDateObj);
+              
+              dispatchGroups[bId].push({
+                ...data,
+                DispatchDateStr: formattedDate // Use this for getDispatchMonth
+              });
             });
-          });
+          }
         } catch (err) {
           console.error("Error batch fetching dispatches:", err);
         }

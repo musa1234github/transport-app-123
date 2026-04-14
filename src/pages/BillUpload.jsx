@@ -325,12 +325,28 @@ const BillUpload = () => {
         let batchCount = 0;
         const batchTotal = Math.ceil(parsedRows.length / (CHUNK_SIZE / 2));  // Roughly
 
+        const processedChallans = new Set();
+
         for (let i = 0; i < parsedRows.length; i++) {
           const rowData = parsedRows[i];
           const rowIndex = rowData.originalRowIndex;
           
           const { challanNo, quantity, unitPrice, finalPrice, billNum, billDate, billTypeOrLR, deliveryNum } = rowData;
           const billType = getBillType(billTypeOrLR, factory);
+
+          // ❌ Duplicate inside same upload file
+          if (processedChallans.has(challanNo)) {
+            failedList.push({
+              row: rowIndex + 1,
+              challanNo,
+              billNum,
+              error: "Duplicate in file",
+              reason: "Same challan repeated in upload"
+            });
+            failed++;
+            continue;
+          }
+          processedChallans.add(challanNo);
 
           // VALIDATION
           if (!challanNo || !billNum || !billDate) {
@@ -351,7 +367,8 @@ const BillUpload = () => {
 
           try {
             const dispatchDoc = dispatchMap[challanNo];
-            
+
+            // ❌ Dispatch not found
             if (!dispatchDoc) {
               failedList.push({
                 row: rowIndex + 1,
@@ -360,7 +377,29 @@ const BillUpload = () => {
                 error: "Dispatch not found",
                 reason: `Challan ${challanNo} not found in ${factory} factory`
               });
-              batchLogs.push({ msg: `Row ${rowIndex+1}: Dispatch not found for challan ${challanNo} in ${factory}`, type: "warning" });
+              batchLogs.push({
+                msg: `Row ${rowIndex+1}: Dispatch not found for challan ${challanNo}`,
+                type: "warning"
+              });
+              failed++;
+              continue;
+            }
+            
+            // ❌ BLOCK DUPLICATE CHALLAN (already assigned to another bill)
+            if (dispatchDoc.BillID && dispatchDoc.BillNum !== billNum) {
+              failedList.push({
+                row: rowIndex + 1,
+                challanNo,
+                billNum,
+                error: "Duplicate Challan",
+                reason: `Already assigned to Bill ${dispatchDoc.BillNum}`
+              });
+
+              batchLogs.push({
+                msg: `Row ${rowIndex+1}: Challan ${challanNo} already used in Bill ${dispatchDoc.BillNum}`,
+                type: "warning"
+              });
+
               failed++;
               continue;
             }
