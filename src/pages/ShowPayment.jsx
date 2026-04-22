@@ -10,7 +10,10 @@ import {
   doc,
   serverTimestamp,
   orderBy,
-  limit
+  limit,
+  startAfter,
+  endBefore,
+  limitToLast
 } from "firebase/firestore";
 import { db } from "../firebaseConfig";
 import * as XLSX from 'xlsx';
@@ -313,9 +316,9 @@ const ShowPayment = ({ userRole }) => {
       }
 
       let billQuery;
-      // We use a larger scan limit (400) because limit(21) on BillTable includes UNPAID bills.
-      // We must scan ahead to find enough PAID bills to fill the report page.
-      const SCAN_LIMIT = 400;
+      // When using date filter, we want to fetch all records (up to a large limit) so they can be exported
+      // Otherwise, we use a larger scan limit (400) because limit(21) on BillTable includes UNPAID bills.
+      const SCAN_LIMIT = hasDateFilter ? 2000 : 400;
 
       if (direction === 'next' && cursorDoc) {
         billQuery = query(collection(db, "BillTable"), ...queryConstraints, startAfter(cursorDoc), limit(SCAN_LIMIT));
@@ -340,10 +343,8 @@ const ShowPayment = ({ userRole }) => {
           allPaidThisScan = allPaidThisScan.filter(r => r.FactoryName === appliedFilters.factoryFilter);
       }
 
-      // We only want to display up to BILLS_PER_PAGE
-      const displayData = allPaidThisScan.slice(0, BILLS_PER_PAGE);
-
-      // Determine cursors for pagination based on the ACTUAL docs returned
+      // We no longer slice to BILLS_PER_PAGE so all scanned matching payments are available to export and view.
+      const displayData = allPaidThisScan;
       if (displayData.length > 0) {
         const firstRowId = displayData[0].id;
         const lastRowId = displayData[displayData.length - 1].id;
@@ -354,8 +355,10 @@ const ShowPayment = ({ userRole }) => {
         // If we didn't fill a page but the server has more docs, the last doc is the very last doc scanned so we can continue from there.
         let nextCursorDoc;
         let canGoNext = false;
+        
+        let limitReached = hasDateFilter ? false : (allPaidThisScan.length > BILLS_PER_PAGE);
 
-        if (allPaidThisScan.length > BILLS_PER_PAGE) {
+        if (limitReached) {
           nextCursorDoc = docs.find(d => d.id === lastRowId);
           canGoNext = true;
         } else if (serverHasMore) {
@@ -372,7 +375,7 @@ const ShowPayment = ({ userRole }) => {
           setHasNextPage(canGoNext);
           setHasPrevPage(true);
         } else if (direction === 'prev') {
-          setHasPrevPage(serverHasMore || allPaidThisScan.length > BILLS_PER_PAGE);
+          setHasPrevPage(serverHasMore || limitReached);
           setHasNextPage(true);
         } else {
           setHasNextPage(canGoNext);
@@ -432,14 +435,15 @@ const ShowPayment = ({ userRole }) => {
       setAllRows(billData);
       setPageHistory(prev => {
         const newHist = [...prev];
+        let hasMoreItemsLocal = hasDateFilter ? false : (allPaidThisScan.length > BILLS_PER_PAGE);
         newHist[currentPageIndex] = {
           rows: billData,
           firstDoc: billData.length > 0 ? docs.find(d => d.id === billData[0].id) : null,
           lastDoc: billData.length > 0 ? (
-            serverHasMore && allPaidThisScan.length <= BILLS_PER_PAGE ? docs[docs.length - 1] : docs.find(d => d.id === billData[billData.length - 1].id)
+            serverHasMore && !hasMoreItemsLocal ? docs[docs.length - 1] : docs.find(d => d.id === billData[billData.length - 1].id)
           ) : (serverHasMore ? docs[docs.length - 1] : null),
-          hasNextPage: serverHasMore || allPaidThisScan.length > BILLS_PER_PAGE,
-          hasPrevPage: direction === 'next' ? true : (direction === 'prev' ? (serverHasMore || allPaidThisScan.length > BILLS_PER_PAGE) : false)
+          hasNextPage: serverHasMore || hasMoreItemsLocal,
+          hasPrevPage: direction === 'next' ? true : (direction === 'prev' ? (serverHasMore || hasMoreItemsLocal) : false)
         };
         return newHist;
       });

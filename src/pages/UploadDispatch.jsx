@@ -1,10 +1,20 @@
 import React, { useState, useEffect } from "react";
 import { db } from "../firebaseConfig";
-import { collection, doc, getDocs, setDoc, writeBatch, Timestamp, query, where, limit } from "firebase/firestore";
+import {
+  collection,
+  doc,
+  getDocs,
+  writeBatch,
+  Timestamp,
+  query,
+  where,
+  limit
+} from "firebase/firestore";
 import * as XLSX from "xlsx";
 import "./UploadDispatch.css";
 import { updateMonthlySummary } from "../utils/dispatchSummaryHelper";
 
+console.log("QUERY IMPORT CHECK:", query);
 /* ================= HELPER FUNCTIONS ================= */
 
 const parseExcelDate = (value) => {
@@ -104,6 +114,13 @@ const UploadDispatch = () => {
   const [message, setMessage] = useState("");
   const [vehicles, setVehicles] = useState([]);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+
+  // ── TEMP: Update Dispatch Date Only ──────────────────
+  const [dateUpdateFactory, setDateUpdateFactory] = useState("");
+  const [dateUpdateFile, setDateUpdateFile] = useState(null);
+  const [dateUpdateMessage, setDateUpdateMessage] = useState("");
+  const [isDateUpdating, setIsDateUpdating] = useState(false);
 
 
 
@@ -143,6 +160,7 @@ const UploadDispatch = () => {
     e.preventDefault();
     setMessage("");
     setIsUploading(true);
+    setUploadProgress(0);
 
     if (!file || !factory) {
       setMessage("❌ File and Factory required");
@@ -293,6 +311,7 @@ const UploadDispatch = () => {
       // existingInDB: Map<ChallanNo, { dispatchDate: string }>
       const existingInDB = new Map();
       const challanArr = Array.from(uniqueChallansForDB);
+      const prefetchPromises = [];
       for (let i = 0; i < challanArr.length; i += 30) {
         const chunk = challanArr.slice(i, i + 30);
         const q = query(
@@ -300,7 +319,11 @@ const UploadDispatch = () => {
           where("FactoryName", "==", factoryName),
           where("ChallanNo", "in", chunk)
         );
-        const snap = await getDocs(q);
+        prefetchPromises.push(getDocs(q));
+      }
+      
+      const snaps = await Promise.all(prefetchPromises);
+      snaps.forEach(snap => {
         snap.forEach(d => {
           const data = d.data();
           let storedDate = "—";
@@ -308,11 +331,11 @@ const UploadDispatch = () => {
             const dt = data.DispatchDate.toDate();
             storedDate = dt.toLocaleDateString("en-IN", {
               day: "2-digit", month: "short", year: "numeric"
-            }); // e.g. "05 Mar 2026"
+            });
           }
           existingInDB.set(data.ChallanNo, { dispatchDate: storedDate });
         });
-      }
+      });
 
       const validDtos = [];   // { docId, dto }
 
@@ -397,16 +420,26 @@ const UploadDispatch = () => {
       }
 
       const BATCH_LIMIT = 499;
+      let documentsUploaded = 0;
+      
+      // Parallelize batch commits to significantly speed up write speeds
+      const batchPromises = [];
       for (let start = 0; start < validDtos.length; start += BATCH_LIMIT) {
         const chunk = validDtos.slice(start, start + BATCH_LIMIT);
         const batch = writeBatch(db);
         chunk.forEach(({ docId, dto }) => {
-          // Use merge: true to avoid overwriting partial data if needed, 
-          // although here we are creating/overwriting full records.
           batch.set(doc(collection(db, "TblDispatch"), docId), dto, { merge: true });
         });
-        await batch.commit();
+        
+        // Execute batch and update progress
+        batchPromises.push(
+          batch.commit().then(() => {
+            documentsUploaded += chunk.length;
+            setUploadProgress(Math.round((documentsUploaded / validDtos.length) * 100));
+          })
+        );
       }
+      await Promise.all(batchPromises);
 
       await Promise.all(validDtos.map(({ dto }) => updateMonthlySummary(dto)));
 
@@ -501,6 +534,162 @@ const UploadDispatch = () => {
     }
   };
 
+  /* ================= [TEMP] UPDATE DISPATCH DATE ONLY ================= */
+  const handleDateUpdate = async (e) => {
+    e.preventDefault();
+    setDateUpdateMessage("");
+    setIsDateUpdating(true);
+
+    if (!dateUpdateFile || !dateUpdateFactory) {
+      setDateUpdateMessage("❌ File and Factory required");
+      setIsDateUpdating(false);
+      return;
+    }
+
+    const factoryName = dateUpdateFactory.toUpperCase().trim();
+
+    let updated = 0;
+    let notFound = [];
+    let invalidDate = [];
+    let totalParsed = 0;
+
+    try {
+      const buffer = await dateUpdateFile.arrayBuffer();
+      const wb = XLSX.read(buffer);
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      // Read raw rows so we can detect headers
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+      // ── Auto-detect header row ──────────────────────────────────────
+      const HEADER_KEYWORDS = ["CHALLAN", "DATE", "LR", "DELIVERY", "DC", "DISPATCH"];
+      const headerRowIndex = rows.findIndex(row =>
+        Array.isArray(row) &&
+        row.some(cell => HEADER_KEYWORDS.some(k => String(cell || "").toUpperCase().includes(k)))
+      );
+
+      if (headerRowIndex === -1) {
+        setDateUpdateMessage("❌ Could not detect header row. Ensure the Excel has 'Challan' and 'Date' headers.");
+        setIsDateUpdating(false);
+        return;
+      }
+
+      // Map column indices
+      let challanCol = undefined;
+      let dateCol = undefined;
+
+      rows[headerRowIndex].forEach((h, i) => {
+        if (!h) return;
+        const name = String(h).toUpperCase().replace(/[^A-Z]/g, "");
+        if (name.includes("CHALLAN") || name.includes("LR") || name.includes("DELIVERY") || name.includes("DCNO") || name.includes("DELVNO")) {
+          challanCol = i;
+        }
+        if (
+          name === "DISPATCHDATE" || name === "DISPATCHDT" || name === "DESPATCHDATE" || name === "EXDATE" || name === "EXDT" ||
+          ((name.includes("DISPATCH") || name.includes("DESPATCH") || name.includes("EX")) && (name.includes("DATE") || name.includes("DT")))
+        ) {
+          dateCol = i;
+        } else if (dateCol === undefined && (name === "DATE" || name === "DT")) {
+          dateCol = i;
+        }
+      });
+
+      if (challanCol === undefined || dateCol === undefined) {
+        setDateUpdateMessage(`❌ Could not find Challan (col=${challanCol}) or Date (col=${dateCol}) columns.`);
+        setIsDateUpdating(false);
+        return;
+      }
+
+      const dataRows = rows.slice(headerRowIndex + 1);
+
+      // ── Collect unique valid rows ─────────────────────────────────
+      const seen = new Set();
+      const toProcess = []   // { challanNo, newDate }
+
+      for (const row of dataRows) {
+        if (!row || !Array.isArray(row)) continue;
+        const isEmpty = row.every(v => v === null || v === "" || (typeof v === "string" && v.trim() === ""));
+        if (isEmpty) continue;
+
+        const challanNo = normalizeChallan(row[challanCol]);
+        if (!challanNo || seen.has(challanNo)) continue;
+        seen.add(challanNo);
+        totalParsed++;
+
+        const newDate = parseExcelDate(row[dateCol]);
+        if (!newDate) {
+          invalidDate.push({ challanNo, raw: String(row[dateCol] ?? "") });
+          continue;
+        }
+
+        toProcess.push({ challanNo, newDate });
+      }
+
+      // ── Batch-fetch existing doc IDs by challan ───────────────────
+      const challanArr = toProcess.map(r => r.challanNo);
+      const docIdMap = new Map();   // challanNo → docId
+
+      for (let i = 0; i < challanArr.length; i += 30) {
+        const chunk = challanArr.slice(i, i + 30);
+        const q = query(
+          collection(db, "TblDispatch"),
+          where("FactoryName", "==", factoryName),
+          where("ChallanNo", "in", chunk)
+        );
+        const snap = await getDocs(q);
+        snap.forEach(d => {
+          docIdMap.set(d.data().ChallanNo, d.id);
+        });
+      }
+
+      // ── Perform updates via batched writes ────────────────────────
+      const BATCH_LIMIT = 499;
+      const updateItems = [];   // { docId, newDate }
+
+      for (const { challanNo, newDate } of toProcess) {
+        const docId = docIdMap.get(challanNo);
+        if (!docId) {
+          notFound.push(challanNo);
+          continue;
+        }
+        updateItems.push({ docId, newDate });
+      }
+
+      for (let start = 0; start < updateItems.length; start += BATCH_LIMIT) {
+        const chunk = updateItems.slice(start, start + BATCH_LIMIT);
+        const batch = writeBatch(db);
+        chunk.forEach(({ docId, newDate }) => {
+          batch.update(doc(db, "TblDispatch", docId), {
+            DispatchDate: Timestamp.fromDate(newDate)
+          });
+        });
+        await batch.commit();
+        updated += chunk.length;
+      }
+
+      // ── Build result message ──────────────────────────────────────
+      let msg = "";
+      msg += `📊 Total records parsed    : ${totalParsed}\n`;
+      msg += `✅ Dispatch dates updated  : ${updated}\n`;
+      if (notFound.length > 0) {
+        msg += `\nℹ️ Challan not found in DB (${notFound.length} skipped):\n`;
+        msg += `-`.repeat(48) + "\n";
+        notFound.slice(0, 20).forEach(c => { msg += `  • ${c}\n`; });
+        if (notFound.length > 20) msg += `  … and ${notFound.length - 20} more\n`;
+      }
+      if (invalidDate.length > 0) {
+        msg += `\n❌ Invalid / missing date (${invalidDate.length} skipped):\n`;
+        invalidDate.forEach(({ challanNo, raw }) => { msg += `  • Challan ${challanNo}: "${raw}"\n`; });
+      }
+
+      setDateUpdateMessage(msg.trim());
+    } catch (err) {
+      console.error("Date update error:", err);
+      setDateUpdateMessage(`❌ Failed: ${err.message}`);
+    } finally {
+      setIsDateUpdating(false);
+    }
+  };
+
 
 
   return (
@@ -509,7 +698,34 @@ const UploadDispatch = () => {
 
       {/* ════════ UPLOAD FORM ════════ */}
       <h3>📤 Upload Dispatch Excel</h3>
-      {isUploading && <div className="upload-status">⏳ Processing file...</div>}
+      {isUploading && (
+        <div className="upload-status" style={{ textAlign: "center", marginBottom: "1rem" }}>
+          <div>⏳ Processing and Uploading file...</div>
+          <div style={{
+            width: '100%',
+            height: '20px',
+            backgroundColor: '#e0e0e0',
+            borderRadius: '10px',
+            marginTop: '8px',
+            overflow: 'hidden'
+          }}>
+            <div style={{
+              width: `${Math.max(5, uploadProgress)}%`,
+              height: '100%',
+              backgroundColor: '#4caf50',
+              transition: 'width 0.3s ease',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'white',
+              fontSize: '12px',
+              fontWeight: 'bold'
+            }}>
+              {uploadProgress}%
+            </div>
+          </div>
+        </div>
+      )}
       <pre className="message-display">{message}</pre>
       <form onSubmit={handleUpload} className="upload-form">
         <div className="form-group">
@@ -532,6 +748,50 @@ const UploadDispatch = () => {
         </div>
         <button type="submit" disabled={isUploading} className="upload-button">
           {isUploading ? '⏳ Uploading...' : '📤 Upload'}
+        </button>
+      </form>
+
+      {/* ════════ [TEMP] UPDATE DISPATCH DATE ONLY ════════ */}
+      <hr style={{ margin: "32px 0", borderColor: "#e0c97f", borderStyle: "dashed" }} />
+      <h3 style={{ color: "#b8860b" }}>🗓️ [Temp] Update Dispatch Date Only</h3>
+      <p style={{ color: "#888", fontSize: "0.85rem", marginBottom: 8 }}>
+        Upload an Excel with <strong>Challan No</strong> + <strong>Date</strong> columns.
+        Only <em>DispatchDate</em> will be updated on matching records — no new records created.
+      </p>
+      {isDateUpdating && <div className="upload-status">⏳ Updating dates...</div>}
+      <pre className="message-display">{dateUpdateMessage}</pre>
+      <form onSubmit={handleDateUpdate} className="upload-form">
+        <div className="form-group">
+          <label>🏭 Select Factory:</label>
+          <select
+            value={dateUpdateFactory}
+            onChange={e => setDateUpdateFactory(e.target.value)}
+            required
+            disabled={isDateUpdating}
+          >
+            <option value="">-- Select Factory --</option>
+            <option>ACC MARATHA</option>
+            <option>AMBUJA</option>
+            <option>DALMIA</option>
+            <option>MP BIRLA</option>
+            <option>ORIENT</option>
+            <option>MANIKGARH</option>
+            <option>ULTRATECH</option>
+            <option>JSW</option>
+          </select>
+        </div>
+        <div className="form-group">
+          <label>📁 Choose Excel File (Challan + Date):</label>
+          <input
+            type="file"
+            accept=".xlsx,.xls"
+            onChange={e => setDateUpdateFile(e.target.files[0])}
+            required
+            disabled={isDateUpdating}
+          />
+        </div>
+        <button type="submit" disabled={isDateUpdating} className="upload-button" style={{ backgroundColor: "#b8860b" }}>
+          {isDateUpdating ? '⏳ Updating...' : '🗓️ Update Dates'}
         </button>
       </form>
     </div>

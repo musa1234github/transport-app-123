@@ -10,6 +10,7 @@ import Login from "./pages/Login.jsx";
 import Home from "./pages/Home.jsx";
 import FactoryList from "./pages/FactoryList.jsx";
 import UploadDispatch from "./pages/UploadDispatch.jsx";
+import JswDateUpdate from "./pages/JswDateUpdate.jsx";
 import BagShortUpdate from "./pages/BagShortUpdate.jsx";
 import ShowDispatch from "./pages/ShowDispatch.jsx";
 import VehicleMaster from "./pages/VehicleMaster.jsx";
@@ -25,6 +26,10 @@ import GstUpload from "./pages/GstUpload.jsx";
 import GstReport from "./pages/GstReport.jsx";
 import DeductionReport from "./pages/DeductionReport.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
+import OutstandingReport from "./pages/OutstandingReport.jsx";
+import FixBillDates from "./pages/FixBillDates.jsx"; // ⚠️ TEMP — delete after migration
+import FixPaymentSync from "./pages/FixPaymentSync.jsx"; // ⚠️ TEMP — delete after migration
+import FixIsPaid from "./pages/FixIsPaid.jsx"; // ⚠️ TEMP — delete after migration
 
 
 /* ─────────────────────────────────────────
@@ -89,6 +94,7 @@ const AppRoutes = () => {
           <>
             <Route path="upload-dispatch" element={<UploadDispatch />} />
             <Route path="bag-short-update" element={<BagShortUpdate />} />
+            <Route path="jsw-date-update" element={<JswDateUpdate />} />
           </>
         )}
 
@@ -114,6 +120,15 @@ const AppRoutes = () => {
         <Route path="monthly-qty-report" element={<ShowQtyByMonth />} />
         <Route path="daily-qty-report" element={<ShowDayQty />} />
         <Route path="deduction-report" element={<DeductionReport />} />
+        <Route path="outstanding-report" element={<OutstandingReport />} />
+        {/* ⚠️ TEMP migration tools — remove after running */}
+        {userRole === "admin" && (
+          <>
+            <Route path="fix-bill-dates" element={<FixBillDates />} />
+            <Route path="fix-payment-sync" element={<FixPaymentSync />} />
+            <Route path="fix-is-paid" element={<FixIsPaid />} />
+          </>
+        )}
       </Route>
 
       {/* ═══ FALLBACK ═══ */}

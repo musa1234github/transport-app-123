@@ -1,4 +1,4 @@
-﻿import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 
@@ -118,6 +118,7 @@ const Home = () => {
       ? [
         { to: "upload-dispatch", label: "Dispatch Upload", icon: "🚚" },
         { to: "bag-short-update", label: "Bag Short Update", icon: "🎒" },
+        { to: "jsw-date-update", label: "JSW Date Update [Temp]", icon: "🗓️" },
       ]
       : []),
     ...(canUploadBilling
@@ -137,6 +138,7 @@ const Home = () => {
     { to: "monthly-qty-report", label: "Monthly Qty", icon: "📊" },
     { to: "daily-qty-report", label: "Daily Qty", icon: "📅" },
     { to: "deduction-report", label: "Deduction Report", icon: "📉" },
+    { to: "outstanding-report", label: "Outstanding Report", icon: "🧾" },
     ...(canUploadBilling
       ? [{ to: "gst-report", label: "GST Report", icon: "📋" }]
       : []),

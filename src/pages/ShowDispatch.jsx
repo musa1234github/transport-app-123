@@ -288,23 +288,22 @@ const ShowDispatch = () => {
     checkAdmin();
   }, []);
 
-  // Function to fetch data with filters (cursor-based pagination)
+  const loadingRef = useRef(false);
   const fetchDispatches = async (direction = 'initial', cursorDoc = null) => {
-    if (loading) return; // ✅ FIX 3: Prevent duplicate fetch
+    if (loadingRef.current) return;
+    loadingRef.current = true;
     setLoading(true);
     console.log("🔍 Fetching with filters:", appliedFilters);
     try {
-      // 🔥 CRITICAL: Require at least one filter to prevent reading entire database
       if (!appliedFilters.filterFactory && !appliedFilters.fromDate && !appliedFilters.toDate) {
         alert("Please select at least a factory or date range to load data");
         setLoading(false);
         return;
       }
 
-      // Validate date range (365 days max)
       if (appliedFilters.fromDate && appliedFilters.toDate) {
-        const from = new Date(appliedFilters.fromDate);
-        const to = new Date(appliedFilters.toDate);
+        const from = new Date(appliedFilters.fromDate + "T00:00:00");
+        const to = new Date(appliedFilters.toDate + "T00:00:00");
         const daysDiff = (to - from) / (1000 * 60 * 60 * 24);
 
         if (daysDiff > 365) {
@@ -316,7 +315,6 @@ const ShowDispatch = () => {
 
       let q = collection(db, "TblDispatch");
 
-      // Build query conditions
       const conditions = [];
 
       // Factory filter — all records use FactoryName directly
@@ -325,18 +323,22 @@ const ShowDispatch = () => {
       }
 
       if (appliedFilters.fromDate) {
-        const fromJS = normalizeDate(new Date(appliedFilters.fromDate));
+        // Parse as local date (YYYY-MM-DD string) to avoid UTC offset shifting the day
+        const [fy, fm, fd] = appliedFilters.fromDate.split("-").map(Number);
+        const fromJS = new Date(fy, fm - 1, fd);
+        fromJS.setHours(0, 0, 0, 0);
+        console.log("📅 From date (local):", fromJS.toString());
         conditions.push(where("DispatchDate", ">=", Timestamp.fromDate(fromJS)));
       }
 
       if (appliedFilters.toDate) {
-        const toJS = normalizeDate(new Date(appliedFilters.toDate));
-        toJS.setHours(23, 59, 59, 999);
-        console.log("📅 Query range:", {
-          from: normalizeDate(new Date(appliedFilters.fromDate)).toISOString(),
-          to: toJS.toISOString()
-        });
-        conditions.push(where("DispatchDate", "<=", Timestamp.fromDate(toJS)));
+        // Parse as local date and push to next day 00:00 to boundary catch all intra-day times natively
+        const [ty, tm, td] = appliedFilters.toDate.split("-").map(Number);
+        const toJS = new Date(ty, tm - 1, td);
+        toJS.setDate(toJS.getDate() + 1);
+        toJS.setHours(0, 0, 0, 0);
+        console.log("📅 To date (local, < next day):", toJS.toString());
+        conditions.push(where("DispatchDate", "<", Timestamp.fromDate(toJS)));
       }
 
       // Create cache key
@@ -357,6 +359,7 @@ const ShowDispatch = () => {
         setHasPrevPage(cached.hasPrevPage);
         setDataLoaded(true);
         setLoading(false);
+        loadingRef.current = false;
         return;
       }
 
@@ -405,6 +408,12 @@ const ShowDispatch = () => {
 
       console.log(`✅ Firestore read ${docs.length} documents (limit: ${DOCS_PER_PAGE})`);
       console.log(`📊 Has next page: ${hasMore}`);
+
+      // Add RAW DATE log per user instruction to debug timezone discrepancies 
+      docs.forEach(d => {
+        const rawDate = d.data().DispatchDate;
+        console.log("RAW DATE:", rawDate?.toDate ? rawDate.toDate() : rawDate);
+      });
 
       const data = displayDocs.map(ds => {
         const row = { id: ds.id, ...ds.data() };
@@ -479,6 +488,7 @@ const ShowDispatch = () => {
       }
     } finally {
       setLoading(false);
+      loadingRef.current = false;
     }
   };
 
@@ -565,19 +575,11 @@ const ShowDispatch = () => {
     // Don't fetch here - let useEffect handle it
   };
 
-  // Prevent double execution in StrictMode causing empty datasets via race condition arrays
-  const fetchLockRef = useRef(false);
-
   // Fetch data when appliedFilters changes (only if at least one filter is set)
   useEffect(() => {
     if (!appliedFilters.filterFactory && !appliedFilters.fromDate && !appliedFilters.toDate) return;
 
-    if (fetchLockRef.current) return;
-    fetchLockRef.current = true;
-
-    fetchDispatches().finally(() => {
-      fetchLockRef.current = false;
-    });
+    fetchDispatches();
   }, [appliedFilters]);
 
   /* ================= CLEAR FILTERS ================= */
@@ -657,18 +659,25 @@ const ShowDispatch = () => {
 
     let newDate = null;
     if (editDate) {
-      const [year, month, day] = editDate.split("-");
-      newDate = new Date(year, month - 1, day);
+      const [year, month, day] = editDate.split("-").map(Number);
+      newDate = new Date(year, month - 1, day, 0, 0, 0, 0);
       updatedData.DispatchDate = Timestamp.fromDate(newDate);
     }
 
     await updateDoc(doc(db, "TblDispatch", id), updatedData);
 
+    // Update local dispatches state
     setDispatches(prev =>
       prev.map(d =>
-        d.id === id ? { ...d, ChallanNo: editChallan, "Ex. Number": editInvoice, DispatchDate: newDate } : d
+        d.id === id
+          ? { ...d, ChallanNo: editChallan, "Ex. Number": editInvoice, ...(newDate ? { DispatchDate: newDate } : {}) }
+          : d
       )
     );
+
+    // Invalidate query cache so stale data doesn't persist
+    setQueryCache({});
+    setPrefetchCache({});
 
     setEditId(null);
     setEditChallan("");
@@ -893,17 +902,8 @@ const ShowDispatch = () => {
           <label>From:</label>
           <input
             type="date"
-            value={formatDateForInput(fromDate)}
-            onChange={(e) => {
-              const selectedDate = e.target.value;
-              if (selectedDate) {
-                const [year, month, day] = selectedDate.split('-');
-                const localDate = new Date(year, month - 1, day);
-                setFromDate(localDate);
-              } else {
-                setFromDate("");
-              }
-            }}
+            value={fromDate}
+            onChange={(e) => setFromDate(e.target.value)}
             style={{ padding: 8, border: "1px solid #ccc", borderRadius: 4 }}
           />
         </div>
@@ -912,17 +912,8 @@ const ShowDispatch = () => {
           <label>To:</label>
           <input
             type="date"
-            value={formatDateForInput(toDate)}
-            onChange={(e) => {
-              const selectedDate = e.target.value;
-              if (selectedDate) {
-                const [year, month, day] = selectedDate.split('-');
-                const localDate = new Date(year, month - 1, day);
-                setToDate(localDate);
-              } else {
-                setToDate("");
-              }
-            }}
+            value={toDate}
+            onChange={(e) => setToDate(e.target.value)}
             style={{ padding: 8, border: "1px solid #ccc", borderRadius: 4 }}
           />
         </div>
