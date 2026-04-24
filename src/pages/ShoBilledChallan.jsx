@@ -33,14 +33,14 @@ const COLUMN_SEQUENCE = [
   "BillNum"
 ];
 
-// ===== FORMAT DATE FOR DISPLAY (dd-MM-yy) =====
+// ===== FORMAT DATE FOR DISPLAY (dd-MM-yyyy) =====
 const formatShortDate = (date) => {
   if (!date) return "";
   const d = new Date(date);
   const dd = String(d.getDate()).padStart(2, "0");
   const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const yy = d.getFullYear().toString().slice(-2);
-  return `${dd}-${mm}-${yy}`;
+  const yyyy = d.getFullYear();
+  return `${dd}-${mm}-${yyyy}`;
 };
 
 // ===== FORMAT DATE FOR INPUT (YYYY-MM-DD) =====
@@ -154,11 +154,32 @@ const ShoBilledChallan = () => {
       constraints.push(limit(READ_LIMIT));
 
       const q = query(collection(db, "TblDispatch"), ...constraints);
+      
+      console.log("🛠️ BilledChallan (TblDispatch) Query Conditions:", constraints.map(c => ({
+        field: c._query?.filters?.[0]?.field?.segments?.[0], 
+        op: c._query?.filters?.[0]?.op, 
+        val: c._query?.filters?.[0]?.value?.internalValue
+      })));
+
       const snapshot = await getDocs(q);
 
       console.log("Docs returned:", snapshot.docs.length);
 
       if (snapshot.docs.length > 0) {
+        console.log(`📊 BilledChallan Docs fetched: ${snapshot.docs.length}`);
+        
+        // Detailed logging of each document to catch mismatches
+        snapshot.docs.forEach(d => {
+          const data = d.data();
+          const rawDate = data.DispatchDate;
+          console.log(`📄 BILLED CHALLAN DOC [${d.id}]:`, {
+            FactoryName: data.FactoryName,
+            DispatchDate: rawDate?.toDate ? rawDate.toDate().toString() : rawDate,
+            ChallanNo: data.ChallanNo,
+            BillNum: data.BillNum
+          });
+        });
+        
         const sampleDoc = snapshot.docs[0].data();
         console.log("=== 🔍 DIAGNOSTIC: RAW FIRESTORE DOCUMENT ===");
         console.log("ID:", snapshot.docs[0].id);
@@ -209,11 +230,23 @@ const ShoBilledChallan = () => {
       console.error("Error fetching data:", err);
       // Composite index missing — surface the Firebase Console link from the error message
       if (err.message && err.message.includes("index")) {
-        setError(
-          `Firestore requires a composite index for this query. ` +
-          `Please open the browser console, click the index-creation link provided by Firebase, ` +
-          `wait ~1 min, then try again. Details: ${err.message}`
-        );
+        const indexUrlMatch = err.message.match(/https:\/\/console\.firebase\.google\.com[^\s]*/);
+        const indexUrl = indexUrlMatch ? indexUrlMatch[0] : null;
+
+        if (indexUrl) {
+          if (window.confirm("⚠️ Composite Index Required\n\nFirebase needs a composite index for this query. Would you like to open the Firebase Console to create it now?")) {
+            window.open(indexUrl, "_blank");
+            setError("Index creation page opened in a new tab. Please create the index, wait 1-2 minutes, and then refresh.");
+          } else {
+            setError("Firestore requires a composite index. Check the console for the link.");
+          }
+        } else {
+          setError(
+            `Firestore requires a composite index for this query. ` +
+            `Please open the browser console, click the index-creation link provided by Firebase, ` +
+            `wait ~1 min, then try again.`
+          );
+        }
       } else {
         setError(`Failed to load data: ${err.message}`);
       }
@@ -416,44 +449,147 @@ const ShoBilledChallan = () => {
   };
 
   /* ================= EXPORT TO EXCEL ================= */
-  const exportToExcel = () => {
-    if (!filteredDispatches.length) {
-      setError("No data to export. Please apply filters first.");
+  const exportToExcel = async () => {
+    // Validate filters are applied
+    if (!appliedFilters.filterFactory && !appliedFilters.fromDate && !appliedFilters.toDate) {
+      setError("Please apply filters first to load data for export.");
       return;
     }
 
-    const excelData = filteredDispatches.map(d => {
-      const row = {};
-      COLUMN_SEQUENCE.forEach(k => {
-        // If it's a date, keep it as a Date object for Excel
-        if (d[k] instanceof Date) {
-          row[k] = d[k];
-        } else if (k === "DispatchQuantity" && d[k]) {
-          // Ensure quantity is a number for Excel
-          const num = parseFloat(d[k]);
-          row[k] = isNaN(num) ? d[k] : num;
-        } else {
-          row[k] = d[k];
-        }
-      });
-      return row;
-    });
+    setLoading(true);
+    setError("");
 
-    // Use cellDates: true so SheetJS handles JS Dates correctly
-    const ws = XLSX.utils.json_to_sheet(excelData, { cellDates: true });
+    try {
+      // ── Build fresh query constraints for ALL data ──────────────────────────────
+      const constraints = [];
 
-    // Set number format for DispatchDate column (index 3 -> Column D)
-    const range = XLSX.utils.decode_range(ws['!ref']);
-    for (let R = range.s.r + 1; R <= range.e.r; ++R) {
-      const cellAddress = XLSX.utils.encode_cell({ r: R, c: 3 }); // DispatchDate is 4th column (index 3)
-      if (ws[cellAddress]) {
-        ws[cellAddress].z = 'dd-mm-yy'; // Excel date format
+      if (appliedFilters.filterFactory) {
+        constraints.push(where("FactoryName", "==", appliedFilters.filterFactory));
       }
-    }
 
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Billed Challan");
-    XLSX.writeFile(wb, `Billed_Challan_${new Date().toISOString().split('T')[0]}.xlsx`);
+      if (appliedFilters.fromDate) {
+        const from = new Date(appliedFilters.fromDate);
+        from.setHours(0, 0, 0, 0);
+        constraints.push(where("DispatchDate", ">=", Timestamp.fromDate(from)));
+      }
+
+      if (appliedFilters.toDate) {
+        const to = new Date(appliedFilters.toDate);
+        to.setHours(23, 59, 59, 999);
+        constraints.push(where("DispatchDate", "<=", Timestamp.fromDate(to)));
+      }
+
+      constraints.push(orderBy("DispatchDate", "desc"));
+      // ❌ NO LIMIT HERE - Fetch all records in range
+      // ────────────────────────────────────────────────────────────────────
+
+      const q = query(collection(db, "TblDispatch"), ...constraints);
+      const snapshot = await getDocs(q);
+
+      if (snapshot.empty) {
+        setError("No records found for the selected filters.");
+        return;
+      }
+
+      let allRecords = snapshot.docs.map(ds => {
+        const row = { id: ds.id, ...ds.data() };
+        // Normalize date
+        if (row.DispatchDate) {
+          let dateObj;
+          if (row.DispatchDate.toDate) {
+            dateObj = row.DispatchDate.toDate();
+          } else if (row.DispatchDate.seconds) {
+            dateObj = new Date(row.DispatchDate.seconds * 1000);
+          } else {
+            dateObj = new Date(row.DispatchDate);
+          }
+          row.DispatchDate = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate());
+        }
+        row.BillNum = String(row.BillNum || "").trim();
+        return row;
+      });
+
+      // Apply client-side search term if present (matching UI behavior)
+      if (appliedFilters.searchTerm) {
+        const term = appliedFilters.searchTerm.toLowerCase().trim();
+        const searchTerms = term.split(/\s+/).filter(Boolean);
+        allRecords = allRecords.filter(d => {
+          return searchTerms.every(t => {
+            return Object.values(d).some(v => {
+              if (!v) return false;
+              if (v instanceof Date) {
+                return formatShortDate(v).toLowerCase().includes(t);
+              }
+              return v.toString().toLowerCase().includes(t);
+            });
+          });
+        });
+      }
+
+      if (allRecords.length === 0) {
+        setError("No records match your search term.");
+        return;
+      }
+
+      // Friendly column names
+      const HEADER_MAP = {
+        ChallanNo: "Challan No",
+        Destination: "Destination",
+        VehicleNo: "Vehicle No",
+        DispatchDate: "Dispatch Date",
+        DispatchQuantity: "Quantity",
+        PartyName: "Party Name",
+        FactoryName: "Factory",
+        BillNum: "Bill Number"
+      };
+
+      const excelData = allRecords.map(d => {
+        const row = {};
+        COLUMN_SEQUENCE.forEach(k => {
+          const header = HEADER_MAP[k] || k;
+          if (d[k] instanceof Date) {
+            row[header] = d[k];
+          } else if (k === "DispatchQuantity" && d[k]) {
+            const num = parseFloat(d[k]);
+            row[header] = isNaN(num) ? d[k] : num;
+          } else {
+            row[header] = d[k];
+          }
+        });
+        return row;
+      });
+
+      const ws = XLSX.utils.json_to_sheet(excelData, { cellDates: true });
+
+      // Auto column width
+      const colWidths = Object.keys(excelData[0]).map(key => ({
+        wch: Math.max(
+          key.length,
+          ...excelData.map(row => String(row[key] || "").length)
+        ) + 2
+      }));
+      ws['!cols'] = colWidths;
+
+      // Date format (Dispatch Date column)
+      const range = XLSX.utils.decode_range(ws['!ref']);
+      for (let R = range.s.r + 1; R <= range.e.r; ++R) {
+        const cell = XLSX.utils.encode_cell({ r: R, c: 3 });
+        if (ws[cell]) ws[cell].z = 'dd-mm-yy';
+      }
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "All Challan Data");
+      XLSX.writeFile(
+        wb,
+        `Dispatch_Export_${new Date().toISOString().split('T')[0]}.xlsx`
+      );
+
+    } catch (err) {
+      console.error("Export error:", err);
+      setError(`Export failed: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
   };
 
   /* ================= DATE HANDLERS ================= */

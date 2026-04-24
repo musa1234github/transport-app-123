@@ -8,7 +8,8 @@ import {
   where, 
   updateDoc, 
   deleteDoc, 
-  doc 
+  doc,
+  limit
 } from "firebase/firestore";
 import * as XLSX from "xlsx";
 import "./VehicleMaster.css";

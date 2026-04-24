@@ -22,12 +22,12 @@ import { FixedSizeList as List } from "react-window";
 import { decrementMonthlySummary } from "../utils/dispatchSummaryHelper";
 
 const FACTORY_NAME_FIXES = {
-  MANIGARH: "MANIGARH"
+  MANIKGARH: "MANIKGARH"
 };
 
 const factoryMap = {
   "10": "JSW",
-  "6": "MANIGARH",
+  "6": "MANIKGARH",
   "7": "ULTRATECH",
 };
 
@@ -57,7 +57,7 @@ const FACTORY_OPTIONS = [
   "DALMIA",
   "MP BIRLA",
   "ORIENT",
-  "MANIGARH",
+  "MANIKGARH",
   "ULTRATECH",
   "JSW"
 ];
@@ -69,14 +69,14 @@ const normalizeDate = (d) => {
   return x;
 };
 
-// Format date for display (dd-MM-yy)
+// Format date for display (dd-MM-yyyy)
 const formatShortDate = (date) => {
   if (!date) return "";
   const d = new Date(date);
   const dd = String(d.getDate()).padStart(2, "0");
   const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const yy = d.getFullYear().toString().slice(-2);
-  return `${dd}-${mm}-${yy}`;
+  const yyyy = d.getFullYear();
+  return `${dd}-${mm}-${yyyy}`;
 };
 
 // Format date for input (YYYY-MM-DD)
@@ -216,6 +216,7 @@ const ShowDispatch = () => {
   const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(false);
   const [dataLoaded, setDataLoaded] = useState(false);
+  const [isDebugMode, setIsDebugMode] = useState(false); // NEW: Track debug mode
 
   const [filteredDispatches, setFilteredDispatches] = useState([]);
   const workerRef = useRef(null);
@@ -289,14 +290,14 @@ const ShowDispatch = () => {
   }, []);
 
   const loadingRef = useRef(false);
-  const fetchDispatches = async (direction = 'initial', cursorDoc = null) => {
+  const fetchDispatches = async (direction = 'initial', cursorDoc = null, targetIndex = 0) => {
     if (loadingRef.current) return;
     loadingRef.current = true;
     setLoading(true);
     console.log("🔍 Fetching with filters:", appliedFilters);
     try {
-      if (!appliedFilters.filterFactory && !appliedFilters.fromDate && !appliedFilters.toDate) {
-        alert("Please select at least a factory or date range to load data");
+      if (!appliedFilters.filterFactory && !appliedFilters.fromDate && !appliedFilters.toDate && !isDebugMode) {
+        alert("Please select at least a factory or date range to load data (or use Debug Mode)");
         setLoading(false);
         return;
       }
@@ -317,12 +318,21 @@ const ShowDispatch = () => {
 
       const conditions = [];
 
-      // Factory filter — all records use FactoryName directly
-      if (appliedFilters.filterFactory) {
-        conditions.push(where("FactoryName", "==", appliedFilters.filterFactory));
+      // Factory filter — use 'in' to catch case mismatches (Manikgarh vs MANIKGARH)
+      if (appliedFilters.filterFactory && !isDebugMode) {
+        const f = appliedFilters.filterFactory;
+        const variants = [
+          f,
+          f.toLowerCase(),
+          f.toUpperCase(),
+          f.charAt(0).toUpperCase() + f.slice(1).toLowerCase() // Title Case
+        ];
+        // Remove duplicates
+        const uniqueVariants = [...new Set(variants)];
+        conditions.push(where("FactoryName", "in", uniqueVariants));
       }
 
-      if (appliedFilters.fromDate) {
+      if (appliedFilters.fromDate && !isDebugMode) {
         // Parse as local date (YYYY-MM-DD string) to avoid UTC offset shifting the day
         const [fy, fm, fd] = appliedFilters.fromDate.split("-").map(Number);
         const fromJS = new Date(fy, fm - 1, fd);
@@ -331,7 +341,7 @@ const ShowDispatch = () => {
         conditions.push(where("DispatchDate", ">=", Timestamp.fromDate(fromJS)));
       }
 
-      if (appliedFilters.toDate) {
+      if (appliedFilters.toDate && !isDebugMode) {
         // Parse as local date and push to next day 00:00 to boundary catch all intra-day times natively
         const [ty, tm, td] = appliedFilters.toDate.split("-").map(Number);
         const toJS = new Date(ty, tm - 1, td);
@@ -340,6 +350,12 @@ const ShowDispatch = () => {
         console.log("📅 To date (local, < next day):", toJS.toString());
         conditions.push(where("DispatchDate", "<", Timestamp.fromDate(toJS)));
       }
+
+      console.log("🛠️ Firestore Query Conditions:", conditions.map(c => ({
+        field: c._query?.filters?.[0]?.field?.segments?.[0], 
+        op: c._query?.filters?.[0]?.op, 
+        val: c._query?.filters?.[0]?.value?.internalValue
+      })));
 
       // Create cache key
       const cacheKey = JSON.stringify({
@@ -365,12 +381,17 @@ const ShowDispatch = () => {
 
       // Build Firestore query with cursor-based pagination
       let firestoreQuery;
-      if (direction === 'next' && cursorDoc) {
-        firestoreQuery = query(q, ...conditions, orderBy("DispatchDate", "desc"), startAfter(cursorDoc), limit(DOCS_PER_PAGE + 1));
+      const effectiveLimit = isDebugMode ? 10 : (DOCS_PER_PAGE + 1);
+
+      if (isDebugMode) {
+        console.log("🛠️ DEBUG MODE: Fetching last 10 records across all filters");
+        firestoreQuery = query(q, orderBy("DispatchDate", "desc"), limit(10));
+      } else if (direction === 'next' && cursorDoc) {
+        firestoreQuery = query(q, ...conditions, orderBy("DispatchDate", "desc"), startAfter(cursorDoc), limit(effectiveLimit));
       } else if (direction === 'prev' && cursorDoc) {
-        firestoreQuery = query(q, ...conditions, orderBy("DispatchDate", "desc"), endBefore(cursorDoc), limitToLast(DOCS_PER_PAGE + 1));
+        firestoreQuery = query(q, ...conditions, orderBy("DispatchDate", "desc"), endBefore(cursorDoc), limitToLast(effectiveLimit));
       } else {
-        firestoreQuery = query(q, ...conditions, orderBy("DispatchDate", "desc"), limit(DOCS_PER_PAGE + 1));
+        firestoreQuery = query(q, ...conditions, orderBy("DispatchDate", "desc"), limit(effectiveLimit));
       }
 
       // PREFETCH CHECK
@@ -407,12 +428,16 @@ const ShowDispatch = () => {
       }
 
       console.log(`✅ Firestore read ${docs.length} documents (limit: ${DOCS_PER_PAGE})`);
-      console.log(`📊 Has next page: ${hasMore}`);
-
-      // Add RAW DATE log per user instruction to debug timezone discrepancies 
+      
+      // Detailed logging of each document to catch mismatches
       docs.forEach(d => {
-        const rawDate = d.data().DispatchDate;
-        console.log("RAW DATE:", rawDate?.toDate ? rawDate.toDate() : rawDate);
+        const data = d.data();
+        const rawDate = data.DispatchDate;
+        console.log(`📄 DOC [${d.id}]:`, {
+          FactoryName: data.FactoryName,
+          DispatchDate: rawDate?.toDate ? rawDate.toDate().toString() : rawDate,
+          ChallanNo: data.ChallanNo
+        });
       });
 
       const data = displayDocs.map(ds => {
@@ -467,7 +492,7 @@ const ShowDispatch = () => {
 
       setPageHistory(prev => {
         const newHistory = [...prev];
-        newHistory[currentPageIndex] = {
+        newHistory[targetIndex] = {
           rows: filteredData,
           firstDoc: displayDocs.length > 0 ? displayDocs[0] : null,
           lastDoc: displayDocs.length > 0 ? displayDocs[displayDocs.length - 1] : null,
@@ -477,12 +502,23 @@ const ShowDispatch = () => {
         return newHistory;
       });
 
+      setCurrentPageIndex(targetIndex);
+
     } catch (error) {
       console.error("Error fetching dispatches:", error);
 
       // Check if it's a composite index error
       if (error.message && error.message.includes("index")) {
-        alert("⚠️ Composite Index Required\n\nFirebase needs a composite index for this query. Check the console for the auto-generated index creation link from Firebase.");
+        const indexUrlMatch = error.message.match(/https:\/\/console\.firebase\.google\.com[^\s]*/);
+        const indexUrl = indexUrlMatch ? indexUrlMatch[0] : null;
+
+        if (indexUrl) {
+          if (window.confirm("⚠️ Composite Index Required\n\nFirebase needs a composite index for this query. Would you like to open the Firebase Console to create it now?")) {
+            window.open(indexUrl, "_blank");
+          }
+        } else {
+          alert("⚠️ Composite Index Required\n\nFirebase needs a composite index for this query. Check the browser console for the auto-generated index creation link from Firebase.");
+        }
       } else {
         alert("Error loading data: " + error.message);
       }
@@ -538,6 +574,9 @@ const ShowDispatch = () => {
       console.log("⚡ Prefetched next Dispatch page");
     } catch (err) {
       console.log("Prefetch failed", err);
+      if (err.message && err.message.includes("index")) {
+        console.warn("Prefetch triggered an index requirement. Link:", err.message.match(/https:\/\/console\.firebase\.google\.com[^\s]*/)?.[0]);
+      }
     }
   };
 
@@ -575,12 +614,37 @@ const ShowDispatch = () => {
     // Don't fetch here - let useEffect handle it
   };
 
+  const handleDebugFetch = () => {
+    setIsDebugMode(true);
+    setAppliedFilters(prev => ({ ...prev, timestamp: Date.now() })); // Trigger effect
+  };
+
+  const handleQuickFilter = (type) => {
+    const today = new Date();
+    let from = new Date();
+    let to = new Date();
+
+    if (type === '7days') {
+      from.setDate(today.getDate() - 7);
+    } else if (type === 'thisMonth') {
+      from = new Date(today.getFullYear(), today.getMonth(), 1);
+      to = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+    } else if (type === 'lastMonth') {
+      from = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      to = new Date(today.getFullYear(), today.getMonth(), 0);
+    }
+
+    setFilterFrom(formatDateForInput(from));
+    setFilterTo(formatDateForInput(to));
+    setIsDebugMode(false);
+  };
+
   // Fetch data when appliedFilters changes (only if at least one filter is set)
   useEffect(() => {
-    if (!appliedFilters.filterFactory && !appliedFilters.fromDate && !appliedFilters.toDate) return;
+    if (!appliedFilters.filterFactory && !appliedFilters.fromDate && !appliedFilters.toDate && !isDebugMode) return;
 
     fetchDispatches();
-  }, [appliedFilters]);
+  }, [appliedFilters, isDebugMode]);
 
   /* ================= CLEAR FILTERS ================= */
   const clearFilters = () => {
@@ -595,6 +659,7 @@ const ShowDispatch = () => {
     });
     setDispatches([]);
     setDataLoaded(false);
+    setIsDebugMode(false); // Reset debug mode
     setSelectedIds([]);
     setFirstDoc(null);
     setLastDoc(null);
@@ -623,8 +688,7 @@ const ShowDispatch = () => {
       return;
     }
 
-    fetchDispatches('next', lastDoc);
-    setCurrentPageIndex(nextIndex);
+    fetchDispatches('next', lastDoc, nextIndex);
   };
 
   const handlePrevPage = () => {
@@ -947,6 +1011,43 @@ const ShowDispatch = () => {
           Clear Filters
         </button>
 
+        <button
+          onClick={handleDebugFetch}
+          title="Bypass all filters and show last 10 records"
+          style={{
+            padding: "8px 16px",
+            backgroundColor: "#ffc107",
+            color: "#000",
+            border: "none",
+            borderRadius: 4,
+            cursor: "pointer",
+            fontWeight: "bold"
+          }}
+        >
+          Debug: Load Recent
+        </button>
+
+        <div style={{ display: "flex", gap: 5, marginLeft: 10 }}>
+          <button 
+            onClick={() => handleQuickFilter('7days')}
+            style={{ padding: "4px 8px", fontSize: "12px", cursor: "pointer", borderRadius: 4, border: "1px solid #ccc", backgroundColor: "#f8f9fa" }}
+          >
+            Last 7 Days
+          </button>
+          <button 
+            onClick={() => handleQuickFilter('thisMonth')}
+            style={{ padding: "4px 8px", fontSize: "12px", cursor: "pointer", borderRadius: 4, border: "1px solid #ccc", backgroundColor: "#f8f9fa" }}
+          >
+            This Month
+          </button>
+          <button 
+            onClick={() => handleQuickFilter('lastMonth')}
+            style={{ padding: "4px 8px", fontSize: "12px", cursor: "pointer", borderRadius: 4, border: "1px solid #ccc", backgroundColor: "#f8f9fa" }}
+          >
+            Last Month
+          </button>
+        </div>
+
         {dataLoaded && (
           <button
             onClick={exportToExcel}
@@ -1032,8 +1133,21 @@ const ShowDispatch = () => {
                 {Row}
               </List>
             ) : (
-              <div style={{ padding: 20, textAlign: "center", borderBottom: "1px solid #ccc" }}>
-                No records found for the selected filters
+              <div style={{ padding: 30, textAlign: "center", borderBottom: "1px solid #ccc", backgroundColor: "#fff9f9" }}>
+                <p style={{ fontSize: 16, fontWeight: "bold", color: "#d93025", marginBottom: 10 }}>
+                  🚫 No records found for the selected filters
+                </p>
+                <div style={{ fontSize: 14, color: "#5f6368", maxWidth: 600, margin: "0 auto" }}>
+                  <p><strong>Possible reasons:</strong></p>
+                  <ul style={{ textAlign: "left", display: "inline-block" }}>
+                    <li>The <strong>Factory Name</strong> in the database might have a different case (e.g. "Manikgarh" vs "MANIKGARH").</li>
+                    <li>The <strong>Date</strong> might be slightly different due to timezone shifts.</li>
+                    <li>No data has been uploaded for this specific range.</li>
+                  </ul>
+                  <p style={{ marginTop: 15 }}>
+                    💡 <strong>Debug Tip:</strong> Try clearing the Factory filter and searching by Date only, or vice versa.
+                  </p>
+                </div>
               </div>
             )}
           </div>

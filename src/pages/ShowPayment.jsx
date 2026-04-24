@@ -283,7 +283,7 @@ const ShowPayment = ({ userRole }) => {
   // Uses client-side pagination to avoid composite index requirement.
   // Fetches ALL records matching the filter and paginates in memory.
   /* ================= LOAD DATA WITH CURSOR PAGINATION ================= */
-  const load = async (direction = 'initial', cursorDoc = null) => {
+  const load = async (direction = 'initial', cursorDoc = null, targetIndex = 0) => {
     setLoading(true);
     try {
       if (!appliedFilters.factoryFilter && !appliedFilters.fromDate && !appliedFilters.toDate) {
@@ -315,6 +315,12 @@ const ShowPayment = ({ userRole }) => {
         queryConstraints.push(orderBy("BillDate", "desc"));
       }
 
+      console.log("🛠️ Payment (BillTable) Query Conditions:", queryConstraints.map(c => ({
+        field: c._query?.filters?.[0]?.field?.segments?.[0], 
+        op: c._query?.filters?.[0]?.op, 
+        val: c._query?.filters?.[0]?.value?.internalValue
+      })));
+
       let billQuery;
       // When using date filter, we want to fetch all records (up to a large limit) so they can be exported
       // Otherwise, we use a larger scan limit (400) because limit(21) on BillTable includes UNPAID bills.
@@ -331,6 +337,20 @@ const ShowPayment = ({ userRole }) => {
       const snap = await getDocs(billQuery);
       const docs = snap.docs;
       const serverHasMore = docs.length === SCAN_LIMIT;
+
+      console.log(`📊 Payment Scan Docs fetched: ${docs.length}, limit: ${SCAN_LIMIT}`);
+
+      // Detailed logging of each document to catch mismatches
+      docs.forEach(d => {
+        const data = d.data();
+        const rawDate = data.PaymentRecDate || data.PaymentDate || data.BillDate;
+        console.log(`📄 PAYMENT DOC [${d.id}]:`, {
+          FactoryName: data.FactoryName,
+          PaymentRecDate: data.PaymentRecDate?.toDate ? data.PaymentRecDate.toDate().toString() : data.PaymentRecDate,
+          BillNum: data.BillNum,
+          PaymentReceived: data.PaymentReceived
+        });
+      });
 
       // Extract all documents from server scan
       let billData = processDocs(docs, null, null, false);
@@ -436,17 +456,19 @@ const ShowPayment = ({ userRole }) => {
       setPageHistory(prev => {
         const newHist = [...prev];
         let hasMoreItemsLocal = hasDateFilter ? false : (allPaidThisScan.length > BILLS_PER_PAGE);
-        newHist[currentPageIndex] = {
+        newHist[targetIndex] = {
           rows: billData,
           firstDoc: billData.length > 0 ? docs.find(d => d.id === billData[0].id) : null,
           lastDoc: billData.length > 0 ? (
             serverHasMore && !hasMoreItemsLocal ? docs[docs.length - 1] : docs.find(d => d.id === billData[billData.length - 1].id)
           ) : (serverHasMore ? docs[docs.length - 1] : null),
           hasNextPage: serverHasMore || hasMoreItemsLocal,
-          hasPrevPage: direction === 'next' ? true : (direction === 'prev' ? (serverHasMore || hasMoreItemsLocal) : false)
+          hasPrevPage: direction !== 'initial'
         };
         return newHist;
       });
+      
+      setCurrentPageIndex(targetIndex);
 
     } catch (error) {
       console.error("Error loading payment data:", error);
@@ -469,8 +491,7 @@ const ShowPayment = ({ userRole }) => {
       setHasPrevPage(true);
       setCurrentPageIndex(nextIdx);
     } else {
-      load('next', lastDoc);
-      setCurrentPageIndex(nextIdx);
+      load('next', lastDoc, nextIdx);
     }
   };
 

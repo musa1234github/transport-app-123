@@ -15,33 +15,101 @@ import "./UploadDispatch.css";
 import { updateMonthlySummary } from "../utils/dispatchSummaryHelper";
 
 console.log("QUERY IMPORT CHECK:", query);
+ 
+const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+ 
+/* ===== SAFE DATE PARSER ===== */
+const toDate = (v) => {
+  if (!v) return null;
+  if (v.seconds) return new Date(v.seconds * 1000);
+  if (typeof v.toDate === "function") return v.toDate();
+  if (v instanceof Date) return v;
+  if (typeof v === "string") {
+    const s = v.trim();
+    if (!s) return null;
+    const parts = s.split(/[-/.]/);
+    if (parts.length === 3) {
+      let d, m, y;
+      if (parts[0].length === 4) [y, m, d] = parts;
+      else [d, m, y] = parts;
+      if (y && y.length === 2) y = (parseInt(y) > 50 ? "19" : "20") + y;
+      if (d && m && y) {
+        const res = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
+        if (!isNaN(res.getTime())) return res;
+      }
+    }
+    const d = new Date(s);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  return null;
+};
+ 
+/* ===== FORMAT DATE FOR DISPLAY ===== */
+const formatDate = (date) => {
+  if (!date) return "";
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = monthNames[date.getMonth()];
+  const year = date.getFullYear();
+  return `${day} ${month} ${year}`;
+};
 /* ================= HELPER FUNCTIONS ================= */
 
+/* ===== ENHANCED EXCEL DATE PARSER ===== */
 const parseExcelDate = (value) => {
   if (!value) return null;
+
+  // 1. If already a JS Date object (happens if XLSX.read is used with cellDates: true)
+  if (value instanceof Date) return value;
+
+  // 2. Handle Excel Serial Numbers (Number)
   if (typeof value === "number") {
-    const d = XLSX.SSF.parse_date_code(value);
-    return d ? new Date(d.y, d.m - 1, d.d) : null;
+    try {
+      // Excel serial date 1 = 1899-12-31. JS Date(0) = 1970-01-01.
+      // Offset is 25569 days.
+      const date = new Date(Math.round((value - 25569) * 86400 * 1000));
+      if (!isNaN(date.getTime())) return date;
+    } catch (e) {
+      console.error("Error parsing Excel serial date:", value, e);
+    }
   }
+
+  // 3. Handle Strings
   if (typeof value === "string") {
-    const v = value.trim();
-    if (v.match(/^\d{2}\.\d{2}\.\d{4}$/)) {
-      const [day, month, year] = v.split('.').map(Number);
-      return new Date(year, month - 1, day);
+    const s = value.trim();
+    if (!s) return null;
+
+    // Common formats: DD.MM.YYYY, DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD
+    // Also supports 2-digit years: DD.MM.YY
+    const match = s.match(/^(\d{1,4})[-/.](\d{1,2})[-/.](\d{1,4})$/);
+    if (match) {
+      let d, m, y;
+      const p1 = parseInt(match[1], 10);
+      const p2 = parseInt(match[2], 10);
+      const p3 = parseInt(match[3], 10);
+
+      if (p1 > 31) {
+        // YYYY-MM-DD
+        y = p1; m = p2; d = p3;
+      } else {
+        // DD-MM-YYYY or DD-MM-YY
+        d = p1; m = p2; y = p3;
+      }
+
+      // Handle 2-digit year logic (20-50 -> 2020-2050, 51-99 -> 1951-1999)
+      if (y < 100) {
+        y = y <= 50 ? y + 2000 : y + 1900;
+      }
+
+      const res = new Date(y, m - 1, d);
+      if (!isNaN(res.getTime())) return res;
     }
-    else if (v.match(/^\d{2}-\d{2}-\d{4}$/)) {
-      const [day, month, year] = v.split('-').map(Number);
-      return new Date(year, month - 1, day);
-    }
-    else if (v.match(/^\d{2}\/\d{2}\/\d{4}$/)) {
-      const [day, month, year] = v.split('/').map(Number);
-      return new Date(year, month - 1, day);
-    }
-    else if (v.match(/^\d{4}-\d{2}-\d{2}$/)) {
-      const [year, month, day] = v.split('-').map(Number);
-      return new Date(year, month - 1, day);
-    }
+
+    // Fallback to native Date parser (dangerous but covers some edge cases)
+    const fallback = new Date(s);
+    if (!isNaN(fallback.getTime())) return fallback;
   }
+
   return null;
 };
 
@@ -72,7 +140,7 @@ const normalizeChallan = (v) => {
 /* ================= CONSTANTS ================= */
 
 const FACTORY_NAME_FIXES = {
-  MANIKGARH: "MANIGARH"
+  MANIKGARH: "MANIKGARH"
 };
 
 const FACTORY_COLUMN_MAPS = {
@@ -81,7 +149,7 @@ const FACTORY_COLUMN_MAPS = {
     DispatchDate: 2, Qty: 12, ChallanNo: 1, VehicleNo: 20, PartyName: 7, Destination: 10, Advance: 22, Diesel: 21
   },
   // SET TO DYNAMIC: Handles your 24.03.2026 MANIKGARH file perfectly regardless of column sequence
-  MANIGARH: "dynamic",
+  MANIKGARH: "dynamic",
   ACC: {
     DispatchDate: 0, Qty: 5, ChallanNo: 2, VehicleNo: 3, PartyName: 4, Destination: 6, Advance: 7, Diesel: 8
   },
@@ -181,7 +249,7 @@ const UploadDispatch = () => {
 
     try {
       const buffer = await file.arrayBuffer();
-      const wb = XLSX.read(buffer);
+      const wb = XLSX.read(buffer, { cellDates: true });
       const sheet = wb.Sheets[wb.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
 
@@ -326,12 +394,11 @@ const UploadDispatch = () => {
       snaps.forEach(snap => {
         snap.forEach(d => {
           const data = d.data();
+          // Handle both Timestamps and String dates for the summary display
           let storedDate = "—";
-          if (data.DispatchDate && data.DispatchDate.toDate) {
-            const dt = data.DispatchDate.toDate();
-            storedDate = dt.toLocaleDateString("en-IN", {
-              day: "2-digit", month: "short", year: "numeric"
-            });
+          const dObj = toDate(data.DispatchDate);
+          if (dObj) {
+            storedDate = formatDate(dObj);
           }
           existingInDB.set(data.ChallanNo, { dispatchDate: storedDate });
         });

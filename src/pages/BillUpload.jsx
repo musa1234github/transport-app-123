@@ -15,7 +15,7 @@ import {
 import { db } from "../firebaseConfig";
 import "./BillUpload.css";
 
-const FACTORIES = ["MANIGARH", "ULTRATECH", "JSW", "MP BIRLA"];
+const FACTORIES = ["MANIKGARH", "ULTRATECH", "JSW", "MP BIRLA"];
 
 /* ===== SAFE NUMBER ===== */
 const safeNum = (v) => {
@@ -179,7 +179,7 @@ const BillUpload = () => {
 
     reader.onload = async (e) => {
       try {
-        const wb = XLSX.read(e.target.result, { type: "binary" });
+        const wb = XLSX.read(e.target.result, { type: "binary", cellDates: true });
         const ws = wb.Sheets[wb.SheetNames[0]];
         const rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
 

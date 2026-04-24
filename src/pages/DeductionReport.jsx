@@ -39,14 +39,14 @@ const COLUMN_SEQUENCE = [
     "BillType"
 ];
 
-// ===== FORMAT DATE FOR DISPLAY (dd-MM-yy) =====
+// ===== FORMAT DATE FOR DISPLAY (dd-MM-yyyy) =====
 const formatShortDate = (date) => {
     if (!date) return "";
     const d = new Date(date);
     const dd = String(d.getDate()).padStart(2, "0");
     const mm = String(d.getMonth() + 1).padStart(2, "0");
-    const yy = d.getFullYear().toString().slice(-2);
-    return `${dd}-${mm}-${yy}`;
+    const yyyy = d.getFullYear();
+    return `${dd}-${mm}-${yyyy}`;
 };
 
 // ===== FORMAT DATE FOR INPUT (YYYY-MM-DD) =====

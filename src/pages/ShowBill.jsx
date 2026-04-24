@@ -20,11 +20,62 @@ import {
 } from "firebase/firestore";
 import * as XLSX from 'xlsx';
 import "./ShowBill.css"; // Import CSS file
+ 
+const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /* ===== SAFE DATE ===== */
 const toDate = (v) => {
   if (!v) return null;
+
+  // 1. Firestore timestamp
   if (v.seconds) return new Date(v.seconds * 1000);
+  if (typeof v.toDate === "function") return v.toDate();
+
+  // 2. Date object
+  if (v instanceof Date) return v;
+
+  // 3. Handle strings
+  if (typeof v === "string") {
+    const s = v.trim();
+    if (!s) return null;
+
+    // Handle dd-mm-yy, dd/mm/yy, yyyy-mm-dd
+    const parts = s.split(/[-/.]/);
+    if (parts.length === 3) {
+      let d, m, y;
+      if (parts[0].length === 4) {
+        // yyyy-mm-dd
+        [y, m, d] = parts;
+      } else {
+        // dd-mm-yy or dd-mm-yyyy
+        [d, m, y] = parts;
+      }
+
+      if (y && y.length === 2) {
+        y = (parseInt(y) > 50 ? "19" : "20") + y;
+      }
+
+      if (d && m && y) {
+        const res = new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
+        if (!isNaN(res.getTime())) return res;
+      }
+    } else if (parts.length === 3 && parts[0].length === 2 && parts[2].length === 4) {
+      // It's probably DD-MM-YYYY without the first check catching it (maybe non-standard delimiter)
+      const res = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+      if (!isNaN(res.getTime())) return res;
+    }
+
+    const dObj = new Date(s);
+    return isNaN(dObj.getTime()) ? null : dObj;
+  }
+
+  // 4. Handle Excel numbers
+  if (typeof v === "number") {
+    const res = new Date(Math.round((v - 25569) * 86400 * 1000));
+    return isNaN(res.getTime()) ? null : res;
+  }
+
   const d = new Date(v);
   return isNaN(d.getTime()) ? null : d;
 };
@@ -45,8 +96,6 @@ const formatDate = (date) => {
     if (isNaN(date.getTime())) return "";
 
     const day = String(date.getDate()).padStart(2, "0");
-    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     const monthIndex = date.getMonth();
     const month = monthNames[monthIndex];
     const year = date.getFullYear();
@@ -76,19 +125,24 @@ const formatDateForSort = (date) => {
 /* ===== GET DISPATCH MONTH FROM DISPATCH DATES ===== */
 const getDispatchMonth = (dispatchRows) => {
   if (!dispatchRows || dispatchRows.length === 0) return "";
-
-  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
   const monthsSet = new Set();
 
   dispatchRows.forEach(dispatch => {
-    if (dispatch.DispatchDate) {
-      const parts = dispatch.DispatchDate.split('-');
+    const dateStr = dispatch.DispatchDate || dispatch.DispatchDateStr;
+    if (dateStr) {
+      // Handle both DD-MMM-YYYY and DD-MM-YY formats
+      const parts = dateStr.split(/[-/.]/);
       if (parts.length === 3) {
-        const month = parts[1];
-        if (monthNames.includes(month)) {
-          monthsSet.add(month);
+        const monthPart = parts[1];
+        // If it's a month name (Jan, Feb...)
+        if (monthNames.includes(monthPart)) {
+          monthsSet.add(monthPart);
+        } else {
+          // If it's a number (01, 02...)
+          const mIdx = parseInt(monthPart) - 1;
+          if (mIdx >= 0 && mIdx < 12) {
+            monthsSet.add(monthNames[mIdx]);
+          }
         }
       }
     }
@@ -168,7 +222,7 @@ const ShowBill = ({ userRole }) => {
       }
 
       // Hardcoded high-priority factories to avoid ANY reads if possible
-      const defaultFactories = ["JSW", "MANIGARH", "ULTRATECH", "ACC MARATHA", "AMBUJA", "DALMIA", "ORIENT"];
+      const defaultFactories = ["JSW", "MANIKGARH", "ULTRATECH", "ACC MARATHA", "AMBUJA", "DALMIA", "ORIENT"];
 
       // Optional: Fetch from a dedicated small collection if available
       try {
@@ -252,7 +306,7 @@ const ShowBill = ({ userRole }) => {
   };
 
   /* ================= LOAD DATA WITH CURSOR PAGINATION ================= */
-  const load = async (direction = 'initial', cursorDoc = null) => {
+  const load = async (direction = 'initial', cursorDoc = null, targetIndex = 0) => {
     setLoading(true);
     try {
       if (!appliedFilters.fromDate && !appliedFilters.toDate && !appliedFilters.factoryFilter && !searchBill) {
@@ -293,6 +347,12 @@ const ShowBill = ({ userRole }) => {
         toDateObj.setHours(23, 59, 59, 999);
         queryConstraints.push(where("BillDate", "<=", Timestamp.fromDate(toDateObj)));
       }
+
+      console.log("🛠️ BillTable Query Conditions:", queryConstraints.map(c => ({
+        field: c._query?.filters?.[0]?.field?.segments?.[0], 
+        op: c._query?.filters?.[0]?.op, 
+        val: c._query?.filters?.[0]?.value?.internalValue
+      })));
 
       // Build query with cursor pagination
       let billQuery;
@@ -345,7 +405,18 @@ const ShowBill = ({ userRole }) => {
       // Check if there are more pages — works for BOTH filtered and non-filtered
       const hasMore = isFiltering ? false : docs.length > BILLS_PER_PAGE;
       const displayDocs = isFiltering ? docs : (hasMore ? docs.slice(0, BILLS_PER_PAGE) : docs);
-      console.log(`📊 Docs fetched: ${docs.length}, showing: ${displayDocs.length}, hasMore: ${hasMore}`);
+      console.log(`📊 BillTable Docs fetched: ${docs.length}, showing: ${displayDocs.length}, hasMore: ${hasMore}`);
+
+      // Detailed logging of each document to catch mismatches
+      docs.forEach(d => {
+        const data = d.data();
+        const rawDate = data.BillDate;
+        console.log(`📄 BILL DOC [${d.id}]:`, {
+          FactoryName: data.FactoryName,
+          BillDate: rawDate?.toDate ? rawDate.toDate().toString() : rawDate,
+          BillNum: data.BillNum
+        });
+      });
 
       // ===== BULK PREFETCH DISPATCHES TO COMPUTE MISSING FIELDS (Dispatch Month, Amounts) =====
       const billIds = displayDocs.map(d => d.id);
@@ -463,9 +534,14 @@ const ShowBill = ({ userRole }) => {
           actualAmt = base + gstAmt;
         }
 
+        // 3. Fallback Month (if no dispatch dates, use Bill Date)
+        const billMonthFallback = billDateObj ? monthNames[billDateObj.getMonth()] : "N/A";
+
         return {
           BillID: bId,
-          "Dispatch Month": bill.DispatchMonth || dispatchMonthComputed || "N/A", 
+          "Dispatch Month": (bill.DispatchMonth && bill.DispatchMonth !== "N/A") 
+            ? bill.DispatchMonth 
+            : (dispatchMonthComputed || billMonthFallback), 
           "Factory Name": bill.FactoryName || "",
           "Bill Num": bill.BillNum || "",
           "LR Quantity": lrQty || 0,
@@ -486,27 +562,40 @@ const ShowBill = ({ userRole }) => {
       setRows(result);
       setDataLoaded(true);
 
-
-
+      // Cache current page locally so "back" is instant
       setPageHistory(prev => {
         const newHistory = [...prev];
-
-        newHistory[currentPageIndex] = {
+        newHistory[targetIndex] = {
           rows: result,
           firstDoc: displayDocs.length > 0 ? displayDocs[0] : null,
           lastDoc: displayDocs.length > 0 ? displayDocs[displayDocs.length - 1] : null,
           hasNextPage: hasMore,
-          hasPrevPage: direction === 'next' ? true : (direction === 'prev' ? hasMore : false)
+          hasPrevPage: direction !== 'initial'
         };
-
         return newHistory;
       });
+
+      setCurrentPageIndex(targetIndex);
 
       setSelectedBills([]);
       setSelectAll(false);
     } catch (error) {
       console.error("Error loading data:", error);
-      alert(`Error loading data: ${error.message}`);
+      
+      if (error.message && error.message.includes("index")) {
+        const indexUrlMatch = error.message.match(/https:\/\/console\.firebase\.google\.com[^\s]*/);
+        const indexUrl = indexUrlMatch ? indexUrlMatch[0] : null;
+
+        if (indexUrl) {
+          if (window.confirm("⚠️ Composite Index Required\n\nFirebase needs a composite index for this query. Would you like to open the Firebase Console to create it now?")) {
+            window.open(indexUrl, "_blank");
+          }
+        } else {
+          alert("⚠️ Composite Index Required\n\nFirebase needs a composite index for this query. Check the browser console for the auto-generated index creation link from Firebase.");
+        }
+      } else {
+        alert(`Error loading data: ${error.message}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -597,8 +686,7 @@ const ShowBill = ({ userRole }) => {
     }
 
     // otherwise fetch normally
-    load("next", lastDoc);
-    setCurrentPageIndex(nextIndex);
+    load("next", lastDoc, nextIndex);
   };
 
   const prevPage = () => {
@@ -666,7 +754,7 @@ const ShowBill = ({ userRole }) => {
 
       const loadedDispatches = dispSnap.docs.map(d => {
         const r = d.data();
-        const dispatchDateObj = toDate(r.DispatchDate);
+        const dispatchDateObj = toDate(r.DispatchDate || r.dispatchDate || r.Date || r.dispatch_date);
         return {
           id: d.id,
           ChallanNo: r.ChallanNo || "",
@@ -675,9 +763,9 @@ const ShowBill = ({ userRole }) => {
           Quantity: toNum(r.DispatchQuantity),
           UnitPrice: toNum(r.UnitPrice),
           FinalPrice: toNum(r.FinalPrice),
-          VehicleNo: r.VehicleNo || "",
-          LRNo: r.LRNo || "",
-          DeliveryNum: r.DeliveryNum || ""
+          VehicleNo: r.VehicleNo || r.TruckNo || r.vehicleNo || r.vehicleno || r.vehicle_no || r.Vehicle_No || "",
+          LRNo: r.LRNo || r.lrNo || r.lrno || r.lr_no || r.LR_No || "",
+          DeliveryNum: r.DeliveryNum || r.deliveryNum || r.delivery_num || r.delivery_no || r.Delivery_No || ""
         };
       });
 
